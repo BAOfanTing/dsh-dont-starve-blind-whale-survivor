@@ -2,7 +2,7 @@
 //
 // 规矩（来自任务书）：
 //   · 只监听 127.0.0.1；
-//   · 默认端口 8788；
+//   · 默认端口 18788（原定 8788 被本机其它进程占用）；
 //   · 随机共享 Token（可用环境变量覆盖，方便联调）；
 //   · 请求体有上限；
 //   · 协议版本 protocol_version = "1.0"。
@@ -58,12 +58,12 @@ export function loadConfig(options: LoadConfigOptions = {}): BridgeConfig {
     tokenSource = 'generated'
   }
 
-  const port = options.port ?? Number(env.BWS_PORT ?? 8788)
+  const port = options.port ?? Number(env.BWS_PORT ?? 18788)
   const maxBodyBytes = Number(env.BWS_MAX_BODY_BYTES ?? 128 * 1024)
 
   const config: BridgeConfig = {
     host: env.BWS_HOST ?? '127.0.0.1',
-    port: Number.isFinite(port) ? port : 8788,
+    port: Number.isFinite(port) ? port : 18788,
     token,
     tokenSource,
     tokenFile,

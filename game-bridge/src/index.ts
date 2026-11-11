@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code ?? ''
     if (code === 'EADDRINUSE') {
-      logger.error(`端口 ${config.port} 已被占用，Bridge 起不来`, { hint: '换端口：set BWS_PORT=18788，或停掉占用该端口的进程' })
+      logger.error(`端口 ${config.port} 已被占用，Bridge 起不来`, { hint: '换端口：set BWS_PORT=18888，或停掉占用该端口的进程' })
     } else if (code === 'EACCES') {
       logger.error(`没有权限监听 ${config.host}:${config.port}`, { hint: '换一个空闲端口' })
     } else {

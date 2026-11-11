@@ -2,9 +2,9 @@
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File start-game-bridge.ps1
 #   powershell -ExecutionPolicy Bypass -File start-game-bridge.ps1 -Port 18788 -Token "你的token"
-# 注意：默认端口 8788 若被别的程序占用，会直接报错退出（不会偷偷换端口）。
+# 注意：默认端口 18788；若被别的程序占用，会直接报错退出（不会偷偷换端口）。
 param(
-    [int]$Port = 8788,
+    [int]$Port = 18788,
     [string]$Token = ''
 )
 $ErrorActionPreference = 'Stop'

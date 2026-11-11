@@ -204,9 +204,9 @@ test('maskToken 不泄露完整 token', () => {
   assert.equal(maskToken('short'), '****')
 })
 
-test('config：默认端口 8788 / 默认只监听 127.0.0.1 / 生成随机 token', () => {
+test('config：默认端口 18788 / 默认只监听 127.0.0.1 / 生成随机 token', () => {
   const config = loadConfig({ env: {}, writeTokenFile: false })
-  assert.equal(config.port, 8788)
+  assert.equal(config.port, 18788)
   assert.equal(config.host, '127.0.0.1')
   assert.equal(config.protocolVersion, '1.0')
   assert.equal(config.token.length, 64, '随机 token 是 32 字节 hex')

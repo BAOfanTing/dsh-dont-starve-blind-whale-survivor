@@ -25,7 +25,7 @@
 |---|---|
 | `game-bridge/package.json` | 新项目（无运行时依赖；devDeps: typescript、@types/node） |
 | `game-bridge/tsconfig.json` | NodeNext + strict，`src/` → `dist/` |
-| `game-bridge/src/config.ts` | 配置：默认 `127.0.0.1:8788`、随机 token（或 `BWS_TOKEN`）、token 落盘、请求体上限、协议版本 |
+| `game-bridge/src/config.ts` | 配置：默认 `127.0.0.1:18788`、随机 token（或 `BWS_TOKEN`）、token 落盘、请求体上限、协议版本 |
 | `game-bridge/src/logger.ts` | INFO/WARN/ERROR 分级 + **token 脱敏**（把 secret 换成 `***`）+ 保留历史行供断言 |
 | `game-bridge/src/http.ts` | 请求体读取（有上限）、**原始文本 JSON.parse（不看 content-type）**、统一 JSON 响应、request_id |
 | `game-bridge/src/auth.ts` | token 校验：body / `?token=` / `Authorization: Bearer` 三种来源，`sha256 + timingSafeEqual` |
@@ -67,11 +67,11 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install-game-bridge.ps1   # 装依赖 + 编译 + 跑 9 个用例
-powershell -ExecutionPolicy Bypass -File start-game-bridge.ps1     # 默认 8788
+powershell -ExecutionPolicy Bypass -File start-game-bridge.ps1     # 默认 18788
 powershell -ExecutionPolicy Bypass -File start-game-bridge.ps1 -Port 18788 -Token "m1-demo"
 ```
 
-环境变量：`BWS_HOST`（默认 127.0.0.1）、`BWS_PORT`（8788）、`BWS_TOKEN`、`BWS_MAX_BODY_BYTES`（131072）、`BWS_TOKEN_FILE`（`.runtime/token.txt`）、`BWS_REQUEST_TIMEOUT_MS`（15000）。
+环境变量：`BWS_HOST`（默认 127.0.0.1）、`BWS_PORT`（18788）、`BWS_TOKEN`、`BWS_MAX_BODY_BYTES`（131072）、`BWS_TOKEN_FILE`（`.runtime/token.txt`）、`BWS_REQUEST_TIMEOUT_MS`（15000）。
 
 ## 6. 测试方法
 
@@ -150,12 +150,26 @@ INFO Token 已就绪（不写日志） {"token_source":"env","token_mask":"m1-d�
 
 5) 错 token → **401**；6) 请求体 140KB（上限 128KB）→ **413 payload_too_large**。
 
+### 7.4 改端口后的默认配置实跑（不设任何环境变量）
+
+按确认把默认端口改成 **18788**（原定 8788 被本机 python 占用）。重新编译后**不带任何环境变量**启动：
+
+```
+INFO Bridge 已启动，监听 http://127.0.0.1:18788（只本机） {"protocol_version":"1.0","version":"0.2.0-m1"}
+INFO Token 已就绪（不写日志） {"token_source":"generated","token_mask":"2f5c…51（长度 64）",
+     "token_file":"E:\\…\\.runtime\\token.txt"}
+INFO 请求体上限 131072 字节；接口：GET /health、GET /api/v1/bridge/status（其余 M3/M4 实现）
+```
+
+- `GET /health` → 200，`"bound":"127.0.0.1:18788"`
+- `.runtime/token.txt` 生成成功（64 hex），用文件里的 token 访问 `/api/v1/bridge/status` → 200
+- 断言 `日志里是否出现 token` → **False**（脱敏生效）
+- 改端口后单元测试仍 **9/9 通过**
+
 ## 8. 未解决 / 需要你决定
 
-1. **端口 8788 被你的 Python 进程占用**（PID 5164，`E:\APP\Anaconda\python.exe`，08:55 启动）。我**没有动它**。三个选择：
-   - 你确认那个 Python 可以关 → 我用 8788；
-   - 改默认端口（比如 18788）→ 我改代码里的默认值和脚本；
-   - 保持 8788 为默认，但联调时用 `-Port` 指定别的端口（当前就是这样跑的验收）。
+1. **端口已定案**：原定 8788 被本机 python 进程（PID 5164，`E:\APP\Anaconda\python.exe`）占用,
+   经确认改为默认 **18788**（代码默认值、启动脚本、文档已全部同步；那个 python 进程没动）。
 2. **M2 的核心不确定性还没验证**：`TheSim:QueryServer` 在本机 build 762172 上是否真能访问 `127.0.0.1`、GET/POST 是否可用、回调能否拿到状态码与响应体 —— 这必须实际进游戏验证，我不会因为"社区有人这么做"就当成可用。M2 会按你给的顺序做独立验证，并准备降级方案（unsafedata 文件交换 / Phase 1 日志通道）。
 3. **M1 里 `connected` 恒为 false**：这是如实反映（还没有心跳接口），不是 bug。
 
