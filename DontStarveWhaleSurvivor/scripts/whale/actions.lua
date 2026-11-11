@@ -2,6 +2,14 @@
 -- 每个动作是一个小的状态机：找目标 -> 推给游戏的动作系统（和玩家自己点鼠标走的是同一条路）-> 等它做完。
 -- 这样体力消耗、动画、掉落、被怪打断都跟手动玩一致，不需要作弊改数据。
 local GLOBAL = GLOBAL
+-- 饥荒的模组沙箱只给了 pairs/ipairs/print/math/table/type/string/tostring/require/Class，
+-- pcall / tonumber / error / os / io 这些得从 GLOBAL（就是 _G）里拿，直接用会报 nil（0.1.0 就是这么崩的）。
+local pcall = GLOBAL.pcall
+local tonumber = GLOBAL.tonumber
+local error = GLOBAL.error
+local os = GLOBAL.os or { time = function() return 0 end }
+local io = GLOBAL.io
+
 local U = Whale.util
 local A = {}
 
@@ -316,15 +324,12 @@ JOBS.pick = function(j, p)
         local target = nil
         local action = nil
         local list = U.find_all(p, j.data.radius, nil, nil, function(e)
+            -- Pickable 组件没有 CanBePicked 方法：能不能采看标签（barren = 采空了还没长回来）
+            if e:HasTag("pickable") and not e:HasTag("barren") then return true end
             local c = e.components
-            if c == nil then return false end
-            if c.pickable ~= nil then
-                local ok, can = pcall(function() return c.pickable:CanBePicked() end)
-                if ok and can then return true end
-            end
-            if c.harvestable ~= nil then
+            if c ~= nil and c.harvestable ~= nil then
                 local ok, can = pcall(function() return c.harvestable:CanBeHarvested() end)
-                if ok and can then return true end
+                if ok and can == true then return true end
             end
             return false
         end)
@@ -333,12 +338,13 @@ JOBS.pick = function(j, p)
             list = by_name
         end
         for _, entry in ipairs(list) do
-            local c = entry.ent.components
-            if c.pickable ~= nil then
-                target, action = entry.ent, ACTIONS.PICK
+            local ent = entry.ent
+            local c = ent.components
+            if ent:HasTag("pickable") then
+                target, action = ent, ACTIONS.PICK
                 break
-            elseif c.harvestable ~= nil then
-                target, action = entry.ent, ACTIONS.HARVEST
+            elseif c ~= nil and c.harvestable ~= nil then
+                target, action = ent, ACTIONS.HARVEST
                 break
             end
         end
@@ -519,49 +525,83 @@ local function missing_ingredients(p, recipe)
     return "材料不够"
 end
 
+--- 这块地能不能放下这个东西
+local function can_deploy(recipe, x, z)
+    local world = GLOBAL.TheWorld
+    if world == nil or world.Map == nil then return false end
+    local ok, res = pcall(function() return world.Map:CanDeployRecipeAtPoint(Vector3(x, 0, z), recipe, 0) end)
+    return ok and res == true
+end
+
+--- 没给坐标时，从脚下往外找一个放得下的格子
+local function find_spot(p, recipe)
+    local px, _, pz = U.pos(p)
+    if px == nil then return nil end
+    local bx, bz = U.tile_of(px, pz)
+    local around = {
+        { 0, 0 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+        { 1, 1 }, { -1, -1 }, { 1, -1 }, { -1, 1 },
+        { 2, 0 }, { -2, 0 }, { 0, 2 }, { 0, -2 },
+    }
+    for _, d in ipairs(around) do
+        local x, z = U.tile_center(bx + d[1], bz + d[2])
+        if can_deploy(recipe, x, z) then return bx + d[1], bz + d[2] end
+    end
+    return nil
+end
+
 JOBS.craft = function(j, p)
     if j.step == "start" then
         local recipe, key = recipe_of(j.args.recipe or j.args.name)
         if recipe == nil then
-            return "fail", "没有这个配方：" .. tostring(j.args.recipe) .. "（要用游戏的配方名，比如 campfire、spear、torch）"
+            return "fail", "没有这个配方：" .. tostring(j.args.recipe) .. "（用游戏里的配方名，比如 torch、axe、spear、campfire）"
         end
         local builder = p.components.builder
         if builder == nil then return "fail", "你现在不能制作东西" end
-        local ok, knows = pcall(function() return builder:KnowsRecipe(key) end)
-        if ok and not knows then
-            return "fail", string.format("%s 还不会做（要先做科学机器/靠近它解锁）", j.args.recipe)
+        local ok, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
+        if ok and knows == false then
+            return "fail", string.format("%s 还不会做（要先做科学机器/靠近它解锁）", key)
         end
-        local missing = missing_ingredients(p, key)
+        local missing = missing_ingredients(p, recipe)
         if missing ~= nil then
-            return "fail", string.format("%s %s", j.args.recipe, missing)
+            return "fail", string.format("%s %s", key, missing)
         end
-        j.data.recipe = recipe
-        j.data.key = key
+        j.data.recipe, j.data.key = recipe, key
         j.data.placeable = recipe.placer ~= nil
-        j.data.phase_start = U.now()
-        j.step = "acting"
         j.data.count = tonumber(j.args.count) or 1
         j.data.done_count = 0
+        j.step = "acting"
     end
 
-    if j.data.placeable and j.args.x ~= nil and j.args.z ~= nil then
-        -- 要摆位置的（建筑/墙），交给 build 逻辑
+    -- 要摆到地上的东西（建筑、火堆）一律走摆放逻辑，那里会挑一块放得下的地
+    if j.data.placeable then
         return job_build(j, p)
     end
 
-    if U.now() - j.data.phase_start > 15 then
-        return "fail", "制作没成功（材料可能刚被用掉了）"
+    if j.data.pending then
+        if busy(p) then
+            if U.now() - j.t0 > 120 then return "fail", "做东西卡住了" end
+            return "run"
+        end
+        j.data.pending = nil
     end
     if j.data.done_count >= j.data.count then
-        return "done", string.format("做了 %d 个 %s%s", j.data.done_count, j.data.key,
-            j.data.placeable and "（放包里了，要用 build 摆出来）" or "")
+        return "done", string.format("做了 %d 个 %s", j.data.done_count, j.data.key)
     end
-    if busy(p) then return "run" end
+    if busy(p) then
+        if U.now() - j.t0 > 180 then return "fail", "手上一直忙着，没做出东西" end
+        return "run"
+    end
     local builder = p.components.builder
-    local ok, err = pcall(function() builder:MakeRecipeFromMenu(j.data.recipe) end)
-    if not ok then return "fail", "制作出错：" .. tostring(err) end
+    -- 注意：MakeRecipeFromMenu / MakeRecipeAtPoint 是客户端菜单用的，服务端调用会因为
+    -- “背包没被打开”直接 return（什么也不做），所以这里必须用 MakeRecipe。
+    local ok, started = pcall(function() return builder:MakeRecipe(j.data.recipe, nil, nil, nil) end)
+    if not ok then return "fail", "制作出错：" .. tostring(started) end
+    if started ~= true then
+        return "fail", string.format("%s 没做出来（材料或状态不允许）", j.data.key)
+    end
+    j.data.pending = true
     j.data.done_count = j.data.done_count + 1
-    j.data.phase_start = U.now()
     return "run"
 end
 
@@ -576,79 +616,73 @@ function job_build(j, p)
         end
         local builder = p.components.builder
         if builder == nil then return "fail", "你现在不能建造" end
-        local ok, knows = pcall(function() return builder:KnowsRecipe(key) end)
-        if ok and not knows then
+        local ok, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
+        if ok and knows == false then
             return "fail", string.format("%s 还不会做（要先解锁）", key)
         end
-        j.data.recipe = recipe
-        j.data.key = key
+        local missing = missing_ingredients(p, recipe)
+        if missing ~= nil then
+            return "fail", string.format("%s %s", key, missing)
+        end
         local tx = tonumber(j.args.x)
         local tz = tonumber(j.args.z)
         if tx == nil or tz == nil then
-            -- 没给位置就摆在身边一格
-            local px, _, pz = U.pos(p)
-            tx, tz = U.tile_of(px, pz)
+            local fx, fz = find_spot(p, recipe)
+            if fx == nil then
+                return "fail", "附近找不到能放下 " .. key .. " 的地方（被东西占了？）"
+            end
+            tx, tz = fx, fz
         end
+        j.data.recipe, j.data.key = recipe, key
         j.data.tx, j.data.tz = tx, tz
-        j.step = "walk"
+        j.step = "goto"
     end
-    if j.step == "walk" then
+    if j.step == "goto" then
         local away = tile_away(p, j.data.tx, j.data.tz)
-        if away > 2.0 then
+        if away > 2.5 then
             walk_to(p, j.data.tx, j.data.tz)
-            if U.now() - j.t0 > 90 then return "fail", "走不到要摆的位置" end
+            if U.now() - j.t0 > 120 then return "fail", "走不到要摆的位置" end
             return "run"
         end
+        j.step = "place"
+        return "run"
+    end
+    if j.step == "place" then
         if busy(p) then
-            if U.now() - j.t0 > 120 then return "fail", "忙不过来，没摆上" end
+            if U.now() - j.t0 > 180 then return "fail", "摆东西卡住了" end
             return "run"
+        end
+        local x, z = U.tile_center(j.data.tx, j.data.tz)
+        if not can_deploy(j.data.recipe, x, z) then
+            return "fail", string.format("(%d,%d) 这块地放不下 %s", j.data.tx, j.data.tz, j.data.key)
         end
         local builder = p.components.builder
-        local x, z = U.tile_center(j.data.tx, j.data.tz)
-        local ok, err = pcall(function()
-            builder:MakeRecipeAtPoint(j.data.recipe, Vector3(x, 0, z), 0)
+        local ok, started = pcall(function()
+            return builder:MakeRecipe(j.data.recipe, Vector3(x, 0, z), 0, nil)
         end)
-        if not ok then return "fail", "建造出错：" .. tostring(err) end
+        if not ok or started ~= true then
+            return "fail", "摆放没成功（材料不够？）"
+        end
         j.step = "acting"
         j.data.phase_start = U.now()
         return "run"
     end
-    if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
+    if busy(p) and U.now() - j.data.phase_start < 60 then return "run" end
     return "done", string.format("在 (%d,%d) 摆了 %s", j.data.tx, j.data.tz, j.data.key)
 end
 JOBS.build = job_build
 
 JOBS.make_fire = function(j, p)
-    if j.step == "start" then
-        local recipe, key = recipe_of(j.args.recipe or "campfire")
-        if recipe == nil then return "fail", "没有 campfire 这个配方" end
-        local builder = p.components.builder
-        if builder == nil then return "fail", "你现在不能建造" end
-        local missing = missing_ingredients(p, key)
-        if missing ~= nil then
-            return "fail", string.format("做 %s %s（营火要 2 个木头 + 3 个干草）", key, missing)
-        end
-        local px, _, pz = U.pos(p)
-        local tx, tz = U.tile_of(px, pz)
-        j.data.recipe, j.data.key = recipe, key
-        j.data.tx, j.data.tz = tx, tz
-        if busy(p) then
-            if U.now() - j.t0 > 30 then return "fail", "忙着，火没生上" end
-            return "run"
-        end
-        local x, z = U.tile_center(tx, tz)
-        local ok, err = pcall(function() builder:MakeRecipeAtPoint(recipe, Vector3(x, 0, z), 0) end)
-        if not ok then return "fail", "生火出错：" .. tostring(err) end
-        j.step = "acting"
-        j.data.phase_start = U.now()
-        return "run"
+    j.args = j.args or {}
+    if j.args.recipe == nil then j.args.recipe = "campfire" end
+    local status, text = job_build(j, p)
+    if status == "done" then
+        local fire = U.find_nearest(p, 4, nil, nil, function(e) return e:HasTag("fire") end)
+        if fire == nil then return "fail", "摆了但火没生起来（位置不合适？）" end
+        return "done", text .. "，火已经生起来了"
     end
-    if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
-    local fire = U.find_nearest(p, 3, nil, nil, function(e) return e:HasTag("fire") end)
-    if fire == nil then return "fail", "火没生起来（可能位置不合适）" end
-    return "done", string.format("在 (%d,%d) 生了 %s", j.data.tx, j.data.tz, j.data.key)
+    return status, text
 end
-
 JOBS.equip = function(j, p)
     local want = j.args.item
     if want == nil or want == "" then return "fail", "equip 要传 item（要拿在手里的东西）" end

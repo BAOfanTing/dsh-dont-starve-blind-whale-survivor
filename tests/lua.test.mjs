@@ -57,6 +57,11 @@ test('json.lua 能和外面的 JSON 互相转（真 Lua 虚拟机里跑）', asy
   }
 
   const source = readFileSync(join(MOD, 'scripts', 'whale', 'json.lua'), 'utf8')
+  // json.lua 从 GLOBAL 里取 pcall/tonumber（饥荒的模组沙箱只给了一部分基础函数，别的都要从 GLOBAL 拿）
+  const preludeStatus = lauxlib.luaL_dostring(L, to_luastring(
+    'GLOBAL = { pcall = pcall, tonumber = tonumber, error = error, os = os, io = io }\nWhale = {}',
+  ))
+  if (preludeStatus !== lua.LUA_OK) throw new Error('前置环境出错：' + lastError())
   const status = lauxlib.luaL_dostring(L, to_luastring(source))
   if (status !== lua.LUA_OK) throw new Error('json.lua 加载失败：' + lastError())
 

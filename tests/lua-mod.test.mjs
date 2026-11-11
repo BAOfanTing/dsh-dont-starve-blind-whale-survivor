@@ -51,7 +51,13 @@ GLOBAL.TheWorld = {
     state = { cycles = 2, phase = "day", season = "autumn", temperature = 14 },
     HasTag = function(self, tag) return false end,
     DoPeriodicTask = function(self, interval, fn) PERIODIC = fn end,
+    Map = { CanDeployRecipeAtPoint = function(self, pt, recipe, rot) return recipe ~= nil and recipe.place_ok ~= false end },
 }
+GLOBAL.AllRecipes = {
+    torch = { name = "torch", product = "torch" },
+    campfire = { name = "campfire", product = "campfire", placer = "campfire_placer" },
+}
+CRAFTED = {}
 
 -- ── 实体 ──
 local function newent(prefab, x, z, tags, comps)
@@ -101,6 +107,15 @@ local function makeplayer()
             PushAction = function(self, ba) PUSHED = ba end,
         },
         talker = { Say = function(self, text) ANNOUNCED = text end },
+        builder = {
+            KnowsRecipe = function(self, recipe) return recipe ~= nil and recipe.known ~= false end,
+            HasIngredients = function(self, recipe) return recipe ~= nil and recipe.materials ~= false end,
+            MakeRecipe = function(self, recipe, pt, rot, skin)
+                CRAFTED[#CRAFTED + 1] = { name = recipe.name, pt = pt }
+                BUFFERED = { action = { id = "BUILD" } }
+                return true
+            end,
+        },
         inventory = newinventory({
             [1] = newent("berries", 0, 0, {}, {
                 edible = { foodtype = "VEGGIE", hungervalue = 9.375 },
@@ -142,6 +157,19 @@ NEARBY = {
         fueled = { GetPercent = function() return 0.6 end, IsEmpty = function() return false end },
     }),
 }
+
+-- 模拟饥荒的模组沙箱：这些名字在 mod 环境里是 nil（0.1.0 用了 pcall，游戏启动就崩），
+-- 模组只能从 GLOBAL 里拿。把它们置 nil，就能在本地复现这类错误。
+GLOBAL.pcall = pcall
+GLOBAL.tonumber = tonumber
+GLOBAL.error = error
+GLOBAL.os = os
+GLOBAL.io = nil
+pcall = nil
+tonumber = nil
+error = nil
+os = nil
+io = nil
 `
 
 const FILES = `Whale.files = {
@@ -298,4 +326,122 @@ test('文件桥写的状态能被外面的 JSON.parse 读（格式对得上）',
   assert.match(state.text, /威尔逊/)
   assert.equal(state.data.x, 12)
   assert.equal(state.data.z, 45)
+})
+
+test('modmain.lua 能在沙箱里加载（0.1.0 就是这里崩的）', async () => {
+  const fengari = await import('fengari')
+  const { lua, lauxlib, to_luastring, to_jsstring } = fengari
+  const L = lauxlib.luaL_newstate()
+  fengari.lualib.luaL_openlibs(L)
+  const fail = () => {
+    try {
+      return to_jsstring(lua.lua_tostring(L, -1))
+    } catch {
+      return ''
+    }
+  }
+  // 假环境：只有沙箱给的那几个函数 + modutil 装的那几个
+  const prelude = `
+GLOBAL = {}
+GLOBAL.pcall = pcall
+GLOBAL.tonumber = tonumber
+GLOBAL.error = error
+GLOBAL.os = os
+GLOBAL.io = nil
+env = { GetModConfigData = function(key) return nil end }
+MODIMPORTS = {}
+POSTINITS = {}
+function modimport(name) MODIMPORTS[#MODIMPORTS + 1] = name end
+function AddGamePostInit(fn) POSTINITS[#POSTINITS + 1] = fn end
+function AddPlayerPostInit(fn) POSTINITS[#POSTINITS + 1] = fn end
+`
+  let status = lauxlib.luaL_dostring(L, to_luastring(prelude))
+  assert.equal(status, lua.LUA_OK, '前置环境出错：' + fail())
+  // 沙箱模拟：裸 pcall/tonumber/error 是 nil
+  status = lauxlib.luaL_dostring(L, to_luastring('pcall = nil\ntonumber = nil\nerror = nil\n'))
+  assert.equal(status, lua.LUA_OK, '没法模拟沙箱：' + fail())
+
+  const source = readFileSync(join(MOD, 'modmain.lua'), 'utf8')
+  status = lauxlib.luaL_dostring(L, to_luastring(source))
+  assert.equal(status, lua.LUA_OK, 'modmain.lua 加载失败（游戏里就是这句会让启动崩溃）：' + fail())
+
+  lauxlib.luaL_loadstring(L, to_luastring(`
+    assert(#MODIMPORTS == 5, "应该 modimport 了 5 个模块，实际 " .. #MODIMPORTS)
+    assert(MODIMPORTS[1] == "scripts/whale/json.lua", "第一个应该是 json.lua")
+    assert(#POSTINITS == 3, "应该有 3 个 postinit，实际 " .. #POSTINITS)
+    assert(Whale.files.state == "whale_state.json", "文件名表没装上")
+    assert(Whale.interval == 1, "配置默认值不对")
+    assert(Whale.version ~= nil, "版本号没写")
+  `))
+  assert.equal(lua.lua_pcall(L, 0, 0, 0), lua.LUA_OK, 'modmain 加载后状态不对：' + fail())
+})
+
+test('每个模块都从 GLOBAL 里取沙箱没有的函数', () => {
+  for (const name of ['json', 'util', 'observe', 'actions', 'bridge']) {
+    const text = readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8')
+    assert.match(text, /local pcall = GLOBAL\.pcall/, `${name}.lua 少了沙箱兼容头（pcall）`)
+    assert.match(text, /local tonumber = GLOBAL\.tonumber/, `${name}.lua 少了沙箱兼容头（tonumber）`)
+  }
+  const modmain = readFileSync(join(MOD, 'modmain.lua'), 'utf8')
+  assert.match(modmain, /local pcall = GLOBAL\.pcall/, 'modmain.lua 少了沙箱兼容头（pcall）')
+  assert.doesNotMatch(modmain, /GLOBAL\.GetModConfigData/, 'GetModConfigData 在 mod 环境里，不在 GLOBAL 上')
+})
+
+
+test('做东西：服务端必须走 builder:MakeRecipe（MakeRecipeFromMenu 在服务端不干活）', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run, global } = loadMod(fengari)
+  run('CRAFTED = {}', '清空记录')
+  runFile(`
+    Whale.bridge = { Report = function(ok, text) REPORTED = { ok = ok, text = text } end, WriteState = function() end }
+    Whale.actions.Start("craft", { recipe = "torch", count = 2 })
+    BUFFERED = nil
+    Whale.actions.Tick()                       -- 开始做第一个
+    assert(#CRAFTED == 1 and CRAFTED[1].name == "torch", "应该做了第一个火把")
+    assert(CRAFTED[1].pt == nil, "放背包里的东西不该带位置")
+    Whale.actions.Tick()                       -- 手上忙着
+    assert(#CRAFTED == 1, "忙着的时候不该又开始做一个")
+    BUFFERED = nil                             -- 模拟做完了
+    Whale.actions.Tick()                       -- 接着做第二个
+    assert(#CRAFTED == 2, "应该做第二个，实际 " .. #CRAFTED)
+    BUFFERED = nil
+    Whale.actions.Tick()                       -- 收尾
+    assert(REPORTED ~= nil and REPORTED.ok == true, "应该报告成功：" .. tostring(REPORTED and REPORTED.text))
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /做了 2 个 torch/)
+})
+
+test('摆建筑：挑一块放得下的地，位置交给 MakeRecipe', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run, global } = loadMod(fengari)
+  run('CRAFTED = {}', '清空记录')
+  runFile(`
+    Whale.bridge = { Report = function(ok, text) REPORTED = { ok = ok, text = text } end, WriteState = function() end }
+    Whale.actions.Start("build", { recipe = "campfire" })
+    BUFFERED = nil
+    Whale.actions.Tick()                       -- 找地方 + 走过去
+    Whale.actions.Tick()                       -- 摆
+    assert(#CRAFTED == 1, "应该调用一次 MakeRecipe，实际 " .. #CRAFTED)
+    assert(CRAFTED[1].pt ~= nil, "摆地上的东西应该带坐标")
+    BUFFERED = nil
+    Whale.actions.Tick()
+    assert(REPORTED ~= nil and REPORTED.ok == true, "应该报告成功：" .. tostring(REPORTED and REPORTED.text))
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /摆了 campfire/)
+})
+
+test('材料不够会直接说，不会瞎做', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadMod(fengari)
+  runFile(`
+    Whale.bridge = { Report = function(ok, text) REPORTED = { ok = ok, text = text } end, WriteState = function() end }
+    GLOBAL.AllRecipes.spear = { name = "spear", product = "spear", materials = false }
+    Whale.actions.Start("craft", { recipe = "spear" })
+    Whale.actions.Tick()
+    assert(REPORTED.ok == false, "材料不够应该失败")
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /材料不够/)
 })

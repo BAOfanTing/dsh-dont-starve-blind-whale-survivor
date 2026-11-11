@@ -6,6 +6,14 @@
 --   2) 直接写文件：io.open 写游戏进程的工作目录（一般是游戏目录下的 bin64）
 -- 两条都失败就什么也不做，不会影响游戏本身。
 local GLOBAL = GLOBAL
+-- 饥荒的模组沙箱只给了 pairs/ipairs/print/math/table/type/string/tostring/require/Class，
+-- pcall / tonumber / error / os / io 这些得从 GLOBAL（就是 _G）里拿，直接用会报 nil（0.1.0 就是这么崩的）。
+local pcall = GLOBAL.pcall
+local tonumber = GLOBAL.tonumber
+local error = GLOBAL.error
+local os = GLOBAL.os or { time = function() return 0 end }
+local io = GLOBAL.io
+
 local U = Whale.util
 local B = {}
 

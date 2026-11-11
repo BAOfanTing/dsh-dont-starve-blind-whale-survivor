@@ -2,6 +2,15 @@
 -- 为什么不直接用游戏自带的 scripts/json.lua：它自己的注释就写着 encode() 不符合 JSON 规范
 -- （字符串里的换行、引号转义不全），写到文件里给外面读会坏掉。这里自己写一份，够用、可预测。
 
+local GLOBAL = GLOBAL
+-- 饥荒的模组沙箱只给了 pairs/ipairs/print/math/table/type/string/tostring/require/Class，
+-- pcall / tonumber / error / os / io 这些得从 GLOBAL（就是 _G）里拿，直接用会报 nil（0.1.0 就是这么崩的）。
+local pcall = GLOBAL.pcall
+local tonumber = GLOBAL.tonumber
+local error = GLOBAL.error
+local os = GLOBAL.os or { time = function() return 0 end }
+local io = GLOBAL.io
+
 local J = {}
 
 local ESCAPES = {

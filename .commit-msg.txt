@@ -1,0 +1,15 @@
+fix: 0.1.1 —— 修掉会让饥荒启动就崩的两个问题，以及三处服务端 API 用错
+
+1) modsettings.lua 里不能写 ModManager:AddMod：DST 执行这个文件时 ModManager 还不存在，
+   会让游戏在 Load() 阶段直接崩（玩家看到的就是"启动就闪退"）。正确写法是 ForceEnableMod，
+   安装脚本现在也会把旧版本写坏的那行自动修掉。
+2) 饥荒的模组沙箱只给 pairs/ipairs/print/math/table/type/string/tostring/require/Class，
+   pcall / tonumber / error / os / io 全是 nil（modmain 里用 pcall 直接报错）。现在每个模块
+   都从 GLOBAL 取这几个函数。
+3) Pickable 组件没有 CanBePicked 方法（它靠 pickable/barren 标签表达状态），观察和采集都会踩到。
+4) MakeRecipeFromMenu / MakeRecipeAtPoint 是客户端菜单用的，服务端调用会因为"背包没被打开"
+   直接 return，制作/建造等于什么都不做；改成 builder:MakeRecipe，并先用
+   Map:CanDeployRecipeAtPoint 找一块放得下的地。
+
+测试：44 个全过。新加的用例用 fengari 模拟饥荒沙箱（把 pcall/tonumber 等置 nil）加载 modmain，
+并用假 builder/Map 验证制作和建造真的会调 MakeRecipe。

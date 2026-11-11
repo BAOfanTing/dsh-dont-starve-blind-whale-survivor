@@ -32,8 +32,15 @@ Whale = {
     },
 }
 
+-- 沙箱里没有 pcall / tonumber，只能从 GLOBAL 拿（见 scripts/whale/json.lua 顶部的说明）
+local pcall = GLOBAL.pcall
+local tonumber = GLOBAL.tonumber
+
+-- mod 环境里有 GetModConfigData（modutil 装的，会自动带上 modname），别的地方没有
 local function modconfig(key, default)
-    local ok, value = pcall(GLOBAL.GetModConfigData, key, nil)
+    local getter = env ~= nil and env.GetModConfigData or nil
+    if getter == nil then return default end
+    local ok, value = pcall(getter, key)
     if ok and value ~= nil then return value end
     return default
 end

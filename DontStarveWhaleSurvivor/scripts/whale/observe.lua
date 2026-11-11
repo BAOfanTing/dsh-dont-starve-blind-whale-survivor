@@ -1,6 +1,14 @@
 -- 把游戏状态翻译成给 AI 看的纯文字
 -- 原则：只写模型能用来做决定的东西（在哪、有什么、能干什么、有什么危险），不写坐标细节以外的废话。
 local GLOBAL = GLOBAL
+-- 饥荒的模组沙箱只给了 pairs/ipairs/print/math/table/type/string/tostring/require/Class，
+-- pcall / tonumber / error / os / io 这些得从 GLOBAL（就是 _G）里拿，直接用会报 nil（0.1.0 就是这么崩的）。
+local pcall = GLOBAL.pcall
+local tonumber = GLOBAL.tonumber
+local error = GLOBAL.error
+local os = GLOBAL.os or { time = function() return 0 end }
+local io = GLOBAL.io
+
 local U = Whale.util
 local O = {}
 
@@ -171,21 +179,19 @@ local function nearby_section(p, radius)
     end
 
     local pickables = U.find_all(p, radius, nil, nil, function(e)
-        if e.components == nil then return false end
-        if e.components.pickable ~= nil then
-            return e.components.pickable:CanBePicked()
-        end
-        if e.components.harvestable ~= nil then
-            return e.components.harvestable:CanBeHarvested()
+        -- 注意：Pickable 组件没有 CanBePicked 方法，能不能采看实体身上的标签（barren = 采空了还没长回来）
+        if e:HasTag("pickable") and not e:HasTag("barren") then return true end
+        if e.components ~= nil and e.components.harvestable ~= nil then
+            local ok, can = pcall(function() return e.components.harvestable:CanBeHarvested() end)
+            return ok and can == true
         end
         return false
     end)
     add("可采", pickables, 6)
 
-    local ground_items = U.find_all(p, radius, { "pickable" }, nil, function(e)
-        if e.components == nil or e.components.inventoryitem == nil then return false end
-        local owner = e.components.inventoryitem.owner
-        return owner == nil
+    local ground_items = U.find_all(p, radius, nil, nil, function(e)
+        local item = e.components ~= nil and e.components.inventoryitem or nil
+        return item ~= nil and item.owner == nil
     end)
     add("可捡", ground_items, 6, function(e)
         local n = U.count(e)
