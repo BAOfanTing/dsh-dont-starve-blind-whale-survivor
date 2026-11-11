@@ -58,6 +58,9 @@ modimport("scripts/whale/hud.lua")
 -- ─────────── Phase 1（Blind Whale Survivor）：只读观察器，日志输出 ───────────
 -- 和上面那套（文件桥 + 动作 + HUD）互不影响：这一层只 print JSON 到日志，由 TypeScript Bridge 读。
 modimport("scripts/main/json_encoder.lua")
+modimport("scripts/main/player_observer.lua")
+modimport("scripts/main/inventory_observer.lua")
+modimport("scripts/main/world_observer.lua")
 modimport("scripts/main/observer_manager.lua")
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
