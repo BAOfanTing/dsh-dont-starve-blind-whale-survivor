@@ -25,6 +25,8 @@ export interface BridgeConfig {
   tokenFile: string
   maxBodyBytes: number
   requestTimeoutMs: number
+  stateFile: string
+  saveIntervalMs: number
   protocolVersion: string
   startedAt: number
 }
@@ -35,6 +37,11 @@ export const REPO_ROOT = resolve(HERE, '..', '..', '..')
 
 export function resolveTokenFile(env: NodeJS.ProcessEnv = process.env): string {
   const raw = env.BWS_TOKEN_FILE ?? '.runtime/token.txt'
+  return isAbsolute(raw) ? raw : resolve(REPO_ROOT, raw)
+}
+
+export function resolveStateFile(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.BWS_STATE_FILE ?? '.runtime/bridge-state.json'
   return isAbsolute(raw) ? raw : resolve(REPO_ROOT, raw)
 }
 
@@ -81,6 +88,8 @@ export function loadConfig(options: LoadConfigOptions = {}): BridgeConfig {
     tokenFile,
     maxBodyBytes: Number.isFinite(maxBodyBytes) && maxBodyBytes > 0 ? maxBodyBytes : 128 * 1024,
     requestTimeoutMs: Number(env.BWS_REQUEST_TIMEOUT_MS ?? 15000),
+    stateFile: resolveStateFile(env),
+    saveIntervalMs: Number(env.BWS_SAVE_MS ?? 5000),
     protocolVersion: PROTOCOL_VERSION,
     startedAt: Date.now(),
   }

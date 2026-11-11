@@ -76,7 +76,7 @@ test('GET /health：不需要 token，返回版本/协议/运行时长', async (
     assert.equal(status, 200)
     assert.equal(json.success, true)
     assert.equal(json.protocol_version, PROTOCOL_VERSION)
-    assert.equal(json.version, '0.2.0-m3')
+    assert.match(String(json.version), /^0\.2\.0-m\d+$/, '版本号形如 0.2.0-m5')
     assert.ok(typeof json.uptime_s === 'number')
     assert.ok(String(json.bound).startsWith('127.0.0.1:'))
     assert.equal(json.bridge.started, true)

@@ -10,6 +10,7 @@ import { loadConfig, maskToken } from './config.js'
 import { createLogger } from './logger.js'
 import { createBridgeServer } from './server.js'
 import { CommandQueue } from './commands.js'
+import { saveStateFile, loadStateFile } from './persist.js'
 import { SessionManager } from './session.js'
 import { BridgeState } from './state.js'
 
@@ -19,14 +20,42 @@ async function main(): Promise<void> {
   const state = new BridgeState()
   const sessions = new SessionManager()
   const commands = new CommandQueue()
+
+  // 恢复上次的状态：会话（含 sequence 记账）+ 命令队列
+  const restored = loadStateFile(config.stateFile)
+  if (restored.ok && restored.state) {
+    const sessionCount = sessions.restore(restored.state.sessions as never)
+    const commandCount = commands.restore(restored.state.commands as never)
+    const pending = commands.pendingCount()
+    logger.info('已恢复上次的状态', {
+      state_file: config.stateFile,
+      sessions: sessionCount,
+      commands: commandCount,
+      queued_commands: pending,
+      saved_at: restored.state.savedAt,
+    })
+  } else {
+    logger.info('没有可恢复的状态（首次启动或文件不可用）', { state_file: config.stateFile, reason: restored.reason })
+  }
+
   const handle = createBridgeServer({ config, logger, state, sessions, commands })
+
+  const saveNow = (why: string) => {
+    const result = saveStateFile(config.stateFile, sessions.export(), commands.export())
+    if (!result.ok) {
+      logger.warn('状态落盘失败（只影响重启后恢复）', { why, error: result.error })
+    }
+    return result
+  }
+  const saveTimer = setInterval(() => saveNow('interval'), config.saveIntervalMs)
+  if (typeof saveTimer.unref === 'function') saveTimer.unref()
 
   try {
     const port = await handle.listen()
     config.port = port
     logger.info(`Bridge 已启动，监听 http://${config.host}:${port}（只本机）`, {
       protocol_version: config.protocolVersion,
-      version: '0.2.0-m4',
+      version: '0.2.0-m5',
     })
     logger.info('Token 已就绪（不写日志）', {
       token_source: config.tokenSource,
@@ -51,6 +80,8 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string) => {
     logger.info(`收到 ${signal}，正在关闭 Bridge`)
+    clearInterval(saveTimer)
+    saveNow('shutdown')
     void handle.close().then(() => process.exit(0))
     setTimeout(() => process.exit(0), 2000).unref()
   }

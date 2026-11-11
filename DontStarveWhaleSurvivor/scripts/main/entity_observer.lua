@@ -77,7 +77,13 @@ function E.Classify(ent)
     if ok_hostile and hostile and components.health ~= nil then return "hostile" end
 
     local ok_struct, is_structure = pcall(function() return ent:HasTag("structure") end)
-    if components.combat ~= nil and components.health ~= nil and not (ok_struct and is_structure) then return "creature" end
+    -- 带 inventoryitem 的是「物品」（哪怕被放在地上也算物品），不是生物：
+    -- 实测南瓜灯 pumpkin_lantern 有 health + combat，但它是可放置的灯，归成 creature 是错的
+    local has_inventory_item = components.inventoryitem ~= nil
+    if components.combat ~= nil and components.health ~= nil
+        and not (ok_struct and is_structure) and not has_inventory_item then
+        return "creature"
+    end
     local ok_monster, monster = pcall(function() return ent:HasTag("monster") end)
     if ok_monster and monster and components.health ~= nil then return "creature" end
     local ok_animal, animal = pcall(function() return ent:HasTag("animal") end)

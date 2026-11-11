@@ -27,6 +27,9 @@ export interface SessionInfo {
   playerStatus: unknown
   latest: unknown
   latestAt: number | null
+  /** 这个会话是不是刚从落盘数据恢复出来的（还没重新心跳过） */
+  restored: boolean
+  reconnects: number
 }
 
 export interface SessionManagerOptions {
@@ -55,6 +58,8 @@ function blank(sessionId: string, at: number): SessionInfo {
     playerStatus: null,
     latest: null,
     latestAt: null,
+    restored: false,
+    reconnects: 0,
   }
 }
 
@@ -90,6 +95,11 @@ export class SessionManager {
 
   heartbeat(sessionId: string, payload: { playerStatus?: unknown; gameVersion?: string | null; shard?: string | null }): SessionInfo {
     const info = this.ensure(sessionId)
+    if (info.restored) {
+      // 恢复出来的会话重新开始心跳 = 断线重连
+      info.restored = false
+      info.reconnects += 1
+    }
     info.lastHeartbeatAt = this.now()
     info.heartbeats += 1
     if (payload.playerStatus !== undefined) info.playerStatus = payload.playerStatus
@@ -161,6 +171,33 @@ export class SessionManager {
 
   list(): SessionInfo[] {
     return [...this.sessions.values()].sort((a, b) => (b.lastHeartbeatAt ?? b.createdAt) - (a.lastHeartbeatAt ?? a.createdAt))
+  }
+
+  /** 导出（落盘用） */
+  export(): SessionInfo[] {
+    return [...this.sessions.values()]
+  }
+
+  /**
+   * 恢复。**把 lastHeartbeatAt 重置为 now**：Bridge 刚起来，游戏端随时会重新心跳；
+   * 不这么做的话恢复出来的会话立刻被判“心跳超时”，它手上 DELIVERED 的命令会被误判 unknown_completion。
+   * 如果游戏真的没回来，10 秒后自然超时，那时再 reap 才是正确时机。
+   */
+  restore(items: SessionInfo[]): number {
+    const at = this.now()
+    let count = 0
+    for (const item of items) {
+      if (typeof item?.sessionId !== 'string' || item.sessionId.length === 0) continue
+      this.sessions.set(item.sessionId, {
+        ...blank(item.sessionId, item.createdAt ?? at),
+        ...item,
+        lastHeartbeatAt: at,
+        restored: true,
+      })
+      count += 1
+    }
+    this.prune()
+    return count
   }
 
   forTestsClear(): void {

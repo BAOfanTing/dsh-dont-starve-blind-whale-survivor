@@ -66,6 +66,27 @@ export interface PollResult {
   pending: number
 }
 
+/**
+ * 命令结果的归一化：Lua 的空表既可能是数组也可能是对象，编码出来都是 {}。
+ * telemetry 通道在 M3 就做了归一化，命令结果通道之前漏了（get_state 的 inventory.items 会变成 {}）。
+ */
+export function normalizeResult(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => normalizeResult(item))
+  if (value === null || typeof value !== 'object') return value
+  const source = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(source)) {
+    const isArrayKey = key === 'items' || key === 'entities' || key === 'received_keys'
+    if (isArrayKey && item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      // 空对象 → 空数组（Lua 空表）
+      out[key] = Object.keys(item as Record<string, unknown>).length === 0 ? [] : normalizeResult(item)
+    } else {
+      out[key] = normalizeResult(item)
+    }
+  }
+  return out
+}
+
 function shorten(result: unknown, maxBytes: number): { value: unknown; truncated: boolean } {
   let text: string
   try {
@@ -222,7 +243,7 @@ export class CommandQueue {
       return { ok: true, command, duplicate: true }
     }
 
-    const shortened = shorten(payload.result, this.maxResultBytes)
+    const shortened = shorten(normalizeResult(payload.result), this.maxResultBytes)
     command.status = payload.status
     command.result = shortened.value
     command.error = payload.error ?? null
@@ -270,6 +291,34 @@ export class CommandQueue {
     return [...this.commands.values()].filter(
       (command) => command.status === 'QUEUED' || command.status === 'DELIVERED' || command.status === 'EXECUTING',
     ).length
+  }
+
+  /** 导出（落盘用） */
+  export(): CommandRecord[] {
+    return [...this.commands.values()]
+  }
+
+  /**
+   * 从落盘数据恢复。已终态的原样恢复（绝不重放）；
+   * DELIVERED / EXECUTING 的保持原状态，等轮询侧按“会话是否还活着”决定 reap。
+   */
+  restore(records: CommandRecord[]): number {
+    let count = 0
+    for (const record of records) {
+      if (record === null || typeof record !== 'object') continue
+      if (typeof record.id !== 'string' || record.id.length === 0) continue
+      this.commands.set(record.id, {
+        ...record,
+        params: (record.params ?? {}) as Record<string, unknown>,
+        late: record.late === true,
+        note: record.note ?? null,
+      })
+      count += 1
+      // 让 id 计数器不会和恢复进来的冲突
+      const suffix = Number.parseInt(String(record.id).split('_').pop() ?? '0', 36)
+      if (Number.isFinite(suffix) && suffix > this.sequence) this.sequence = suffix
+    }
+    return count
   }
 
   get(id: string): CommandRecord | null {
