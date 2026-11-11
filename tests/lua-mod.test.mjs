@@ -368,8 +368,10 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
   assert.equal(status, lua.LUA_OK, 'modmain.lua 加载失败（游戏里就是这句会让启动崩溃）：' + fail())
 
   lauxlib.luaL_loadstring(L, to_luastring(`
-    assert(#MODIMPORTS == 6, "应该 modimport 了 6 个模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 8, "应该 modimport 了 8 个模块，实际 " .. #MODIMPORTS)
     assert(MODIMPORTS[1] == "scripts/whale/json.lua", "第一个应该是 json.lua")
+    assert(MODIMPORTS[7] == "scripts/main/json_encoder.lua", "Phase 1 的编码器要跟上")
+    assert(MODIMPORTS[8] == "scripts/main/observer_manager.lua", "Phase 1 的观察器要跟上")
     assert(#POSTINITS == 3, "应该有 3 个 postinit，实际 " .. #POSTINITS)
     assert(CPOSTS[1] == "screens/playerhud", "应该往玩家 HUD 上挂小窗")
     assert(Whale.files.state == "whale_state.json", "文件名表没装上")

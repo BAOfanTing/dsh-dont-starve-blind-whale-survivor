@@ -9,7 +9,7 @@ description = [[
 不需要截图，也不需要视觉模型。只在本地主机（自己开的世界）里生效。
 ]]
 author = "大肥鱼（参考 dsh-stardew-blind-whale-farmer 做的饥荒版）"
-version = "0.2.0"
+version = "0.3.0"
 
 api_version = 10
 dst_compatible = true
@@ -46,5 +46,17 @@ configuration_options = {
             { description = "2 秒", data = 2 },
         },
         default = 1,
+    },
+    {
+        name = "OBSERVER_INTERVAL",
+        label = "观察器采样间隔",
+        hover = "Phase 1 观察器多久往日志里打一条状态（秒）。只是打印，不扫实体，建议 2 秒。",
+        options = {
+            { description = "0.5 秒", data = 0.5 },
+            { description = "1 秒", data = 1 },
+            { description = "2 秒", data = 2 },
+            { description = "5 秒", data = 5 },
+        },
+        default = 2,
     },
 }

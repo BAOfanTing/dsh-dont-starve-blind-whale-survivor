@@ -55,6 +55,11 @@ modimport("scripts/whale/actions.lua")
 modimport("scripts/whale/bridge.lua")
 modimport("scripts/whale/hud.lua")
 
+-- ─────────── Phase 1（Blind Whale Survivor）：只读观察器，日志输出 ───────────
+-- 和上面那套（文件桥 + 动作 + HUD）互不影响：这一层只 print JSON 到日志，由 TypeScript Bridge 读。
+modimport("scripts/main/json_encoder.lua")
+modimport("scripts/main/observer_manager.lua")
+
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
 AddClassPostConstruct("screens/playerhud", function(self, owner)
     if Whale ~= nil and Whale.hud ~= nil then
@@ -65,11 +70,14 @@ end)
 -- 每进入一次世界（读档 / 新建）启动一次
 AddGamePostInit(function()
     Whale.bridge.boot()
+    if BWS ~= nil and BWS.observer ~= nil then BWS.observer.Start() end
 end)
 
 AddPlayerPostInit(function(inst)
     Whale.bridge.boot()
     Whale.bridge.on_player(inst)
+    -- 世界可能比玩家晚就绪，这里再试一次（Start 自己是幂等的）
+    if BWS ~= nil and BWS.observer ~= nil then BWS.observer.Start() end
 end)
 
 -- 玩家睡觉醒来、死亡、被传送到别的世界时，别让上一件事继续卡着
