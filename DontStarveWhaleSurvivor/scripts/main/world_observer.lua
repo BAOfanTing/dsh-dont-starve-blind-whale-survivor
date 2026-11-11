@@ -93,13 +93,17 @@ function W.Observe()
     put(moon, "is_waxing_moon", bool_or_nil(state.iswaxingmoon))
     if next(moon) ~= nil then result.moon = moon end
 
-    -- 洞穴分片额外字段（在 Master 分片上全是 nil，会被 put 自动跳过）
+    -- 洞穴分片额外字段：只有在洞穴分片才输出。
+    -- （实测：Master 分片上 worldstate 里也有 cavephase/iscaveday 这些字段，值是本分片自己的，
+    --   直接输出会让人以为主世界也有“洞穴时间”，所以按 shard 过滤。）
     local cave = {}
+    if result.shard == "caves" then
     put(cave, "phase", state.cavephase)
     put(cave, "is_day", bool_or_nil(state.iscaveday))
     put(cave, "is_dusk", bool_or_nil(state.iscavedusk))
     put(cave, "is_night", bool_or_nil(state.iscavenight))
     put(cave, "moon_phase", state.cavemoonphase)
+    end
     if next(cave) ~= nil then result.cave = cave end
 
     return result

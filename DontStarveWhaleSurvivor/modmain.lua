@@ -61,6 +61,7 @@ modimport("scripts/main/json_encoder.lua")
 modimport("scripts/main/player_observer.lua")
 modimport("scripts/main/inventory_observer.lua")
 modimport("scripts/main/world_observer.lua")
+modimport("scripts/main/entity_observer.lua")
 modimport("scripts/main/observer_manager.lua")
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）

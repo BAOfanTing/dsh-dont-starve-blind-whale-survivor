@@ -62,7 +62,7 @@ Bridge 只需要按 `[BWS] ` 标记截取后面的内容就能拿到结构化数
 | `side` | `TheWorld.ismastersim` → `server` / `client` |
 | `shard` | `TheWorld:HasTag("cave")` → `caves` / `master` |
 | `t` | `GLOBAL.os.time()`（unix 秒） |
-| `gt` | `TheSim:GetTime()`（游戏内秒） |
+| `rt` | `TheSim:GetRealTime() / 1000`（真实秒） |
 | `session` | `TheNet:GetSessionIdentifier()` |
 | `mod` | mod 环境变量 `modname` |
 | `ismastersim` | `TheWorld.ismastersim` |
@@ -107,7 +107,7 @@ Get-Content "$k\master_server_log.txt" -Tail 200 -Encoding UTF8 | Where-Object {
 你自己看也一样。**期望看到**（间隔 2 秒一条 heartbeat）：
 
 ```
-[00:03:12]: [BWS] {"schema_version":"1","type":"boot","phase":1,"observer_version":"0.1.0","side":"server","shard":"master","t":1794410000,"gt":12.5,"session":"...","mod":"BlindWhaleSurvivor","ismastersim":true,"interval":2,"players":{"available":true,"count":1,"valid":true,"prefab":"wilson"},"world":{"day":3,"phase":"day","season":"autumn","temperature":12.5}}
+[00:03:12]: [BWS] {"schema_version":"1","type":"boot","phase":1,"observer_version":"0.1.0","side":"server","shard":"master","t":1794410000,"rt":12.5,"sim_tick":777,"session":"...","mod":"BlindWhaleSurvivor","ismastersim":true,"interval":2,"players":{"available":true,"count":1,"valid":true,"prefab":"wilson"},"world":{"day":3,"phase":"day","season":"autumn","temperature":12.5}}
 [00:03:14]: [BWS] {"schema_version":"1","type":"heartbeat","phase":1,"observer_version":"0.1.0","side":"server","shard":"master","t":1794410002,"gt":14.5,"session":"...","tick":1,"interval":2,"players":{"available":true,"count":1,"valid":true,"prefab":"wilson"},"world":{"day":3,"phase":"day","season":"autumn","temperature":12.5},"errors":0}
 ```
 

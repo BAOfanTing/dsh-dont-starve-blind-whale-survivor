@@ -9,7 +9,7 @@ description = [[
 不需要截图，也不需要视觉模型。只在本地主机（自己开的世界）里生效。
 ]]
 author = "大肥鱼（参考 dsh-stardew-blind-whale-farmer 做的饥荒版）"
-version = "0.4.0"
+version = "0.5.0"
 
 api_version = 10
 dst_compatible = true
@@ -58,5 +58,29 @@ configuration_options = {
             { description = "5 秒", data = 5 },
         },
         default = 2,
+    },
+    {
+        name = "OBSERVER_SCAN_RADIUS",
+        label = "实体扫描半径",
+        hover = "Phase 1 观察器扫描附近实体的半径（格）。越大越耗，建议 16。",
+        options = {
+            { description = "8 格", data = 8 },
+            { description = "12 格", data = 12 },
+            { description = "16 格", data = 16 },
+            { description = "24 格", data = 24 },
+            { description = "32 格", data = 32 },
+        },
+        default = 16,
+    },
+    {
+        name = "OBSERVER_SCAN_SECONDS",
+        label = "实体扫描间隔",
+        hover = "多久扫一次实体（秒）。扫描不在每帧做，结果会缓存给状态输出。",
+        options = {
+            { description = "2 秒", data = 2 },
+            { description = "4 秒", data = 4 },
+            { description = "8 秒", data = 8 },
+        },
+        default = 4,
     },
 }

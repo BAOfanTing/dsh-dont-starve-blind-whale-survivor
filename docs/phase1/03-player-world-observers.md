@@ -86,7 +86,7 @@
 ```json
 [00:12:34]: [BWS] {
   "schema_version":"1","type":"state","phase":1,"observer_version":"0.2.0",
-  "side":"server","shard":"master","t":1794401900,"gt":88.5,"session":"0DEB4615ECBD25D1",
+  "side":"server","shard":"master","t":1794401900,"rt":88.5,"sim_tick":4412,"session":"0DEB4615ECBD25D1",
   "player":{"valid":true,"prefab":"willow","name":"薇洛","guid":100234,"userid":"KU_...","is_ghost":false,
             "position":{"x":48.5,"y":0,"z":180.25,"tile_x":12,"tile_z":45},
             "health":{"current":120,"max":150,"percent":80,"dead":false},

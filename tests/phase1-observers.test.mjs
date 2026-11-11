@@ -21,7 +21,7 @@ GLOBAL.error = error
 GLOBAL.next = next
 GLOBAL.io = nil
 GLOBAL.os = { time = function() return 1794410000 end }
-GLOBAL.TheSim = { GetTime = function() return 42.5 end }
+GLOBAL.TheSim = { GetRealTime = function() return 42500 end, GetTick = function() return 12345 end }
 GLOBAL.TheNet = { GetSessionIdentifier = function() return "S1" end }
 GLOBAL.STRINGS = {
     NAMES = { AXE = "斧头", BERRIES = "浆果", WILLOW = "薇洛" },
@@ -318,7 +318,8 @@ test('state：一条日志带齐 session/player/inventory/world/observer', async
   assert.equal(state.schema_version, '1')
   assert.equal(state.session, 'S1')
   assert.equal(state.t, 1794410000)
-  assert.equal(state.gt, 42.5)
+  assert.equal(state.rt, 42.5)
+  assert.equal(state.sim_tick, 12345)
   assert.equal(state.side, 'server')
 
   assert.equal(state.player.prefab, 'willow')

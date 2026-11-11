@@ -20,7 +20,7 @@ local tonumber = GLOBAL.tonumber
 BWS = BWS or {}
 
 BWS.phase = 1
-BWS.observer_version = "0.2.0"
+BWS.observer_version = "0.2.1"
 BWS.schema_version = "1"
 BWS.tag = "[BWS]"
 BWS.modname = BWS.modname or (modname ~= nil and tostring(modname) or "BlindWhaleSurvivor")
@@ -31,6 +31,10 @@ local MAX_INTERVAL = 30
 
 local O = {
     started = false,
+    nearby = nil,             -- 最近一次实体扫描结果（缓存）
+    scan_ticks = 1,           -- 每多少个 state 周期扫一次
+    last_scan_tick = -1000,   -- 上次扫描发生在哪个周期
+    radius_tiles = 16,
     side = "unknown",
     shard = "unknown",
     interval = DEFAULT_INTERVAL,
@@ -48,6 +52,13 @@ local function modconfig(key, default)
     local ok, value = pcall(getter, key)
     if ok and value ~= nil then return value end
     return default
+end
+
+local function clamp_radius(value)
+    local n = tonumber(value) or 16
+    if n < 2 then return 2 end
+    if n > 40 then return 40 end
+    return n
 end
 
 local function clamp_interval(value)
@@ -84,15 +95,43 @@ local function base(kind)
         local ok, value = pcall(os_.time)
         if ok and value ~= nil then payload.t = value end
     end
+    -- 真实时间（秒）与模拟 tick：
+    -- 注意 TheSim 上**没有** GetTime()（写过就一直是 nil），可用的是 GetRealTime()（毫秒）和 GetTick()（帧计数）。
     if GLOBAL.TheSim ~= nil then
-        local ok, value = pcall(function() return GLOBAL.TheSim:GetTime() end)
-        if ok and value ~= nil then payload.gt = BWS.json.round(value, 2) end
+        local ok_real, ms = pcall(function() return GLOBAL.TheSim:GetRealTime() end)
+        if ok_real and ms ~= nil then payload.rt = BWS.json.round(ms / 1000, 2) end
+        local ok_tick, tick = pcall(function() return GLOBAL.TheSim:GetTick() end)
+        if ok_tick and tick ~= nil then payload.sim_tick = BWS.json.number(tick, nil) end
     end
     if GLOBAL.TheNet ~= nil then
         local ok, value = pcall(function() return GLOBAL.TheNet:GetSessionIdentifier() end)
         if ok and value ~= nil then payload.session = tostring(value) end
     end
     return payload
+end
+
+--- 实体扫描：按周期做，不在每个 state 里做（原则 8：不在主线程里做耗时的事）
+--- 结果缓存进 O.nearby，state 里只带缓存（并标明是第几个周期扫的）
+local function maybe_scan(player_entity)
+    if BWS.entity_observer == nil then return end
+    if player_entity == nil then return end
+    if O.loop_count - O.last_scan_tick < O.scan_ticks then return end
+    O.last_scan_tick = O.loop_count
+
+    local ok, nearby, reason = pcall(function()
+        return BWS.entity_observer.Observe(player_entity, { radius_tiles = O.radius_tiles })
+    end)
+    if not ok then
+        O.error_count = O.error_count + 1
+        O.last_error = "nearby: " .. tostring(nearby)
+        return
+    end
+    if nearby == nil then
+        O.last_error = "nearby: " .. tostring(reason or "unavailable")
+        return
+    end
+    nearby.scanned_at_tick = O.loop_count
+    O.nearby = nearby
 end
 
 --- 服务端第一个有效玩家（单人游戏就一个；多人时先取第一个，后面再扩展）
@@ -138,20 +177,19 @@ local function safe_observe(name, module, fn)
     return value, nil
 end
 
-local function build_state()
+local function build_state(player_entity)
     local payload = base("state")
     local problems = {}
 
     -- 玩家（客户端侧不观察：components 不权威）
-    local player_entity = nil
-    if O.side == "server" then
-        player_entity = first_player()
-        if player_entity == nil then problems.player = "no_player" end
-    else
+    if O.side ~= "server" then
         problems.player = "client_side"
+    elseif player_entity == nil then
+        problems.player = "no_player"
     end
 
     if player_entity ~= nil then
+        maybe_scan(player_entity)
         local player, player_err = safe_observe("player", BWS.player_observer, function()
             return BWS.player_observer.Observe(player_entity, O.side)
         end)
@@ -162,6 +200,8 @@ local function build_state()
         end)
         if inventory ~= nil then payload.inventory = inventory else problems.inventory = inventory_err end
     end
+
+    if O.nearby ~= nil then payload.nearby = O.nearby end
 
     local world, world_err = safe_observe("world", BWS.world_observer, function()
         return BWS.world_observer.Observe()
@@ -188,7 +228,9 @@ end
 function O.Tick()
     O.loop_count = O.loop_count + 1
     local ok, err = pcall(function()
-        emit(build_state())
+        local player_entity = nil
+        if O.side == "server" then player_entity = first_player() end
+        emit(build_state(player_entity))
     end)
     if not ok then
         O.error_count = O.error_count + 1
@@ -204,6 +246,10 @@ function O.Start()
 
     O.started = true
     O.interval = clamp_interval(modconfig("OBSERVER_INTERVAL", DEFAULT_INTERVAL))
+    O.radius_tiles = clamp_radius(modconfig("OBSERVER_SCAN_RADIUS", 16))
+    local scan_seconds = tonumber(modconfig("OBSERVER_SCAN_SECONDS", 4)) or 4
+    if scan_seconds < O.interval then scan_seconds = O.interval end
+    O.scan_ticks = math.max(1, math.floor(scan_seconds / O.interval + 0.5))
     O.side = world.ismastersim and "server" or "client"
     local ok_cave, is_cave = pcall(function() return world:HasTag("cave") end)
     O.shard = (ok_cave and is_cave) and "caves" or "master"

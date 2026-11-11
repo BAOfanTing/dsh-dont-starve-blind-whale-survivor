@@ -21,7 +21,7 @@ GLOBAL.error = error
 GLOBAL.next = next
 GLOBAL.io = nil
 GLOBAL.os = { time = function() return 1794410000 end }
-GLOBAL.TheSim = { GetTime = function() return 12.5 end }
+GLOBAL.TheSim = { GetRealTime = function() return 12500 end, GetTick = function() return 777 end }
 GLOBAL.TheNet = { GetSessionIdentifier = function() return "TESTSESSION" end }
 GLOBAL.EQUIPSLOTS = { HANDS = "hands", HEAD = "head", BODY = "body" }
 
@@ -151,7 +151,8 @@ test('观察器：Start 打 boot，周期任务打 state，tick 递增，字段�
   assert.equal(boot.interval, 1)
   assert.equal(boot.session, 'TESTSESSION')
   assert.equal(boot.t, 1794410000)
-  assert.equal(boot.gt, 12.5)
+  assert.equal(boot.rt, 12.5, '真实时间（秒）= GetRealTime()/1000')
+  assert.equal(boot.sim_tick, 777, '模拟 tick = TheSim:GetTick()')
   assert.equal(boot.players.count, 1)
 
   assert.equal(s1.type, 'state')
