@@ -11,7 +11,7 @@
 //   BWS_HOST / BWS_PORT / BWS_TOKEN / BWS_MAX_BODY_BYTES / BWS_TOKEN_FILE / BWS_LOG_LEVEL
 
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -53,6 +53,18 @@ export function loadConfig(options: LoadConfigOptions = {}): BridgeConfig {
 
   let token = options.token ?? env.BWS_TOKEN ?? ''
   let tokenSource: BridgeConfig['tokenSource'] = 'env'
+  if (!token) {
+    // 复用上次写下的 token：Bridge 重启后 token 不变，游戏端不用跟着改配置
+    try {
+      const existing = readFileSync(tokenFile, 'utf8').trim()
+      if (/^[0-9a-fA-F]{16,128}$/.test(existing)) {
+        token = existing
+        tokenSource = 'file'
+      }
+    } catch {
+      // 没有就没有，下面生成
+    }
+  }
   if (!token) {
     token = randomBytes(32).toString('hex')
     tokenSource = 'generated'

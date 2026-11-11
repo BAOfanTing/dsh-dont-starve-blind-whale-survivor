@@ -90,6 +90,31 @@ export function createRoutes(): Route[] {
         }
       },
     },
+    {
+      // M2 用：只回显“收到了什么”，不执行任何游戏逻辑，也不回显 token
+      method: 'POST',
+      path: '/api/v1/probe',
+      auth: true,
+      handler: ({ body, config, receivedAt }) => {
+        const record = body !== null && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+        const keys = Object.keys(record).filter((key) => key !== 'token')
+        return {
+          status: 200,
+          body: {
+            success: true,
+            protocol_version: config.protocolVersion,
+            server_time: receivedAt,
+            received: {
+              is_object: body !== null && typeof body === 'object',
+              token_present: typeof record.token === 'string',
+              keys,
+              echo: record.echo ?? null,
+              pad_bytes: typeof record.pad === 'string' ? record.pad.length : 0,
+            },
+          },
+        }
+      },
+    },
     { method: 'POST', path: '/api/v1/telemetry', auth: true, handler: () => notImplemented('状态推送 /api/v1/telemetry') },
     { method: 'POST', path: '/api/v1/heartbeat', auth: true, handler: () => notImplemented('心跳 /api/v1/heartbeat') },
     { method: 'POST', path: '/api/v1/commands/poll', auth: true, handler: () => notImplemented('命令轮询 /api/v1/commands/poll') },

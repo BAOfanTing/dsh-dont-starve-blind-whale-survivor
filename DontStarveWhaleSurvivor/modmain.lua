@@ -65,6 +65,13 @@ modimport("scripts/main/entity_observer.lua")
 modimport("scripts/main/state_serializer.lua")
 modimport("scripts/main/observer_manager.lua")
 
+-- ─────────── Phase 2：HTTP 通信（M2 只做能力验证，不执行任何游戏动作）───────────
+-- bws_config.lua 由 node tools/write-bws-config.mjs 生成（含 token，不进仓库）；缺失就跳过
+pcall(modimport, "bws_config.lua")
+modimport("scripts/main/config.lua")
+modimport("scripts/main/http_client.lua")
+modimport("scripts/main/probe.lua")
+
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
 AddClassPostConstruct("screens/playerhud", function(self, owner)
     if Whale ~= nil and Whale.hud ~= nil then
@@ -76,6 +83,13 @@ end)
 AddGamePostInit(function()
     Whale.bridge.boot()
     if BWS ~= nil and BWS.observer ~= nil then BWS.observer.Start() end
+    -- Phase 2 M2：只有服务端 + 配置里开了 probe 才跑通信探针
+    if BWS2 ~= nil and BWS2.probe ~= nil and GLOBAL.TheWorld ~= nil and GLOBAL.TheWorld.ismastersim then
+        local ok_cfg, cfg = pcall(BWS2.config.get)
+        if ok_cfg and type(cfg) == "table" and cfg.probe then
+            BWS2.probe.start()
+        end
+    end
 end)
 
 AddPlayerPostInit(function(inst)

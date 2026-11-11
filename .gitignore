@@ -16,3 +16,4 @@ tmp-*
 game-bridge/node_modules/
 game-bridge/dist/
 .runtime/
+DontStarveWhaleSurvivor/bws_config.lua

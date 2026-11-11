@@ -5,6 +5,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { request as httpRequest } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { loadConfig, maskToken, PROTOCOL_VERSION } from '../src/config.js'
 import { createLogger } from '../src/logger.js'
 import { createBridgeServer } from '../src/server.js'
@@ -205,7 +207,9 @@ test('maskToken 不泄露完整 token', () => {
 })
 
 test('config：默认端口 18788 / 默认只监听 127.0.0.1 / 生成随机 token', () => {
-  const config = loadConfig({ env: {}, writeTokenFile: false })
+  // 用仓库外的临时 token 文件，避免“复用了本地 .runtime/token.txt”影响断言
+  const emptyTokenFile = join(tmpdir(), 'bws-no-such-token-' + process.pid + '.txt')
+  const config = loadConfig({ env: { BWS_TOKEN_FILE: emptyTokenFile }, writeTokenFile: false })
   assert.equal(config.port, 18788)
   assert.equal(config.host, '127.0.0.1')
   assert.equal(config.protocolVersion, '1.0')
