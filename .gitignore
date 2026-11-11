@@ -10,6 +10,7 @@ local.ps1
 .msg*.txt
 .commit-msg.txt
 tmp-*
+.tmp*
 .install-mod.mjs
 *.dbg.mjs
 
