@@ -224,13 +224,20 @@ test('telemetry：sequence 成功后递增；失败保持同一 sequence 且不�
   assert.equal(status.has_pending, true, '失败后要留着 pending 重试')
   assert.equal(status.failed, 1)
 
-  // 第三次：重试成功
+  // 第三次：等过退避时间后重试成功
   t.run(`REPLIES = { { ok = true, status = 200, body = '{"success":true,"acknowledged_sequence":2}' } }`)
-  t.run(`BWS2.telemetry.flushIfPending()`)
+  t.run('CLOCK = CLOCK + 30; BWS2.telemetry.flushIfPending()')
   status = t.json('BWS2.telemetry.status()')
   assert.equal(status.sequence, 3)
   assert.equal(status.has_pending, false)
   assert.equal(status.ok, 2)
+
+  // 请求体里必须有 token（漏过一次，导致 152 次 401）
+  t.run(`
+    local ok_decode, decoded = GLOBAL.pcall(BWS.json.decode, QUERIES[1].body)
+    HAS_TOKEN = tostring(ok_decode and type(decoded) == 'table' and decoded.token == 'TOKEN_OK')
+  `)
+  assert.equal(t.global('HAS_TOKEN'), 'true', 'telemetry 请求体必须带 token')
 
   // 检查发出去的三个请求的 sequence 序列：1, 2(失败重试也是 2), 2 → 第 3 个成功后变 3
   t.run(`OUTS = ""; for i = 1, #QUERIES do local b = QUERIES[i].body; local s = string.match(b, '"sequence":(%d+)'); OUTS = OUTS .. tostring(s) .. "," end`)
@@ -321,4 +328,38 @@ test('net tick 出错被隔离（不会把分片拖崩）', async () => {
   assert.equal(t.global('OUTS'), 'survived')
   t.run('ERRLOG = ""; for i = 1, #CAPTURED do if string.find(CAPTURED[i], "net tick 出错", 1, true) then ERRLOG = CAPTURED[i] end end')
   assert.match(t.global('ERRLOG'), /net tick 出错/)
+})
+
+test('telemetry：4xx 视为永久错误，不重试（并计入 rejected）', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  t.run(`REPLIES = { { ok = false, status = 401, body = '{"success":false}' } }`)
+  t.run(`BWS2.telemetry.submit(${META}, { world = { day = 2 } }, nil)`)
+  let status = t.json('BWS2.telemetry.status()')
+  assert.equal(status.rejected, 1, '应记为被拒绝')
+  assert.equal(status.has_pending, false, '4xx 后不该留着 pending')
+  assert.equal(status.sequence, 1, '被拒绝时 sequence 不前进')
+
+  // 再 flush 也不会重发
+  t.run('CLOCK = CLOCK + 60; BWS2.telemetry.flushIfPending()')
+  t.run('QN = tostring(#QUERIES)')
+  assert.equal(t.global('QN'), '1', '4xx 之后不应再重试')
+})
+
+test('telemetry：瞬时失败（连不上）后要等退避到期才重试', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  t.run(`REPLIES = { { ok = false, status = 0, body = '' } }`)
+  t.run(`BWS2.telemetry.submit(${META}, { world = { day = 2 } }, nil)`)
+  assert.equal(t.json('BWS2.telemetry.status()').has_pending, true, '瞬时失败要保留数据')
+
+  t.run('BWS2.telemetry.flushIfPending()')
+  t.run('QN1 = tostring(#QUERIES)')
+  assert.equal(t.global('QN1'), '1', '退避期内不能重发')
+
+  t.run(`REPLIES = { { ok = true, status = 200, body = '{"success":true,"acknowledged_sequence":1}' } }`)
+  t.run('CLOCK = CLOCK + 60; BWS2.telemetry.flushIfPending()')
+  t.run('QN2 = tostring(#QUERIES)')
+  assert.equal(t.global('QN2'), '2', '退避到期后应重试')
+  assert.equal(t.json('BWS2.telemetry.status()').sequence, 2)
 })

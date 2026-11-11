@@ -28,6 +28,8 @@ local okCount = 0
 local failCount = 0
 local dropped = 0
 local trimmed = 0
+local rejected = 0        -- 被服务端明确拒绝（4xx）的包数：不重试
+local nextRetryAt = 0     -- 瞬时失败后的重试时间点（退避用）
 local lastSentAt = nil
 local lastAckAt = nil
 local lastStatus = nil
@@ -41,6 +43,9 @@ local function now()
     end
     return 0
 end
+
+--- 4xx 表示“请求本身有问题”（没 token / 缺字段 / 太大），重试多少次都一样 → 不重试
+local PERMANENT_STATUS = { [400] = true, [401] = true, [403] = true, [404] = true, [413] = true, [422] = true }
 
 --- 把 payload 编码一次看大小（编码失败按“太大”处理，交给后面降级）
 local function encodedSize(payload)
@@ -75,10 +80,12 @@ end
 
 local function send()
     if inFlight or pending == nil then return end
+    if nextRetryAt ~= nil and nextRetryAt > 0 and now() < nextRetryAt then return end
     local config = BWS2.config.get()
     if type(config.token) ~= 'string' or #config.token == 0 then return end
 
     local payload = pending
+    payload.token = config.token        -- ← 之前漏了这行：telemetry 全是 401
     payload.sequence = sequence
     payload.session_id = BWS2.connection.session()
     payload.protocol_version = BWS2.connection.protocolVersion()
@@ -111,8 +118,18 @@ local function send()
         else
             failCount = failCount + 1
             lastError = result.error
-            -- 失败：保留同一份数据、同一个 sequence 重试（Bridge 端幂等）
-            if pending == nil then pending = payload end
+            if result.status ~= nil and PERMANENT_STATUS[result.status] then
+                -- 4xx：同样的请求再发一百次也一样，丢掉这份数据，别拿坏请求砸服务端
+                rejected = rejected + 1
+                pending = nil
+                print('[BWS2] ERROR telemetry 被服务端拒绝 status=' .. tostring(result.status)
+                    .. '（不重试，丢弃当前样本）')
+            else
+                -- 瞬时失败（连不上 / 超时 / 5xx）：保留同一份数据与同一个 sequence，按退避重试
+                if pending == nil then pending = payload end
+                local retrySeconds = tonumber(BWS2.config.get().telemetryRetrySeconds) or 2
+                nextRetryAt = now() + retrySeconds * BWS2.connection.backoffFactor()
+            end
             BWS2.connection.onFailure('telemetry', result.error)
         end
     end, 6)
@@ -155,6 +172,8 @@ function T.status()
         failed = failCount,
         dropped = dropped,
         trimmed = trimmed,
+        rejected = rejected,
+        next_retry_at = nextRetryAt,
         last_sent_at = lastSentAt,
         last_ack_at = lastAckAt,
         last_status = lastStatus,
