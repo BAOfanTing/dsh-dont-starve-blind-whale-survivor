@@ -1,0 +1,20 @@
+{
+  "name": "blind-whale-survivor-game-bridge",
+  "version": "0.2.0-m1",
+  "private": true,
+  "description": "Blind Whale Survivor · Phase 2 · 游戏通信 Bridge（M1：HTTP 服务 + 路由 + Token 校验 + 健康检查）",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
+    "dev": "npm run build && node dist/src/index.js",
+    "test": "npm run build && node --test dist/test/"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -12,3 +12,7 @@ local.ps1
 tmp-*
 .install-mod.mjs
 *.dbg.mjs
+
+game-bridge/node_modules/
+game-bridge/dist/
+.runtime/
