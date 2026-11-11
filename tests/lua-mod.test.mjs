@@ -368,7 +368,7 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
   assert.equal(status, lua.LUA_OK, 'modmain.lua 加载失败（游戏里就是这句会让启动崩溃）：' + fail())
 
   lauxlib.luaL_loadstring(L, to_luastring(`
-    assert(#MODIMPORTS == 21, "应该 modimport 了 21 个模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 22, "应该 modimport 了 22 个模块，实际 " .. #MODIMPORTS)
     assert(MODIMPORTS[1] == "scripts/whale/json.lua", "第一个应该是 json.lua")
     assert(MODIMPORTS[7] == "scripts/main/json_encoder.lua", "Phase 1 的编码器要跟上")
     assert(MODIMPORTS[8] == "scripts/main/player_observer.lua", "Phase 1 的玩家观察器要跟上")
@@ -378,8 +378,9 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
     assert(MODIMPORTS[14] == "bws_config.lua", "Phase 2 的生成配置要跟上")
     assert(MODIMPORTS[15] == "scripts/main/config.lua", "Phase 2 的 config 要跟上")
     assert(MODIMPORTS[17] == "scripts/main/connection.lua", "Phase 2 的连接管理要跟上")
-    assert(MODIMPORTS[20] == "scripts/main/net.lua", "Phase 2 的网络调度要跟上")
-    assert(MODIMPORTS[21] == "scripts/main/probe.lua", "Phase 2 的探针要跟上")
+    assert(MODIMPORTS[20] == "scripts/main/commands.lua", "Phase 2 的命令接收要跟上")
+    assert(MODIMPORTS[21] == "scripts/main/net.lua", "Phase 2 的网络调度要跟上")
+    assert(MODIMPORTS[22] == "scripts/main/probe.lua", "Phase 2 的探针要跟上")
     assert(#POSTINITS == 3, "应该有 3 个 postinit，实际 " .. #POSTINITS)
     assert(CPOSTS[1] == "screens/playerhud", "应该往玩家 HUD 上挂小窗")
     assert(Whale.files.state == "whale_state.json", "文件名表没装上")

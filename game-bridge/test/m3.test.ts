@@ -5,6 +5,7 @@ import { request as httpRequest } from 'node:http'
 import { loadConfig } from '../src/config.js'
 import { createLogger } from '../src/logger.js'
 import { createBridgeServer } from '../src/server.js'
+import { CommandQueue } from '../src/commands.js'
 import { SessionManager } from '../src/session.js'
 import { BridgeState } from '../src/state.js'
 
@@ -21,7 +22,8 @@ async function startHarness(options: { now?: () => number } = {}): Promise<Harne
   const logger = createLogger({ secrets: [config.token], sink: () => {} })
   const state = new BridgeState()
   const sessions = new SessionManager(options.now ? { now: options.now } : {})
-  const handle = createBridgeServer({ config, logger, state, sessions })
+  const commands = new CommandQueue()
+  const handle = createBridgeServer({ config, logger, state, sessions, commands })
   const port = await handle.listen(0)
   return { base: `http://127.0.0.1:${port}`, sessions, close: () => handle.close() }
 }

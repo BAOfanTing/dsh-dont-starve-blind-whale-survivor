@@ -15,7 +15,8 @@ import type { BridgeState } from './state.js'
 import type { Logger } from './logger.js'
 import type { SessionManager } from './session.js'
 import { HttpError } from './http.js'
-import { parseHeartbeat, parseTelemetry, PROTOCOL_VERSION } from './validate.js'
+import { parseHeartbeat, parsePoll, parseResultReport, parseTelemetry, PROTOCOL_VERSION } from './validate.js'
+import { COMMAND_TYPES, type CommandQueue, type CommandRecord } from './commands.js'
 
 export interface RequestContext {
   requestId: string
@@ -25,6 +26,7 @@ export interface RequestContext {
   config: BridgeConfig
   state: BridgeState
   sessions: SessionManager
+  commands: CommandQueue
   logger: Logger
   receivedAt: number
 }
@@ -43,6 +45,20 @@ export interface Route {
 
 export interface RouteDeps {
   sessions: SessionManager
+  commands: CommandQueue
+}
+
+/** 对外暴露的命令形状（只给游戏端需要的字段，不泄露内部记账） */
+function publicCommand(command: CommandRecord) {
+  return {
+    id: command.id,
+    type: command.type,
+    params: command.params,
+    status: command.status,
+    created_at: command.createdAt,
+    expires_at: command.expiresAt,
+    deliveries: command.deliveries,
+  }
 }
 
 function notImplemented(what: string): RouteResult {
@@ -78,7 +94,7 @@ export function createRoutes(deps: RouteDeps): Route[] {
       method: 'GET',
       path: '/api/v1/bridge/status',
       auth: true,
-      handler: ({ config, state, sessions, receivedAt }) => {
+      handler: ({ config, state, sessions, commands: queue, receivedAt }) => {
         const snapshot = state.snapshot()
         const current = sessions.current()
         const list = sessions.list()
@@ -103,7 +119,9 @@ export function createRoutes(deps: RouteDeps): Route[] {
               shard: current?.shard ?? null,
               game_version: current?.gameVersion ?? null,
               last_sequence: current?.acknowledgedSequence ?? null,
-              queued_commands: snapshot.queuedCommands,
+              queued_commands: queue.pendingCount(),
+              active_commands: queue.activeCount(),
+              command_stats: queue.stats(),
               last_error: snapshot.lastError,
               requests: snapshot.requests,
             },
@@ -199,8 +217,127 @@ export function createRoutes(deps: RouteDeps): Route[] {
         }
       },
     },
-    { method: 'POST', path: '/api/v1/commands/poll', auth: true, handler: () => notImplemented('命令轮询 /api/v1/commands/poll') },
-    { method: 'POST', path: '/api/v1/commands/result', auth: true, handler: () => notImplemented('命令执行回执 /api/v1/commands/result') },
+    {
+      method: 'POST',
+      path: '/api/v1/commands/poll',
+      auth: true,
+      handler: ({ body, sessions, commands: queue, config, receivedAt }) => {
+        const parsed = parsePoll(body)
+        const info = sessions.list().find((item) => item.sessionId === parsed.sessionId)
+        const shard = parsed.shard ?? info?.shard ?? null
+
+        // 会话已经死了（游戏重启/退出）→ 它手上未回执的命令状态未知，判 FAILED 且不重放
+        for (const item of sessions.list()) {
+          if (!sessions.isAlive(item)) queue.reapSession(item.sessionId)
+        }
+
+        const { command, pending } = queue.poll(parsed.sessionId, shard)
+        return {
+          status: 200,
+          body: {
+            success: true,
+            protocol_version: config.protocolVersion,
+            server_time: receivedAt,
+            command: command === null ? null : publicCommand(command),
+            pending_count: pending,
+            last_acknowledged_id: parsed.lastAcknowledgedId,
+          },
+        }
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/v1/commands/result',
+      auth: true,
+      handler: ({ body, sessions, commands: queue, config, receivedAt }) => {
+        const parsed = parseResultReport(body)
+        if (!sessions.list().some((item) => item.sessionId === parsed.sessionId)) {
+          throw new HttpError(400, 'bad_request', '这个 session_id 还没发过心跳')
+        }
+        const settled = queue.settle(parsed.sessionId, {
+          commandId: parsed.commandId,
+          status: parsed.status,
+          result: parsed.result,
+          error: parsed.error,
+          executionTime: parsed.executionTime,
+        })
+        if (!settled.ok || !settled.command) {
+          const notFound = settled.reason === 'unknown_command'
+          throw new HttpError(notFound ? 404 : 400, notFound ? 'not_found' : 'bad_request', `回执未被接受：${settled.reason ?? 'unknown'}`)
+        }
+        return {
+          status: 200,
+          body: {
+            success: true,
+            protocol_version: config.protocolVersion,
+            server_time: receivedAt,
+            command_id: settled.command.id,
+            status: settled.command.status,
+            duplicate: settled.duplicate,
+            late: settled.command.late,
+          },
+        }
+      },
+    },
+    {
+      // 运维/联调用：人工下发一条测试命令（不属于游戏端协议）
+      method: 'POST',
+      path: '/api/v1/commands/enqueue',
+      auth: true,
+      handler: ({ body, commands: queue, config, receivedAt }) => {
+        const record = body !== null && typeof body === 'object' ? (body as Record<string, unknown>) : null
+        if (!record) throw new HttpError(400, 'bad_request', 'enqueue 请求体必须是 JSON 对象')
+        const type = record.type
+        if (typeof type !== 'string' || !(COMMAND_TYPES as readonly string[]).includes(type)) {
+          throw new HttpError(400, 'bad_request', `type 必须是 ${COMMAND_TYPES.join('/')} 之一（本阶段不实现任何真实游戏动作）`)
+        }
+        const params = record.params === undefined ? {} : record.params
+        if (params !== null && (typeof params !== 'object' || Array.isArray(params))) {
+          throw new HttpError(400, 'bad_request', 'params 必须是对象')
+        }
+        const shard = typeof record.shard === 'string' ? record.shard : null
+        let command: CommandRecord
+        try {
+          command = queue.enqueue(type, (params ?? {}) as Record<string, unknown>, { shard })
+        } catch (error) {
+          throw new HttpError(error instanceof Error && error.message.startsWith('queue_full') ? 429 : 400, 'bad_request', String((error as Error).message))
+        }
+        return {
+          status: 200,
+          body: {
+            success: true,
+            protocol_version: config.protocolVersion,
+            server_time: receivedAt,
+            command: publicCommand(command),
+            pending_count: queue.pendingCount(),
+          },
+        }
+      },
+    },
+    {
+      // 运维/联调用：看命令队列现状
+      method: 'GET',
+      path: '/api/v1/commands',
+      auth: true,
+      handler: ({ commands: queue, config, receivedAt }) => ({
+        status: 200,
+        body: {
+          success: true,
+          protocol_version: config.protocolVersion,
+          server_time: receivedAt,
+          stats: queue.stats(),
+          commands: queue.list(20).map((command: CommandRecord) => ({
+            ...publicCommand(command),
+            session_id: command.sessionId,
+            result: command.result,
+            error: command.error,
+            execution_time: command.executionTime,
+            late: command.late,
+            note: command.note,
+          })),
+        },
+      }),
+    },
   ]
 }
 

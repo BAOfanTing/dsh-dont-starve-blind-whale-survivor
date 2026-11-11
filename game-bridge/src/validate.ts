@@ -55,6 +55,77 @@ export function optionalString(value: unknown, field: string): string | null {
   return value
 }
 
+// ───────────────────────── M4：命令轮询 / 回执 ─────────────────────────
+
+const COMMAND_STATUS_SET = new Set(['QUEUED', 'DELIVERED', 'EXECUTING', 'SUCCEEDED', 'FAILED', 'EXPIRED', 'CANCELLED'])
+
+export interface ParsedPoll {
+  sessionId: string
+  lastAcknowledgedId: string | null
+  shard: string | null
+}
+
+export function parsePoll(raw: unknown): ParsedPoll {
+  const body = asObject(raw)
+  if (!body) throw badRequest('poll 请求体必须是 JSON 对象')
+  checkProtocol(body)
+  const sessionId = requireSessionId(body)
+  const lastAck = body.last_acknowledged_id
+  if (lastAck !== undefined && lastAck !== null && typeof lastAck !== 'string') {
+    throw badRequest('last_acknowledged_id 必须是字符串或 null')
+  }
+  return {
+    sessionId,
+    lastAcknowledgedId: typeof lastAck === 'string' ? lastAck : null,
+    shard: optionalString(body.shard, 'shard'),
+  }
+}
+
+export interface ParsedResultReport {
+  sessionId: string
+  commandId: string
+  status: 'SUCCEEDED' | 'FAILED' | 'EXECUTING'
+  result: unknown
+  error: string | null
+  executionTime: number | null
+}
+
+export function parseResultReport(raw: unknown): ParsedResultReport {
+  const body = asObject(raw)
+  if (!body) throw badRequest('result 请求体必须是 JSON 对象')
+  checkProtocol(body)
+  const sessionId = requireSessionId(body)
+
+  const commandId = body.command_id
+  if (typeof commandId !== 'string' || commandId.length === 0) throw badRequest('缺少 command_id')
+  if (commandId.length > 128) throw badRequest('command_id 太长')
+
+  const status = body.status
+  if (typeof status !== 'string' || !COMMAND_STATUS_SET.has(status)) {
+    throw badRequest('status 必须是 QUEUED/DELIVERED/EXECUTING/SUCCEEDED/FAILED/EXPIRED/CANCELLED 之一')
+  }
+  if (status !== 'SUCCEEDED' && status !== 'FAILED' && status !== 'EXECUTING') {
+    throw badRequest('游戏端只能上报 EXECUTING / SUCCEEDED / FAILED')
+  }
+
+  const err = body.error
+  if (err !== undefined && err !== null && typeof err !== 'string') throw badRequest('error 必须是字符串或 null')
+
+  const execution = body.execution_time
+  if (execution !== undefined && execution !== null && (typeof execution !== 'number' || !Number.isFinite(execution))) {
+    throw badRequest('execution_time 必须是数字（秒）或 null')
+  }
+
+  return {
+    sessionId,
+    commandId,
+    status,
+    result: body.result ?? null,
+    error: typeof err === 'string' ? err : null,
+    executionTime: typeof execution === 'number' ? execution : null,
+  }
+}
+
 export interface ParsedHeartbeat {
   sessionId: string
   timestamp: number

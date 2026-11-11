@@ -58,6 +58,9 @@ local function tickBody()
     -- 2) telemetry 有积压就补发（正常路径是观察器 submit 直接触发）
     BWS2.telemetry.flushIfPending()
 
+    -- 2.5) 命令轮询（自己带单飞与退避，这里只是每秒问一次“到点没”）
+    BWS2.commands.poll(false)
+
     -- 3) 状态变化时才打日志（避免刷屏）
     local status = connection.status()
     if status.state ~= lastReportedState then

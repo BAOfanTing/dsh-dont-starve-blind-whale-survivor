@@ -73,6 +73,7 @@ modimport("scripts/main/http_client.lua")
 modimport("scripts/main/connection.lua")
 modimport("scripts/main/heartbeat.lua")
 modimport("scripts/main/telemetry.lua")
+modimport("scripts/main/commands.lua")
 modimport("scripts/main/net.lua")
 modimport("scripts/main/probe.lua")
 

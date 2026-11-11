@@ -8,6 +8,7 @@ import type { BridgeConfig } from './config.js'
 import { HttpError, parseJsonText, readBody, requestIdOf, sendJson } from './http.js'
 import type { Logger } from './logger.js'
 import { createRoutes, findRoute, methodNotAllowed, type RequestContext, type Route } from './routes.js'
+import type { CommandQueue } from './commands.js'
 import type { SessionManager } from './session.js'
 import { BridgeState } from './state.js'
 
@@ -16,6 +17,7 @@ export interface ServerDeps {
   logger: Logger
   state: BridgeState
   sessions: SessionManager
+  commands: CommandQueue
   routes?: Route[]
   now?: () => number
 }
@@ -28,7 +30,7 @@ export interface BridgeServerHandle {
 
 export function createBridgeServer(deps: ServerDeps): BridgeServerHandle {
   const now = deps.now ?? Date.now
-  const routes = deps.routes ?? createRoutes({ sessions: deps.sessions })
+  const routes = deps.routes ?? createRoutes({ sessions: deps.sessions, commands: deps.commands })
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void handle(req, res)
@@ -85,6 +87,7 @@ export function createBridgeServer(deps: ServerDeps): BridgeServerHandle {
         config: deps.config,
         state: deps.state,
         sessions: deps.sessions,
+        commands: deps.commands,
         logger: deps.logger,
         receivedAt: startedAt,
       }
