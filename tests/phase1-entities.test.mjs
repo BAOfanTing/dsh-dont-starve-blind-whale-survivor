@@ -41,7 +41,7 @@ local function acting(id) return { id = id } end
 -- 让 workable.action.id 和游戏里一致
 WORKABLE = { CHOP = acting("CHOP"), MINE = acting("MINE"), DIG = acting("DIG"), HAMMER = acting("HAMMER") }
 
-local function ent(prefab, x, z, tags, comps, valid)
+function ent(prefab, x, z, tags, comps, valid)
     local e = { prefab = prefab, components = comps or {}, _tags = {}, _x = x, _z = z, _valid = valid ~= false }
     for _, tag in ipairs(tags or {}) do e._tags[tag] = true end
     function e:IsValid() return self._valid end
@@ -237,7 +237,7 @@ test('实体扫描：FindEntities 的半径按“格 × 4”传', async () => {
   assert.equal(t.global('RAD'), '40', '10 格 = 40 世界单位')
 })
 
-test('state 里的 nearby 是缓存，按扫描间隔刷新（不每帧扫）', async () => {
+test('nearby 是独立记录，按扫描间隔刷新（不每帧扫）', async () => {
   const fengari = await import('fengari')
   const t = load(fengari)
   t.run('BWS.observer.Start()')
@@ -253,11 +253,73 @@ test('state 里的 nearby 是缓存，按扫描间隔刷新（不每帧扫）', 
   assert.equal(t.global('F2'), '1', '接下来两周期用缓存，不该再扫')
   assert.equal(t.global('F3'), '2', '第 5 个周期（1+4）再扫一次')
 
-  const states = t.lines().filter((s) => s.type === 'state')
+  const all = t.lines()
+  const states = all.filter((r) => r.type === 'state')
+  const nearbys = all.filter((r) => r.type === 'nearby')
   assert.ok(states.length >= 5)
-  assert.equal(states[0].nearby.scanned_at_tick, 1)
-  assert.equal(states[1].nearby.scanned_at_tick, 1, '缓存：还是第 1 周期的那份')
-  assert.equal(states[4].nearby.scanned_at_tick, 5, '第 5 周期重新扫')
-  assert.equal(states[0].nearby.returned, 8)
+  assert.equal(nearbys.length, states.length, '每个周期都发一条 nearby（内容是缓存）')
+  assert.ok(!('entities' in states[0]), 'state 记录里不该塞实体（日志有长度上限）')
+
+  const ticks = nearbys.map((r) => r.scanned_at_tick)
+  assert.deepEqual(ticks.slice(0, 5), [1, 1, 1, 1, 5], '只有第 1、5 周期真正重扫')
+  assert.equal(nearbys[0].returned, 8)
+  assert.equal(nearbys[0].radius_tiles, 16)
   assert.equal(states[0].observer.errors, 0)
+})
+
+test('分类优先级：能采的优先于“能铲”，建筑不算生物', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  t.run(`
+    NEARBY_ENTS = {
+        -- 草：既能采（pickable）也能用铲子挖（workable DIG）
+        ent("grass", 44, 40, { "pickable" }, { pickable = {}, workable = { action = WORKABLE.DIG, workleft = 1 } }),
+        -- 南瓜灯这种：有 health + combat，但它是建筑
+        ent("pumpkin_lantern", 48, 40, { "structure" }, {
+            health = { GetPercent = function() return 1 end, IsDead = function() return false end },
+            combat = {},
+        }),
+        -- 真正的敌人
+        ent("spider", 52, 40, { "hostile", "monster" }, {
+            health = { GetPercent = function() return 0.5 end, IsDead = function() return false end },
+            combat = {},
+        }),
+    }
+  `)
+  t.run('N = BWS.entity_observer.Observe(GLOBAL.AllPlayers["KU_1"], { radius_tiles = 16 })')
+  const nearby = t.json('N')
+  const byPrefab = {}
+  for (const e of nearby.entities) {
+    if (!byPrefab[e.prefab]) byPrefab[e.prefab] = []
+    byPrefab[e.prefab].push(e)
+  }
+  assert.equal(byPrefab.grass[0].category, 'harvestable', '草应该算“能采”，不是“能铲”')
+  assert.equal(byPrefab.pumpkin_lantern[0].category, 'structure', '有血有战斗组件的建筑也不该算生物')
+  assert.equal(byPrefab.spider[0].category, 'hostile')
+})
+
+test('记录长度有预算：太长就裁实体并标 trimmed，不会写出被日志截断的半截 JSON', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  // 造一个 prefab 名超长的树：不裁剪的话这条记录必然超过日志上限
+  t.run(`
+    NEARBY_ENTS = {
+        ent("evergreen", 44, 40, {}, { workable = { action = WORKABLE.CHOP, workleft = 1 } }),
+        ent(string.rep("x", 4000), 48, 40, {}, { workable = { action = WORKABLE.CHOP, workleft = 1 } }),
+    }
+  `)
+  t.run('BWS.observer.Start(); PERIODIC()')
+
+  const records = t.lines()
+  const nearby = records.find((r) => r.type === 'nearby')
+  assert.ok(nearby, '应该有一条 nearby 记录')
+  assert.equal(nearby.trimmed, true, '超预算时要标 trimmed')
+  assert.ok(nearby.returned < 2, '那条超长实体应该被裁掉')
+
+  // 关键：每条日志记录本身都不能超过游戏的截断阈值（实测 3913 字符就开始断）
+  const all = t.lines()
+  for (const record of all) {
+    const text = JSON.stringify(record)
+    assert.ok(text.length < 3800, '记录长度 ' + text.length + ' 接近日志截断点')
+  }
 })

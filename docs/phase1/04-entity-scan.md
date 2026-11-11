@@ -33,9 +33,9 @@
 |---|---|
 | `player` | `HasTag("player")`（观察目标自己会被排除） |
 | `hostile` | `HasTag("hostile")` 且有 `components.health` |
-| `creature` | 有 `components.combat` + `health`，或带 `monster` / `animal` 标签 |
+| `creature` | 有 `components.combat` + `health` 且不是 `structure`（南瓜灯这类有血有战斗组件的建筑不算生物），或带 `monster` / `animal` 标签 |
+| `harvestable` | 有 `pickable` 标签且没有 `barren`，或有 `components.harvestable`（**优先于下一条**：草/浆果丛也能用铲子挖，但玩家第一反应是“采”） |
 | `tree` / `rock` / `diggable` / `damageable` | `components.workable.action.id` = `CHOP` / `MINE` / `DIG` / `HAMMER` |
-| `harvestable` | 有 `pickable` 标签且没有 `barren`，或有 `components.harvestable` |
 | `item` | `components.inventoryitem.owner == nil`（掉在地上的） |
 | `structure` | `HasTag("structure")` |
 | 其它 | 不输出（特效、装饰、不认识的东西） |
@@ -56,6 +56,28 @@
 - 扫描结果缓存在 `O.nearby`，每次 state 只带缓存，并用 `nearby.scanned_at_tick` 标明它是第几个周期扫的。
 - 扫描间隔换算成"每 N 个 state 周期扫一次"，避免两套定时器打架。
 - 超过上限时 `truncated: true`，`scanned`（FindEntities 返回总数）与 `returned`（实际写出条数）分开给。
+
+## 4.5 日志长度上限（实机发现，必须遵守）
+
+饥荒的日志**每行约 3.9K 字符就会被截断**。实机测到：所有含 `nearby` 的 state 行长度都在 3913~3921，
+而且全部断在半截 JSON 上（外面解析必失败）。
+
+所以现在的输出拆成两条记录：
+
+| 记录 | 内容 |
+|---|---|
+| `type:"state"` | session / player / inventory / world / observer（不含实体） |
+| `type:"nearby"` | radius / scanned / counts / scanned_at_tick / entities（每周期一条，内容可能是缓存） |
+
+两条记录用 `observer.tick` 与 `nearby.tick` 配对（同一个周期编号）。
+
+并且在 `observer_manager.emit()` 里加了硬预算 `MAX_RECORD_CHARS = 3500`：
+
+- 超过预算时先调 `shrink_nearby`：**按距离顺序**保留能放下的实体，`returned` 改成实际条数、`trimmed: true`；
+- 还超就丢掉 `entities` 并标 `oversize: true`；
+- 仍超就整条不打印并计入 `observer.errors`（宁可少一条，也不让日志出现半截 JSON）。
+
+单测里专门造了一个 prefab 名长 4000 字符的实体来验证这条预算真的生效。
 
 ## 5. 日志片段
 

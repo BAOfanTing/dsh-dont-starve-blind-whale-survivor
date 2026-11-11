@@ -26,6 +26,9 @@ BWS.tag = "[BWS]"
 BWS.modname = BWS.modname or (modname ~= nil and tostring(modname) or "BlindWhaleSurvivor")
 
 local DEFAULT_INTERVAL = 2
+-- 游戏日志每行大约 3.9K 字符就会被截断（实测：3913~3921 字符的行全部断在半截）。
+-- 所以**一条记录一个预算**，超了就裁剪，绝不指望日志能装下任意长的 JSON。
+local MAX_RECORD_CHARS = 3500
 local MIN_INTERVAL = 0.5
 local MAX_INTERVAL = 30
 
@@ -68,16 +71,54 @@ local function clamp_interval(value)
     return n
 end
 
---- 一次 log 输出：编码/打印出错只记账，绝不冒到游戏里
-local function emit(payload)
+--- 一次 log 输出：编码/打印出错只记账，绝不冒到游戏里。
+--- encode_ok 可以在超预算时收缩 payload（返回新的 payload）。
+local function emit(payload, shrink)
     local ok, err = pcall(function()
-        print(BWS.tag .. " " .. BWS.json.encode(payload))
+        local text = BWS.json.encode(payload)
+        if #text > MAX_RECORD_CHARS and shrink ~= nil then
+            payload = shrink(payload, MAX_RECORD_CHARS)
+            text = BWS.json.encode(payload)
+        end
+        if #text > MAX_RECORD_CHARS then
+            -- 还超：丢掉可选字段，标出来，最差情况只留一个告警
+            payload.entities = nil
+            payload.trimmed = true
+            payload.oversize = true
+            text = BWS.json.encode(payload)
+        end
+        if #text > MAX_RECORD_CHARS then
+            O.error_count = O.error_count + 1
+            O.last_error = "emit: record too long (" .. #text .. ")"
+            return
+        end
+        print(BWS.tag .. " " .. text)
     end)
     if not ok then
         O.error_count = O.error_count + 1
         O.last_error = "emit: " .. tostring(err)
         pcall(print, BWS.tag .. ' {"schema_version":"1","type":"error","stage":"encode"}')
     end
+end
+
+--- nearby 记录裁剪：按预算保留前面的实体（已经按距离排好序）
+local function shrink_nearby(payload, budget)
+    local entities = payload.entities or {}
+    local head = BWS.json.encode({ schema_version = payload.schema_version, type = payload.type,
+        session = payload.session, shard = payload.shard, tick = payload.tick, radius_tiles = payload.radius_tiles,
+        scanned = payload.scanned, counts = payload.counts, scanned_at_tick = payload.scanned_at_tick })
+    local kept = {}
+    local size = #head + 120 -- 给尾部的 returned/trimmed 等字段留余量
+    for i = 1, #entities do
+        local one = BWS.json.encode(entities[i])
+        if size + #one + 1 > budget then break end
+        kept[#kept + 1] = entities[i]
+        size = size + #one + 1
+    end
+    payload.entities = kept
+    payload.returned = #kept
+    payload.trimmed = (#kept < #entities)
+    return payload
 end
 
 --- 每条日志的公共字段
@@ -201,8 +242,6 @@ local function build_state(player_entity)
         if inventory ~= nil then payload.inventory = inventory else problems.inventory = inventory_err end
     end
 
-    if O.nearby ~= nil then payload.nearby = O.nearby end
-
     local world, world_err = safe_observe("world", BWS.world_observer, function()
         return BWS.world_observer.Observe()
     end)
@@ -231,6 +270,24 @@ function O.Tick()
         local player_entity = nil
         if O.side == "server" then player_entity = first_player() end
         emit(build_state(player_entity))
+        -- 附近实体单独一条记录（日志每行有长度上限，塞一条里会被截断）
+        if O.nearby ~= nil then
+            -- 复制一份再发：绝不能改动缓存（上面 shrink 会裁剪 entities）
+            local nearby = base("nearby")
+            nearby.tick = O.loop_count
+            nearby.radius_tiles = O.nearby.radius_tiles
+            nearby.scanned = O.nearby.scanned
+            nearby.returned = O.nearby.returned
+            nearby.truncated = O.nearby.truncated
+            nearby.counts = O.nearby.counts
+            nearby.scanned_at_tick = O.nearby.scanned_at_tick
+            local entities = {}
+            for i, entry in ipairs(O.nearby.entities or {}) do
+                entities[i] = entry
+            end
+            nearby.entities = entities
+            emit(nearby, shrink_nearby)
+        end
     end)
     if not ok then
         O.error_count = O.error_count + 1

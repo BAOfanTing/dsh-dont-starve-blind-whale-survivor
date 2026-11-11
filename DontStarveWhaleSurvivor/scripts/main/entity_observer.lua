@@ -76,11 +76,18 @@ function E.Classify(ent)
     local ok_hostile, hostile = pcall(function() return ent:HasTag("hostile") end)
     if ok_hostile and hostile and components.health ~= nil then return "hostile" end
 
-    if components.combat ~= nil and components.health ~= nil then return "creature" end
+    local ok_struct, is_structure = pcall(function() return ent:HasTag("structure") end)
+    if components.combat ~= nil and components.health ~= nil and not (ok_struct and is_structure) then return "creature" end
     local ok_monster, monster = pcall(function() return ent:HasTag("monster") end)
     if ok_monster and monster and components.health ~= nil then return "creature" end
     local ok_animal, animal = pcall(function() return ent:HasTag("animal") end)
     if ok_animal and animal and components.health ~= nil then return "creature" end
+
+    -- 能采的优先（草/浆果丛/蘑菇同时也能用铲子挖，但玩家第一反应是“采”）
+    local ok_pick, pickable = pcall(function() return ent:HasTag("pickable") end)
+    local ok_barren, barren = pcall(function() return ent:HasTag("barren") end)
+    if ok_pick and pickable and not (ok_barren and barren) then return "harvestable" end
+    if components.harvestable ~= nil then return "harvestable" end
 
     -- 能用工工具处理的：树 / 矿 / 可铲 / 可拆
     if components.workable ~= nil and components.workable.action ~= nil then
@@ -88,12 +95,6 @@ function E.Classify(ent)
         local category = WORKABLE_CATEGORY[id]
         if category ~= nil then return category end
     end
-
-    -- 能采的（Pickable 组件没有 CanBePicked，靠标签判断）
-    local ok_pick, pickable = pcall(function() return ent:HasTag("pickable") end)
-    local ok_barren, barren = pcall(function() return ent:HasTag("barren") end)
-    if ok_pick and pickable and not (ok_barren and barren) then return "harvestable" end
-    if components.harvestable ~= nil then return "harvestable" end
 
     -- 地上的掉落物
     if components.inventoryitem ~= nil and components.inventoryitem.owner == nil then return "item" end
