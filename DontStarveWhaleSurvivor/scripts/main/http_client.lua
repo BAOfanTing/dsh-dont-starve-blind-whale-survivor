@@ -30,11 +30,16 @@ local stats = { sent = 0, ok = 0, failed = 0, timeout = 0, dropped = 0 }
 
 local MAX_QUEUE = 8
 
-local function now()
+--- 毫秒时钟：os.time 只有整秒，elapsed 会算成 0/2000；优先用 TheSim:GetRealTime()（毫秒）
+local function now_ms()
+    if GLOBAL.TheSim ~= nil and GLOBAL.TheSim.GetRealTime ~= nil then
+        local ok, value = pcall(function() return GLOBAL.TheSim:GetRealTime() end)
+        if ok and value ~= nil then return tonumber(value) or 0 end
+    end
     local os_ = GLOBAL.os
     if os_ ~= nil and os_.time ~= nil then
         local ok, value = pcall(os_.time)
-        if ok and value ~= nil then return value end
+        if ok and value ~= nil then return (tonumber(value) or 0) * 1000 end
     end
     return 0
 end
@@ -53,7 +58,7 @@ local function pump()
     if job == nil then return end
 
     inFlight = job
-    job.startedAt = now()
+    job.startedAtMs = now_ms()
     stats.sent = stats.sent + 1
 
     local function finish(payload)
@@ -63,7 +68,7 @@ local function pump()
             job.timer = nil
         end
         inFlight = nil
-        payload.elapsed_ms = math.floor((now() - job.startedAt) * 1000)
+        payload.elapsed_ms = math.max(0, math.floor(now_ms() - (job.startedAtMs or 0)))
         if payload.ok then stats.ok = stats.ok + 1 else stats.failed = stats.failed + 1 end
         local ok_cb, err = pcall(job.cb, payload)
         if not ok_cb then log('ERROR', '回调抛错：' .. tostring(err)) end
@@ -76,19 +81,25 @@ local function pump()
         handle.task = GLOBAL.TheWorld:DoTaskInTime(job.timeoutSeconds, function()
             if inFlight ~= job then return end
             stats.timeout = stats.timeout + 1
-            finish({ ok = false, status = nil, error = 'timeout', body = nil })
+            finish({ ok = false, transport_ok = false, status = nil, error = 'timeout', body = nil })
         end)
         job.timer = handle.task
     end
 
     local ok_call, err = pcall(function()
         GLOBAL.TheSim:QueryServer(job.url, function(result, isSuccessful, resultCode)
-            finish({
-                ok = isSuccessful == true,
-                status = resultCode,
-                body = result,
-                error = (isSuccessful == true) and nil or ('http_' .. tostring(resultCode)),
-            })
+            -- 实测（762172）：isSuccessful 只说明"请求跑完了"，401/413 也是 true；
+            -- 连接失败时才是 false 且 resultCode = 0。所以是否成功必须看状态码。
+            local status = tonumber(resultCode) or 0
+            local transport_ok = isSuccessful == true
+            local http_ok = transport_ok and status >= 200 and status < 300
+            local err = nil
+            if not transport_ok then
+                err = 'transport_failed'
+            elseif not http_ok then
+                err = 'http_' .. tostring(status)
+            end
+            finish({ ok = http_ok, transport_ok = transport_ok, status = status, body = result, error = err })
         end, job.method, job.body)
     end)
     if not ok_call then

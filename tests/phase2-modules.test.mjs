@@ -202,6 +202,36 @@ test('probe：完整跑一遍 A~E 五项，全部 pass（用桩模拟 Bridge 的
   assert.equal(byStep.summary.http.failed >= 3, true, 'summary：失败计数应包含 3 次预期失败')
 })
 
+test('http：连接失败（isSuccessful=false, code=0）单独归类为 transport_failed', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  t.run(`
+    -- 把桩换成"连不上"：isSuccessful = false, resultCode = 0（这就是实测里 Bridge 停掉时的样子）
+    GLOBAL.TheSim.QueryServer = function(self, url, cb, method, body)
+        QUERIES[#QUERIES + 1] = { url = url, method = method, body = body }
+        cb(nil, false, 0)
+    end
+    RESULT = nil
+    BWS2.http.get("/health", function(r) RESULT = r end)
+    OUTS = tostring(RESULT.ok) .. "|" .. tostring(RESULT.status) .. "|" .. tostring(RESULT.error) .. "|" .. tostring(RESULT.transport_ok)
+  `)
+  assert.equal(t.global('OUTS'), 'false|0|transport_failed|false')
+})
+
+test('http：401/413 的 isSuccessful 是 true（实测），但 ok 必须是 false 且带 http_<code>', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  t.run(`
+    GLOBAL.TheSim.QueryServer = function(self, url, cb, method, body)
+        cb('{"success":false}', true, 401)
+    end
+    RESULT = nil
+    BWS2.http.get("/api/v1/bridge/status", function(r) RESULT = r end)
+    OUTS = tostring(RESULT.ok) .. "|" .. tostring(RESULT.status) .. "|" .. tostring(RESULT.error)
+  `)
+  assert.equal(t.global('OUTS'), 'false|401|http_401')
+})
+
 test('probe：没有 token 时老实报错，不抛异常', async () => {
   const fengari = await import('fengari')
   const t = load(fengari)
