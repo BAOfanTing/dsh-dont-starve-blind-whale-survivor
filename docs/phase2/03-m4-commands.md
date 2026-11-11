@@ -95,16 +95,26 @@ QUEUED ──poll──> DELIVERED ──(EXECUTING 可选)──> SUCCEEDED / F
    最近命令: {"type":"ping","status":"SUCCEEDED","result":{"message":"Pong from DST"},"execution_time":0.0012}
 ```
 
-## 6. 待验证（需要重启游戏加载 v0.9.0）
+## 6. 游戏端真实执行（已验证）
 
-游戏端四个命令的真实执行还没跑过，因为当前在跑的游戏是 v0.8.3（没有 `commands.lua`）。
-重启后我会依次下发 `ping / echo / get_state / refresh_state`，核对：
+重启游戏加载 v0.9.0 后，游戏端每 1 秒轮询（访问日志：`POST /api/v1/commands/poll → 200 × 33`），
+依次下发四条命令，全部由**真实游戏进程执行**：
 
-1. 回执 `status=SUCCEEDED`，`ping` 的结果是 `Pong from DST`；
-2. `echo` 原样带回参数；
-3. `get_state` 带回真实玩家/背包/世界（与 telemetry 一致）；
-4. `refresh_state` 的 `tick` 在增长；
-5. 队列里没有 `FAILED`，`deliveries = 1`（没有多余重投）。
+| 命令 | 结果 |
+|---|---|
+| `ping` | `{"message":"Pong from DST"}` ✅ 一字不差 |
+| `echo` | `{"echo":{"text":"大肥鱼 M4 测试","nested":{"ok":true},"n":42},"received_keys":["text","nested","n"]}` ✅ 中文与嵌套结构原样带回 |
+| `get_state` | 真实状态：`player={prefab:wilson, name:威尔逊, tile:[-118,18], hunger 106.6/150, health 150/150, sanity 196.5/200}`、`world={day:1, phase:dusk, season:autumn, temperature:30.8, weather 全 false}`、`inventory={slots:15, used:0}` ✅ |
+| `refresh_state` | `{"refreshed":true,"tick":99,"nearby_returned":40,"player_tile":{"tile_x":-118,"tile_z":18},"collected_at":{"unix":1794410266,"real_s":99,"sim_tick":5963}}` ✅ |
+
+队列最终状态：`{"total":5,"QUEUED":0,"DELIVERED":0,"EXECUTING":0,"SUCCEEDED":5,"FAILED":0}`，
+每条 `deliveries = 1`（**没有多余重投**），`execution_time` 都是 0（sub-millisecond，如实反映）。
+
+### 一个已记录的小瑕疵
+
+`get_state` 里 `inventory.items` 空表被编码成 `{}`（Lua 空表无法区分数组/对象）。
+telemetry 通道在 Bridge 侧做了 `{}` → `[]` 归一化，**命令结果通道还没有**。
+属于展示层不一致，不影响功能；留给 M5 统一处理。
 
 ## 7. 测试
 
