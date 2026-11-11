@@ -1,0 +1,6 @@
+# macOS/Linux 也能用同样的思路，但脚本是给 Windows 写的
+node_modules/
+tests/node_modules/
+tmp-*
+*.log
+local.ps1
