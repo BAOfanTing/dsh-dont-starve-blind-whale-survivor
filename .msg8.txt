@@ -1,0 +1,18 @@
+feat(phase1): 里程碑 6 —— state_serializer 统一结构 + 冻结 JSON Schema（ajv 校验真实日志）
+
+- scripts/main/state_serializer.lua：三种 wire 记录（boot / state / nearby）的统一构造、
+  长度预算（MAX_RECORD_CHARS=3500）、nearby 裁剪（按距离保留、标 trimmed、一条放不下就不发 entities
+  并标 oversize）、打印与失败原因；Gamestate 合并结构也在这里定义。
+- observer_manager 重写成「只取数 + 交给序列化器」：不再自己拼 JSON、不再管预算和裁剪。
+- schema/state.schema.json：draft-07。定义 Boot / State / Nearby / Entity / Item / Inventory /
+  Player / World / Observer / NearbySection / GameState；用 not/required 钉死“state 里不许有实体”。
+- tests/phase1-serializer.test.mjs：5 例，含用 ajv 编译 schema 校验真实跑出来的记录与 GameState。
+- devDependencies 加 ajv；版本 0.6.0。
+
+拿本机真实日志做契约回归时当场抓出两处“想当然”，已按实测放宽并在文档里写明 Bridge 归一化规则：
+1) 老版本 state 的 tick 只在 observer.tick（无顶层 tick）；
+2) 预算兜底时 nearby 会连 entities 都不发（oversize）。
+放宽后：master/caves/client 三份日志共 160 条记录（boot 3 / state 118 / nearby 39）全部通过 schema。
+另外记下 Lua 空表被编码成 {} 的坑（inventory.items 在 schema 里允许空对象，Bridge 归一化成 []）。
+
+全项目 74 个用例通过。

@@ -115,6 +115,7 @@ const FILES = [
   'scripts/main/inventory_observer.lua',
   'scripts/main/world_observer.lua',
   'scripts/main/entity_observer.lua',
+  'scripts/main/state_serializer.lua',
   'scripts/main/observer_manager.lua',
 ]
 

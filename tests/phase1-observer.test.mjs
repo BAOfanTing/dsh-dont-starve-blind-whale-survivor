@@ -65,7 +65,7 @@ function loadM2(fengari) {
   }
   let status = lauxlib.luaL_dostring(L, to_luastring(PRELUDE))
   assert.equal(status, lua.LUA_OK, '前置环境出错：' + fail())
-  for (const file of ['scripts/main/json_encoder.lua', 'scripts/main/observer_manager.lua']) {
+  for (const file of ['scripts/main/json_encoder.lua', 'scripts/main/state_serializer.lua', 'scripts/main/observer_manager.lua']) {
     status = lauxlib.luaL_dostring(L, to_luastring(readFileSync(join(MOD, file), 'utf8')))
     assert.equal(status, lua.LUA_OK, `${file} 加载失败：` + fail())
   }
