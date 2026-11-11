@@ -43,7 +43,7 @@ local function player()
     return nil
 end
 
-local function tick()
+local function tickBody()
     ticks = ticks + 1
     local config = BWS2.config.get()
     local connection = BWS2.connection
@@ -65,6 +65,15 @@ local function tick()
         print('[BWS2] INFO net state=' .. tostring(status.state)
             .. ' backoff=' .. tostring(status.backoff_factor)
             .. ' session=' .. tostring(status.session_id))
+    end
+end
+
+--- 周期任务里绝不能裸抛错误：实测一次未捕获的错误会穿过 scheduler/update 直接崩掉分片进程
+--- （客户端表现为"专用服务器无法启动/提前终止"）。所以整个 tick 都包在 pcall 里。
+local function tick()
+    local ok, err = pcall(tickBody)
+    if not ok then
+        print('[BWS2] ERROR net tick 出错（已隔离）：' .. tostring(err))
     end
 end
 

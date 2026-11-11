@@ -69,6 +69,13 @@ BWS_CONFIG = {
     probeRepeatSeconds = nil,
 }
 
+-- 模拟 DST 的 scripts/strict.lua：读不存在的全局名 → 直接报错
+setmetatable(GLOBAL, {
+    __index = function(_, key)
+        error("strict: 读取了不存在的全局变量 '" .. tostring(key) .. "'", 2)
+    end,
+})
+
 print = function(text) CAPTURED[#CAPTURED + 1] = text end
 
 -- 模拟沙箱：裸的这些是 nil

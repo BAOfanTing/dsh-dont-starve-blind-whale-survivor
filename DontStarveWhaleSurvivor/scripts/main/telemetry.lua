@@ -120,7 +120,12 @@ end
 
 --- 观察器每采一次样调用一次。meta/sections 来自 observer_manager，nearby 是最近一次扫描结果。
 function T.submit(meta, sections, nearby)
-    local serializer = BWS.serializer
+    local ok_serializer, serializer = pcall(function() return BWS.serializer end)
+    if not ok_serializer or type(serializer) ~= 'table' then
+        dropped = dropped + 1
+        print('[BWS2] WARN telemetry：找不到 BWS.serializer')
+        return
+    end
     local ok, gameState = pcall(serializer.GameState, meta, sections)
     if not ok or type(gameState) ~= 'table' then
         dropped = dropped + 1

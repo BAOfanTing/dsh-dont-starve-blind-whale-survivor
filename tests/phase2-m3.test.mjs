@@ -83,6 +83,13 @@ BWS_CONFIG = {
     maxPayloadBytes = 64 * 1024,
 }
 
+-- 模拟 DST 的 scripts/strict.lua：读不存在的全局名 → 直接报错（不是返回 nil）
+setmetatable(GLOBAL, {
+    __index = function(_, key)
+        error("strict: 读取了不存在的全局变量 '" .. tostring(key) .. "'", 2)
+    end,
+})
+
 print = function(text) CAPTURED[#CAPTURED + 1] = text end
 
 pcall = nil
@@ -286,4 +293,32 @@ test('net：网络断了会进 degraded，恢复后回 online', async () => {
   t.run(`REPLIES = { { ok = true, status = 200, body = '{}' } }`)
   t.run(`CLOCK = CLOCK + 30; TASKS[1].fn()`)
   assert.equal(t.json('BWS2.connection.status()').state, 'online')
+})
+
+test('strict.lua 行为验证：读不存在的全局会报错，gameVersion 不会因此崩溃', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  // 1) 证明沙箱严到"读不存在的全局名就报错"
+  t.run('OK_READ, ERR_READ = GLOBAL.pcall(function() return GLOBAL.SOME_NONEXISTENT_GLOBAL end)')
+  t.run('OUTS = tostring(OK_READ) .. "|" .. tostring(ERR_READ ~= nil)')
+  assert.equal(t.global('OUTS'), 'false|true', 'strict 模拟没生效')
+
+  // 2) 证明 gameVersion 在这种环境里也不炸（旧写法 GLOBAL[name] 就在这里崩过）
+  t.run('HP = BWS2.heartbeat.build(nil)')
+  const payload = t.json('HP')
+  assert.equal(payload.game_version, 'unknown', '拿不到版本号就老实写 unknown')
+  assert.equal(payload.player_status.present, false, 'player 为 nil 时也要能构造心跳')
+})
+
+test('net tick 出错被隔离（不会把分片拖崩）', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  t.run('BWS2.net.start()')
+  // 让心跳构造过程抛错（模拟任意未知 bug）
+  t.run('BWS2.heartbeat.send = function() error("故意抛错") end')
+  t.run('CLOCK = CLOCK + 10; TASKS[1].fn()')   // 不抛出去
+  t.run('OUTS = "survived"')
+  assert.equal(t.global('OUTS'), 'survived')
+  t.run('ERRLOG = ""; for i = 1, #CAPTURED do if string.find(CAPTURED[i], "net tick 出错", 1, true) then ERRLOG = CAPTURED[i] end end')
+  assert.match(t.global('ERRLOG'), /net tick 出错/)
 })

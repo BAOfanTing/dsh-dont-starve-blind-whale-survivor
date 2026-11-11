@@ -31,18 +31,19 @@ local function now()
 end
 
 --- 游戏版本：能拿到就带上，拿不到写 'unknown'（不猜）
+--- 注意：DST 开着 strict.lua，**读不存在的全局名会直接抛错**（不是返回 nil），
+--- 所以这里只用 pcall 包住的读法，绝不写 GLOBAL[name] 这种动态读取。
 local function gameVersion()
-    for _, name in ipairs({ 'GetBuildID', 'GetVersion', 'GetBuild' }) do
-        local fn = GLOBAL[name]
-        if type(fn) == 'function' then
-            local ok, value = pcall(fn)
-            if ok and value ~= nil then return tostring(value) end
+    local ok_branch, branch = pcall(function() return GLOBAL.BRANCH end)
+    local suffix = (ok_branch and type(branch) == 'string') and branch or nil
+
+    if GLOBAL.TheSim ~= nil then
+        local ok_build, build = pcall(function() return GLOBAL.TheSim:GetBuildID() end)
+        if ok_build and build ~= nil then
+            return suffix ~= nil and (tostring(build) .. '-' .. suffix) or tostring(build)
         end
     end
-    if GLOBAL.TheSim ~= nil then
-        local ok, value = pcall(function() return GLOBAL.TheSim:GetBuildID() end)
-        if ok and value ~= nil then return tostring(value) end
-    end
+    if suffix ~= nil then return suffix end
     return 'unknown'
 end
 
