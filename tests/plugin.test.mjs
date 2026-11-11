@@ -2,7 +2,7 @@
 // 会把设置推给游戏、退出时能收干净（不用启动 DSH，也不用打开游戏）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { apply, buildInstructions, currentConfig, helpText, mcpClientRow, name, parseSseResult, PRESET_ID } from '../lib/index.js'
+import { apply, buildInstructions, currentConfig, helpText, mcpClientRow, name, parseSseResult, PRESET_ID, resolveBasePreset, setupGateway, setupPreset } from '../lib/index.js'
 import { FakeGame, tempDir } from './helpers.mjs'
 
 function fakeCtx() {
@@ -117,4 +117,124 @@ test('SSE 解析能跳过心跳行', () => {
   const message = parseSseResult(text)
   assert.equal(message.id, 1)
   assert.deepEqual(message.result, { content: [] })
+})
+
+function fakePresetsService() {
+  const definitions = new Map()
+  definitions.set('standard', { config: { plugins: [{ id: 'base-row' }] } })
+  const registered = []
+  const removed = []
+  return {
+    definitions,
+    registered,
+    removed,
+    async register(preset) {
+      registered.push(preset)
+      return () => removed.push(preset.id)
+    },
+  }
+}
+
+function harnessCtx(services) {
+  const cleanups = []
+  return {
+    logger: () => {},
+    get: (name) => services[name],
+    on: () => () => {},
+    effect: (fn) => {
+      const cleanup = fn()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+      return cleanup
+    },
+    dispose: () => {
+      while (cleanups.length > 0) {
+        try {
+          cleanups.pop()()
+        } catch {}
+      }
+    },
+  }
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test('基础预设找不到时自动挑一个能用的（不同机器预设 id 不一样）', () => {
+  const definitions = new Map([['aurabot-private', { config: { plugins: [] } }]])
+  const found = resolveBasePreset({ definitions }, 'standard')
+  assert.equal(found.id, 'aurabot-private')
+
+  const both = new Map([['standard', { config: { plugins: [] } }], ['aurabot-private', { config: { plugins: [] } }]])
+  assert.equal(resolveBasePreset({ definitions: both }, 'standard').id, 'standard')
+  assert.equal(resolveBasePreset({ definitions: new Map() }, 'standard'), null)
+})
+
+test('预设开关：打开就注册，关掉就撤销（不用重启 DSH）', async () => {
+  const presets = fakePresetsService()
+  const ctx = harnessCtx({ agentPresets: presets })
+  let enabled = false
+  const config = {
+    presetEnabled: { get: () => enabled },
+    presetName: { get: () => '大肥鱼饿不死' },
+    basePreset: { get: () => 'standard' },
+    port: { get: () => 18090 },
+    actionTimeoutMinutes: { get: () => 5 },
+  }
+  setupPreset(ctx, config, () => {}, { everyMs: 10 })
+  try {
+    await wait(60)
+    assert.equal(presets.registered.length, 0, '开关关着时不该注册')
+
+    enabled = true
+    await wait(80)
+    assert.equal(presets.registered.length, 1, '打开开关后应该注册一个预设')
+    const preset = presets.registered[0]
+    assert.equal(preset.id, PRESET_ID)
+    assert.equal(preset.name, '大肥鱼饿不死')
+    assert.ok(preset.plugins.some((row) => row.id === 'mcp-dst'), '预设里应该有连游戏的 MCP 客户端')
+    assert.ok(preset.plugins.some((row) => row.id === 'base-row'), '预设里应该带着基础预设的插件')
+
+    // 名字改了要重新注册
+    config.presetName = { get: () => '大肥鱼' }
+    await wait(80)
+    assert.equal(presets.registered.length, 2, '改了名字应该重新注册')
+    assert.equal(presets.registered[1].name, '大肥鱼')
+
+    enabled = false
+    await wait(80)
+    assert.ok(presets.removed.length >= 1, '关掉开关后应该撤销')
+  } finally {
+    ctx.dispose()
+  }
+})
+
+test('dst 入口工具：设置打开才注册，关掉就撤掉', async () => {
+  const registered = []
+  const tools = {
+    register(tool) {
+      registered.push(tool)
+      return () => {}
+    },
+  }
+  const ctx = harnessCtx({ tools })
+  let enabled = false
+  const config = {
+    gatewayEnabled: { get: () => enabled },
+    port: { get: () => 18090 },
+    actionTimeoutMinutes: { get: () => 5 },
+  }
+  setupGateway(ctx, config, () => {}, { everyMs: 10 })
+  try {
+    await wait(30)
+    assert.equal(registered.length, 0)
+    enabled = true
+    await wait(60)
+    assert.equal(registered.length, 1)
+    assert.equal(registered[0].name, 'dst')
+    enabled = false
+    await wait(60)
+    // 撤掉以后不再注册
+    assert.equal(registered.length, 1)
+  } finally {
+    ctx.dispose()
+  }
 })
