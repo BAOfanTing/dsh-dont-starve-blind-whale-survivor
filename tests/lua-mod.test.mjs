@@ -354,6 +354,8 @@ POSTINITS = {}
 function modimport(name) MODIMPORTS[#MODIMPORTS + 1] = name end
 function AddGamePostInit(fn) POSTINITS[#POSTINITS + 1] = fn end
 function AddPlayerPostInit(fn) POSTINITS[#POSTINITS + 1] = fn end
+CPOSTS = {}
+function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
 `
   let status = lauxlib.luaL_dostring(L, to_luastring(prelude))
   assert.equal(status, lua.LUA_OK, '前置环境出错：' + fail())
@@ -366,9 +368,10 @@ function AddPlayerPostInit(fn) POSTINITS[#POSTINITS + 1] = fn end
   assert.equal(status, lua.LUA_OK, 'modmain.lua 加载失败（游戏里就是这句会让启动崩溃）：' + fail())
 
   lauxlib.luaL_loadstring(L, to_luastring(`
-    assert(#MODIMPORTS == 5, "应该 modimport 了 5 个模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 6, "应该 modimport 了 6 个模块，实际 " .. #MODIMPORTS)
     assert(MODIMPORTS[1] == "scripts/whale/json.lua", "第一个应该是 json.lua")
     assert(#POSTINITS == 3, "应该有 3 个 postinit，实际 " .. #POSTINITS)
+    assert(CPOSTS[1] == "screens/playerhud", "应该往玩家 HUD 上挂小窗")
     assert(Whale.files.state == "whale_state.json", "文件名表没装上")
     assert(Whale.interval == 1, "配置默认值不对")
     assert(Whale.version ~= nil, "版本号没写")
@@ -444,4 +447,76 @@ test('材料不够会直接说，不会瞎做', async () => {
     OUT_TEXT = REPORTED.text
   `)
   assert.match(global('OUT_TEXT'), /材料不够/)
+})
+test('HUD 模块能在沙箱里加载，F8 会写出开关', async () => {
+  const fengari = await import('fengari')
+  const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari
+  const L = lauxlib.luaL_newstate()
+  lualib.luaL_openlibs(L)
+  const fail = () => {
+    try {
+      return to_jsstring(lua.lua_tostring(L, -1))
+    } catch {
+      return ''
+    }
+  }
+  const prelude = `
+GLOBAL = { KEY_F7 = 288, KEY_F8 = 289, ANCHOR_LEFT = 0, ANCHOR_MIDDLE = 2, ANCHOR_TOP = 3,
+           DEFAULTFONT = "opensans", SCALEMODE_PROPORTIONAL = 1 }
+GLOBAL.pcall = pcall
+GLOBAL.tonumber = tonumber
+GLOBAL.error = error
+GLOBAL.os = os
+GLOBAL.io = nil
+GLOBAL.TheSim = { SetPersistentString = function(self, name, text, enc) WRITTEN[name] = text end,
+                  GetPersistentString = function(self, name, cb) cb(false, nil) end }
+GLOBAL.ThePlayer = { components = {} }
+WRITTEN = {}
+KEYHANDLERS = {}
+GLOBAL.TheInput = { AddKeyHandler = function(self, fn) KEYHANDLERS[#KEYHANDLERS + 1] = fn end }
+local function fakewidget() return { SetPosition = function() end, SetSize = function() end, SetTint = function() end,
+    SetString = function() end, SetHAlign = function() end, SetVAlign = function() end, SetColour = function() end,
+    SetHAnchor = function() end, SetVAnchor = function() end, SetScaleMode = function() end,
+    AddChild = function(self, c) return c end, Kill = function() end } end
+package.loaded["widgets/widget"] = function() return setmetatable({}, { __call = function() return fakewidget() end }) end
+package.loaded["widgets/text"] = function() return setmetatable({}, { __call = function() return fakewidget() end }) end
+package.loaded["widgets/image"] = function() return setmetatable({}, { __call = function() return fakewidget() end }) end
+Whale = { files = {}, util = { log = function() end } }
+`
+  let status = lauxlib.luaL_dostring(L, to_luastring(prelude))
+  assert.equal(status, lua.LUA_OK, '前置环境出错：' + fail())
+  // 沙箱：裸 pcall/tonumber/error 是 nil
+  status = lauxlib.luaL_dostring(L, to_luastring('pcall = nil\ntonumber = nil\nerror = nil\nos = nil\nio = nil'))
+  assert.equal(status, lua.LUA_OK, '没法模拟沙箱：' + fail())
+
+  const json = readFileSync(join(MOD, 'scripts', 'whale', 'json.lua'), 'utf8')
+  status = lauxlib.luaL_dostring(L, to_luastring(json))
+  assert.equal(status, lua.LUA_OK, 'json.lua 加载失败：' + fail())
+  const hud = readFileSync(join(MOD, 'scripts', 'whale', 'hud.lua'), 'utf8')
+  status = lauxlib.luaL_dostring(L, to_luastring(hud))
+  assert.equal(status, lua.LUA_OK, 'hud.lua 加载失败（游戏里会看不到小窗）：' + fail())
+
+  lauxlib.luaL_loadstring(L, to_luastring(`
+    assert(Whale.hud ~= nil, "hud 模块没装上")
+    assert(type(Whale.hud.BindKeys) == "function", "少了 BindKeys")
+    assert(type(Whale.hud.Attach) == "function", "少了 Attach")
+    Whale.hud.BindKeys()
+    assert(#KEYHANDLERS == 1, "应该绑一个按键处理器，实际 " .. #KEYHANDLERS)
+    -- 按 F8：应该写出一份 "让 AI 开始玩" 的开关
+    KEYHANDLERS[1](GLOBAL.KEY_F8, true)
+    local raw = WRITTEN["whale_toggle.json"]
+    assert(raw ~= nil, "F8 应该写出开关文件")
+    local data = Whale.json.decode(raw)
+    assert(data.ai == true, "F8 应该把 ai 打开")
+    -- 再按一次：关掉
+    KEYHANDLERS[1](GLOBAL.KEY_F8, true)
+    local data2 = Whale.json.decode(WRITTEN["whale_toggle.json"])
+    assert(data2.ai == false, "再按一次应该关掉")
+    -- 按 F7：停手
+    KEYHANDLERS[1](GLOBAL.KEY_F7, true)
+    local data3 = Whale.json.decode(WRITTEN["whale_toggle.json"])
+    assert(data3.stop == true and data3.ai == false, "F7 应该是停手")
+    OUT = "ok"
+  `))
+  assert.equal(lua.lua_pcall(L, 0, 0, 0), lua.LUA_OK, 'HUD 行为不对：' + fail())
 })

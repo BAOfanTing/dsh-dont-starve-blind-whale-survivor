@@ -7,6 +7,9 @@
 | 设置 | 默认 | 说明 |
 |---|---|---|
 | 单个动作最长等多少分钟 | 5 | 睡觉、走远路这类动作要等很久；超时会告诉模型先 `get_state` 看看 |
+| 内置 AI 的 API Key | 空 | **游戏里按 F8** 让 AI 自己玩用的 Key（不经过 DSH 会话）。留空读环境变量 `DEEPSEEK_API_KEY` |
+| 模型接口地址 / 用哪个模型 | DeepSeek 官方 / `deepseek-v4-flash` | 任何 OpenAI 兼容的 `/chat/completions` 都行；要支持 function calling |
+| 内置 AI 每次最多输出多少 token | 1024 | 只按实际输出计费 |
 | 思考时暂停世界 | **关** | 打开后 AI 思考时把世界暂停（只有自己开的世界、房主才行），不会一边想一边饿死。见下方说明 |
 | 多久没动作就暂停（秒） | 8 | 上面开关打开时，多久没有新动作就暂停 |
 | 额外要求 | 空 | 比如“先建好家和锅，再考虑下洞”。每次读游戏状态都会显示 |
@@ -37,6 +40,25 @@ DSH 会话 ──MCP(HTTP)──> 插件里的 MCP 服务器 ──写/读 json 
 
 两条通道同时用，谁能用就用谁：`TheSim:SetPersistentString`（落在存档目录）和 `io.open`（落在游戏进程的工作目录，一般是 `bin64`）。插件会自动找这些文件。
 
+## 游戏里的小窗和快捷键（F8 / F7）
+
+模组在画面左边（饥荒那三个状态球下面）挂了一个小窗，随时告诉你现在怎么回事：
+
+```
+大肥鱼 ● 在玩（第 37 步）
+正在做：chop {"count":3}
+结果：干了 3 次
+F8 开/停 · F7 停手
+```
+
+- **F8**：让 AI 开始 / 停止自己玩。**不需要 DSH 会话**——插件自己在后台调模型、自己调工具（就是星露谷那版的“内置 AI”）。第一次用之前，在插件设置里填「内置 AI 的 API Key」（或者设环境变量 `DEEPSEEK_API_KEY`）。
+- **F7**：让它立刻停手（正在走的动作、正在砍的树都停），然后你可以自己接管玩。
+- 小窗内容由插件每秒写一次；DSH 没开着的时候它会写“插件没连上”。
+
+内置 AI 的循环很朴素：`get_state` 看状态 → 模型决定调哪个工具 → 执行 → 结果回给模型 → 再看状态。每一步只做一件小事，因为饥荒是实时的（它思考的时候游戏不会停）。
+
+> 内置 AI 和 DSH 会话**不要同时操作**：内置 AI 在跑的时候，DSH 里的动作类工具会回一句“先按 F8 停掉它”，避免两边抢角色。
+
 ## 安装
 
 **最短路径（三步）**：
@@ -51,7 +73,7 @@ DSH 会话 ──MCP(HTTP)──> 插件里的 MCP 服务器 ──写/读 json 
 
 1. **装好游戏**：《饥荒联机版》；这个模组是服务器端模组，**本地开世界**（自己当房主）才生效。
 2. **装插件**：DSH 插件页安装 `dsh-dont-starve-whale`（本地开发时用 `link:` 指向这个仓库）。装完重启 DSH。
-3. **装模组**：插件默认会自动把 `DontStarveWhaleSurvivor/` 复制到 `<游戏>/mods/` 并往 `mods/modsettings.lua` 里加一行 `ModManager:AddMod("DontStarveWhaleSurvivor")`。不想让它自动装就关掉设置里的开关，手动复制也行（或者跑 `install.ps1`）。
+3. **装模组**：插件默认会自动把 `DontStarveWhaleSurvivor/` 复制到 `<游戏>/mods/` 并往 `mods/modsettings.lua` 里加一行 `ForceEnableMod("DontStarveWhaleSurvivor")`。不想让它自动装就关掉设置里的开关，手动复制也行（或者跑 `install.ps1`）。
 4. **打开游戏、读档进世界**（模组要同意启用：游戏里第一次会弹模组列表）。
 5. 回 DSH：新建一个会话，选「大肥鱼饿不死」预设（要先在设置里打开那个开关），或者打开 `dst` 入口工具后在任意会话说“玩会儿饥荒”。
 
@@ -110,6 +132,7 @@ dsh-dont-starve-whale/
 │  ├─ scripts/whale/observe.lua   游戏状态 → 文字
 │  ├─ scripts/whale/actions.lua   20 个动作的状态机
 │  ├─ scripts/whale/util.lua      找实体、算距离、读背包
+│  ├─ scripts/whale/hud.lua        游戏里的小窗 + F8/F7 快捷键（客户端）
 │  ├─ scripts/whale/json.lua      迷你 JSON（游戏自带的那个 encode 不合规范）
 │  └─ guide/                      攻略（主攻略、生存、战斗、烹饪）
 ├─ tests/                node --test：文件桥、MCP、插件、装模组、Lua 语法（用 fengari 真跑 Lua）

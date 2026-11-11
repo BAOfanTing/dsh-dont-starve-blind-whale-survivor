@@ -196,6 +196,23 @@ function U.find_item(p, want)
     return found
 end
 
+--- 服务端现在有几个玩家（诊断用）
+function U.count_players()
+    local players = GLOBAL.AllPlayers
+    if players == nil then return -1 end
+    local n = 0
+    for _, p in pairs(players) do
+        if p ~= nil then n = n + 1 end
+    end
+    return n
+end
+
+--- 饥荒的持久化字符串文件可能带一个 "KLEI     1 " 头，剥掉再当 JSON 解析
+function U.strip_header(text)
+    if type(text) ~= "string" then return text end
+    return (string.gsub(text, "^KLEI%s+%d+%s*", "", 1))
+end
+
 function U.log(msg)
     if Whale ~= nil and Whale.verbose then
         print("[大肥鱼] " .. tostring(msg))

@@ -53,6 +53,14 @@ modimport("scripts/whale/util.lua")
 modimport("scripts/whale/observe.lua")
 modimport("scripts/whale/actions.lua")
 modimport("scripts/whale/bridge.lua")
+modimport("scripts/whale/hud.lua")
+
+-- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
+AddClassPostConstruct("screens/playerhud", function(self, owner)
+    if Whale ~= nil and Whale.hud ~= nil then
+        Whale.hud.Attach(owner)
+    end
+end)
 
 -- 每进入一次世界（读档 / 新建）启动一次
 AddGamePostInit(function()

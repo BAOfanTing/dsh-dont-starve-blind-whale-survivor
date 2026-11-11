@@ -1,9 +1,9 @@
 // 文件桥：找文件、读状态、发指令等结果、推设置、暂停开关
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { GameBridge } from '../lib/bridge.js'
+import { GameBridge, stripKleiHeader } from '../lib/bridge.js'
 import { FakeGame, tempDir } from './helpers.mjs'
 
 test('找不到游戏时 state() 是空的，status() 会说清楚原因', () => {
@@ -71,12 +71,12 @@ test('设置和暂停开关会写到游戏目录', () => {
   const bridge = new GameBridge({ bridgeDir: dir, lockDir: true })
   const wrote = bridge.pushSettings({ freezeTime: true, extra: '先建家' })
   assert.equal(wrote, 1)
-  const settings = JSON.parse(readFileSync(join(dir, 'whale_settings.json'), 'utf8'))
+  const settings = JSON.parse(stripKleiHeader(readFileSync(join(dir, 'whale_settings.json'), 'utf8')))
   assert.equal(settings.freezeTime, true)
 
   bridge.setPause(true)
   assert.ok(existsSync(join(dir, 'whale_pause.json')))
-  assert.equal(JSON.parse(readFileSync(join(dir, 'whale_pause.json'), 'utf8')).pause, true)
+  assert.equal(JSON.parse(stripKleiHeader(readFileSync(join(dir, 'whale_pause.json'), 'utf8'))).pause, true)
 
   // 同一个值不重复写（省得每秒都写盘）
   const before = readFileSync(join(dir, 'whale_pause.json'), 'utf8')
@@ -112,4 +112,22 @@ test('io 通道目录用另一套文件名（bin64 那种）', async () => {
   clearInterval(timer)
   assert.equal(result.ok, true)
   assert.equal(result.text, '干完了')
+})
+
+test('HUD：插件写的小窗内容客户端能读，快捷键写的开关插件能读', () => {
+  const dir = tempDir()
+  const bridge = new GameBridge({ bridgeDir: dir, lockDir: true })
+  assert.equal(bridge.writeHud({ v: 1, ai: true, step: 3, lines: ['正在做：chop'] }), 1)
+  const rawHud = readFileSync(join(dir, 'whale_hud.json'), 'utf8')
+  assert.match(rawHud, /^KLEI\s+1 /, '持久化字符串通道写出去的文件要带 KLEI 头，游戏才认')
+  const hud = JSON.parse(stripKleiHeader(rawHud))
+  assert.equal(hud.ai, true)
+  assert.equal(hud.step, 3)
+  assert.deepEqual(hud.lines, ['正在做：chop'])
+
+  // 游戏里按 F8 写出来的开关
+  writeFileSync(join(dir, 'whale_toggle.json'), JSON.stringify({ ai: true, stop: false, ts: 123 }), 'utf8')
+  const toggle = bridge.readToggle()
+  assert.equal(toggle.ai, true)
+  assert.equal(toggle.ts, 123)
 })

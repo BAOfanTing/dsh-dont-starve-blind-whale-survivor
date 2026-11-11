@@ -73,7 +73,8 @@ test('apply() 会把 MCP 服务器开起来，并把设置推到游戏目录', a
     const { join } = await import('node:path')
     const pushed = await waitFor(() => existsSync(join(dir, 'whale_settings.json')))
     assert.ok(pushed, '设置没推给游戏')
-    const settings = JSON.parse(readFileSync(join(dir, 'whale_settings.json'), 'utf8'))
+    const { stripKleiHeader } = await import('../lib/bridge.js')
+    const settings = JSON.parse(stripKleiHeader(readFileSync(join(dir, 'whale_settings.json'), 'utf8')))
     assert.equal(settings.generatedBy, 'dsh-dont-starve-whale')
   } finally {
     ctx.dispose()

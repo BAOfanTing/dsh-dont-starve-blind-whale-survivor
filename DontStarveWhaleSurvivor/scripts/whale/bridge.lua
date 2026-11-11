@@ -24,6 +24,7 @@ local READ_CMD = 0.3  -- 读指令
 local WRITE_STATE = 1 -- 写状态（会被设置覆盖）
 
 local seq = 0
+local tick_count = 0
 local last_cmd_id = nil
 local reading = false
 local last_state_text = nil
@@ -95,6 +96,10 @@ local function build_state()
     local p = U.player()
     local text, data = Whale.observe.Build(p)
     seq = seq + 1
+    -- 诊断用：外面看这几个数字就知道模组是活着、还是找不到玩家
+    data.players = U.count_players()
+    data.tick = tick_count
+    data.mastersim = true
     return {
         v = 1,
         seq = seq,
@@ -112,9 +117,6 @@ function B.WriteState(force)
     next_state_at = now + WRITE_STATE
     local ok, payload = pcall(function()
         local state = build_state()
-        if state.text == last_state_text and not force then
-            return nil
-        end
         last_state_text = state.text
         last_state_at = os.time()
         return Whale.json.encode(state)
@@ -145,7 +147,7 @@ end
 -- ─────────────────── 指令 ───────────────────
 
 local function handle_command(json_text)
-    local ok, cmd = pcall(Whale.json.decode, json_text)
+    local ok, cmd = pcall(Whale.json.decode, U.strip_header(json_text))
     if not ok or type(cmd) ~= "table" then
         log("收到看不懂的指令")
         return
@@ -190,7 +192,7 @@ end
 -- ─────────────────── 设置 ───────────────────
 
 local function apply_settings(text)
-    local ok, data = pcall(Whale.json.decode, text)
+    local ok, data = pcall(Whale.json.decode, U.strip_header(text))
     if not ok or type(data) ~= "table" then return end
     if data.pause ~= nil then settings.pause = data.pause and true or false end
     if data.verbose ~= nil then Whale.verbose = data.verbose and true or false end
@@ -216,16 +218,25 @@ end
 
 -- ─────────────────── 服务端主循环 ───────────────────
 
-local function server_tick()
-    local ok, err = pcall(function()
-        poll_settings()
-        poll_command()
-        Whale.actions.Tick()
-        B.WriteState(false)
-    end)
-    if not ok then
-        U.log("主循环出错：" .. tostring(err))
+local last_error_at = 0
+
+--- 每一步单独保护：哪一步出错就打出来（10 秒最多一条），别让一个错误把整条桥搞哑
+local function step(what, fn)
+    local ok, err = pcall(fn)
+    if ok then return end
+    local now = U.now()
+    if now - last_error_at > 10 then
+        last_error_at = now
+        print("[大肥鱼饿不死] " .. what .. " 出错：" .. tostring(err))
     end
+end
+
+local function server_tick()
+    tick_count = tick_count + 1
+    step("读设置", poll_settings)
+    step("读指令", poll_command)
+    step("跑动作", function() Whale.actions.Tick() end)
+    step("写状态", function() B.WriteState(false) end)
 end
 
 function B.start_server(world)
@@ -263,7 +274,7 @@ local function client_tick()
         if text == nil or text == "" then
             ps_read(FILES.pause, function(data)
                 if data ~= nil and data ~= "" then
-                    local fine, info = pcall(Whale.json.decode, data)
+                    local fine, info = pcall(Whale.json.decode, U.strip_header(data))
                     if fine and type(info) == "table" and info.pause ~= nil then
                         local want = info.pause and true or false
                         if want ~= paused_by_us then client_set_paused(want) end
@@ -272,7 +283,7 @@ local function client_tick()
             end)
             return
         end
-        local fine, info = pcall(Whale.json.decode, text)
+        local fine, info = pcall(Whale.json.decode, U.strip_header(text))
         if fine and type(info) == "table" and info.pause ~= nil then
             local want = info.pause and true or false
             if want ~= paused_by_us then client_set_paused(want) end
@@ -283,6 +294,10 @@ end
 
 function B.start_client(world)
     world:DoPeriodicTask(0.5, client_tick)
+    -- 客户端的快捷键：F8 让内置 AI 开始/停下，F7 让它停手
+    if Whale.hud ~= nil and Whale.hud.BindKeys ~= nil then
+        Whale.hud.BindKeys()
+    end
     U.log("文件桥已启动（客户端）")
 end
 

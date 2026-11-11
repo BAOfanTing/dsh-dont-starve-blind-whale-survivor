@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync 
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { stripKleiHeader } from '../lib/bridge.js'
 
 export function tempDir(prefix = 'whale-test-') {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -67,7 +68,8 @@ export class FakeGame {
     if (!existsSync(cmdPath)) return
     let cmd
     try {
-      cmd = JSON.parse(readFileSync(cmdPath, 'utf8'))
+      // 真游戏读持久化字符串时会自动去掉 KLEI 头
+      cmd = JSON.parse(stripKleiHeader(readFileSync(cmdPath, 'utf8')))
     } catch {
       return
     }

@@ -16,6 +16,10 @@ const LABELS = {
   gameDir: ['install', '饥荒游戏目录'],
   bridgeDir: ['install', '文件桥目录（一般不用填）'],
   actionTimeoutMinutes: ['play', '单个动作最长等多少分钟'],
+  apiKey: ['ai', '内置 AI 的 API Key'],
+  baseUrl: ['ai', '模型接口地址'],
+  model: ['ai', '内置 AI 用哪个模型'],
+  aiMaxTokens: ['ai', '内置 AI 每次最多输出多少 token'],
   freezeTime: ['play', '思考时暂停世界'],
   idleSeconds: ['play', '多久没动作就暂停（秒）'],
   extraInstructions: ['play', '额外要求'],
@@ -34,6 +38,7 @@ const LABELS = {
 
 const GROUPS = [
   ['play', '游玩'],
+  ['ai', '内置 AI（游戏里按 F8）'],
   ['guide', '攻略'],
   ['session', '会话与连接'],
   ['install', '模组安装'],

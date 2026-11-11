@@ -1,7 +1,7 @@
 // MCP 服务器：握手、工具列表、调工具（含 SSE 心跳）、设置接口、状态页
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { GameBridge } from '../lib/bridge.js'
+import { GameBridge, stripKleiHeader } from '../lib/bridge.js'
 import { createMcpServer } from '../lib/mcp-server.js'
 import { executeTool, toolList, BUNDLED_GUIDES } from '../lib/tools.js'
 import { FakeGame, tempDir } from './helpers.mjs'
@@ -137,7 +137,7 @@ test('设置接口：GET 拿版本号，POST 推给游戏', async () => {
   assert.match(body.message, /推送到游戏/)
   const { readFileSync } = await import('node:fs')
   const { join } = await import('node:path')
-  const pushed = JSON.parse(readFileSync(join(dir, 'whale_settings.json'), 'utf8'))
+  const pushed = JSON.parse(stripKleiHeader(readFileSync(join(dir, 'whale_settings.json'), 'utf8')))
   assert.equal(pushed.freezeTime, true)
   await server.stop()
 })

@@ -16,7 +16,7 @@ test('每个设置项都有短标题、分组和说明', async () => {
   for (const field of fields) {
     assert.ok(field.label, `${field.key} 没有短标题`)
     assert.ok(field.description, `${field.key} 没有说明`)
-    assert.ok(['play', 'guide', 'session', 'install'].includes(field.group), `${field.key} 的分组不认识`)
+    assert.ok(['play', 'ai', 'guide', 'session', 'install'].includes(field.group), `${field.key} 的分组不认识`)
   }
   const keys = fields.map((f) => f.key)
   for (const want of ['port', 'gameDir', 'freezeTime', 'extraInstructions', 'presetEnabled', 'gatewayEnabled', 'autoInstallMod']) {
