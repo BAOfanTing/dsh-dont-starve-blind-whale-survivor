@@ -196,6 +196,7 @@ test('heartbeat：请求体字段齐全（session/玩家状态/版本）', async
   assert.equal(payload.player_status.tile_x, 10) // 40.5/4
   assert.equal(payload.player_status.tile_z, -15) // -56.25/4 → floor = -15
   assert.ok(typeof payload.game_version === 'string')
+  assert.equal(payload.shard, 'caves', '请求体要带分片名（TheWorld 打了 cave 标签）')
 })
 
 test('heartbeat：发出去走 POST /api/v1/heartbeat，成功即 online', async () => {
@@ -362,4 +363,14 @@ test('telemetry：瞬时失败（连不上）后要等退避到期才重试', as
   t.run('QN2 = tostring(#QUERIES)')
   assert.equal(t.global('QN2'), '2', '退避到期后应重试')
   assert.equal(t.json('BWS2.telemetry.status()').sequence, 2)
+})
+
+test('telemetry：客户端（ismastersim=false）不推送', async () => {
+  const fengari = await import('fengari')
+  const t = load(fengari)
+  t.run('GLOBAL.TheWorld.ismastersim = false')
+  t.run(`BWS2.telemetry.submit(${META}, { world = { day = 2 } }, nil)`)
+  t.run('QN = tostring(#QUERIES)')
+  assert.equal(t.global('QN'), '0', '客户端不该发 telemetry')
+  assert.equal(t.json('BWS2.telemetry.status()').sequence, 1)
 })

@@ -47,6 +47,15 @@ local function gameVersion()
     return 'unknown'
 end
 
+--- 分片名：主世界 / 洞穴（Bridge 侧要按分片区分会话）
+local function shardName()
+    if GLOBAL.TheWorld ~= nil and GLOBAL.TheWorld.HasTag ~= nil then
+        local ok, isCave = pcall(function() return GLOBAL.TheWorld:HasTag('cave') end)
+        if ok and isCave then return 'caves' end
+    end
+    return 'master'
+end
+
 local function playerStatus(player)
     if player == nil or not player:IsValid() then
         return { present = false }
@@ -86,6 +95,7 @@ function H.build(player)
         timestamp = now(),
         player_status = playerStatus(player),
         game_version = gameVersion(),
+        shard = shardName(),
     }
 end
 

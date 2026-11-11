@@ -99,6 +99,12 @@ function C.backoffFactor()
     return 2 ^ shift
 end
 
+--- 只有主世界/洞穴的**服务端**才有权威状态；客户端那一半不该往 Bridge 推 telemetry
+function C.isServerSide()
+    if GLOBAL.TheWorld == nil then return false end
+    return GLOBAL.TheWorld.ismastersim == true
+end
+
 function C.isOnline()
     return state == 'online'
 end

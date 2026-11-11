@@ -137,6 +137,10 @@ end
 
 --- 观察器每采一次样调用一次。meta/sections 来自 observer_manager，nearby 是最近一次扫描结果。
 function T.submit(meta, sections, nearby)
+    -- 客户端不算权威源：只记录、不推送（否则 Bridge 会多出一个没有心跳的幽灵会话）
+    if not BWS2.connection.isServerSide() then
+        return
+    end
     local ok_serializer, serializer = pcall(function() return BWS.serializer end)
     if not ok_serializer or type(serializer) ~= 'table' then
         dropped = dropped + 1
