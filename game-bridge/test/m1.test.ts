@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { loadConfig, maskToken, PROTOCOL_VERSION } from '../src/config.js'
 import { createLogger } from '../src/logger.js'
 import { createBridgeServer } from '../src/server.js'
+import { SessionManager } from '../src/session.js'
 import { BridgeState } from '../src/state.js'
 
 const TOKEN = 'test-token-0123456789abcdef'
@@ -30,7 +31,8 @@ async function startHarness(options: { token?: string; maxBodyBytes?: number } =
   })
   const logger = createLogger({ secrets: [config.token], sink: () => {} })
   const state = new BridgeState()
-  const handle = createBridgeServer({ config, logger, state })
+  const sessions = new SessionManager()
+  const handle = createBridgeServer({ config, logger, state, sessions })
   const port = await handle.listen(0)
   return {
     base: `http://127.0.0.1:${port}`,
@@ -72,7 +74,7 @@ test('GET /health：不需要 token，返回版本/协议/运行时长', async (
     assert.equal(status, 200)
     assert.equal(json.success, true)
     assert.equal(json.protocol_version, PROTOCOL_VERSION)
-    assert.equal(json.version, '0.2.0-m1')
+    assert.equal(json.version, '0.2.0-m3')
     assert.ok(typeof json.uptime_s === 'number')
     assert.ok(String(json.bound).startsWith('127.0.0.1:'))
     assert.equal(json.bridge.started, true)
@@ -121,14 +123,18 @@ test('GET /api/v1/bridge/status：没 token 401，带 token 200 且字段齐全'
 test('POST 原始文本 JSON（不带 content-type）：能解析、token 从 body 里取到', async () => {
   const h = await startHarness()
   try {
-    const payload = JSON.stringify({ token: TOKEN, session_id: 'S1', sequence: 1 })
-    const res = await rawPost(h.base, '/api/v1/telemetry', payload) // 故意不设 content-type
-    assert.equal(res.status, 501, 'M1 里 telemetry 是占位，返回 501')
+    // 心跳接口在 M3 已实现：无 content-type 的原始 JSON 也能走到业务逻辑
+    const payload = JSON.stringify({ token: TOKEN, session_id: 'S1', timestamp: 1794410000, player_status: { present: true } })
+    const res = await rawPost(h.base, '/api/v1/heartbeat', payload)
+    assert.equal(res.status, 200, res.body)
     const body = JSON.parse(res.body)
-    assert.equal(body.success, false)
-    assert.equal(body.error.code, 'not_implemented')
-    assert.match(String(body.error.message), /M3/, '要说明计划在哪个里程碑实现')
-    assert.ok(String(body.request_id).length > 0)
+    assert.equal(body.success, true)
+    assert.equal(body.server_status.state, 'running')
+
+    // 少了 data 的 telemetry 会被校验拒绝（400），说明参数验证生效
+    const bad = await rawPost(h.base, '/api/v1/telemetry', JSON.stringify({ token: TOKEN, session_id: 'S1', sequence: 1, timestamp: 1794410000 }))
+    assert.equal(bad.status, 400)
+    assert.equal(JSON.parse(bad.body).error.code, 'bad_request')
   } finally {
     await h.close()
   }

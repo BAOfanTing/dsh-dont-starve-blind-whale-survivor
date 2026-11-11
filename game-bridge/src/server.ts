@@ -8,12 +8,14 @@ import type { BridgeConfig } from './config.js'
 import { HttpError, parseJsonText, readBody, requestIdOf, sendJson } from './http.js'
 import type { Logger } from './logger.js'
 import { createRoutes, findRoute, methodNotAllowed, type RequestContext, type Route } from './routes.js'
+import type { SessionManager } from './session.js'
 import { BridgeState } from './state.js'
 
 export interface ServerDeps {
   config: BridgeConfig
   logger: Logger
   state: BridgeState
+  sessions: SessionManager
   routes?: Route[]
   now?: () => number
 }
@@ -26,7 +28,7 @@ export interface BridgeServerHandle {
 
 export function createBridgeServer(deps: ServerDeps): BridgeServerHandle {
   const now = deps.now ?? Date.now
-  const routes = deps.routes ?? createRoutes()
+  const routes = deps.routes ?? createRoutes({ sessions: deps.sessions })
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void handle(req, res)
@@ -64,8 +66,10 @@ export function createBridgeServer(deps: ServerDeps): BridgeServerHandle {
 
       // POST 一律按原始文本解析 JSON（QueryServer 可能不带 content-type）
       let body: unknown = undefined
+      let bodyBytes = 0
       if (method === 'POST') {
         const text = await readBody(req, deps.config.maxBodyBytes)
+        bodyBytes = Buffer.byteLength(text)
         body = parseJsonText(text)
       }
 
@@ -76,9 +80,11 @@ export function createBridgeServer(deps: ServerDeps): BridgeServerHandle {
       const ctx: RequestContext = {
         requestId,
         body,
+        bodyBytes,
         query: url.searchParams,
         config: deps.config,
         state: deps.state,
+        sessions: deps.sessions,
         logger: deps.logger,
         receivedAt: startedAt,
       }

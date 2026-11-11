@@ -23,6 +23,7 @@ local DEFAULTS = {
     probe = false,          -- 是否启动 M2 通信探针
     probeDelaySeconds = 6,  -- 进世界后等多久再开始探（等 Bridge 就绪）
     httpTimeoutSeconds = 10,
+    maxPayloadBytes = 64 * 1024, -- telemetry 单包上限，超了先削 nearby 再丢 nearby
     heartbeatSeconds = 3,
     stateSeconds = 2,
     pollSeconds = 1,

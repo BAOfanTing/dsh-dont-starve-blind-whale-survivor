@@ -70,6 +70,10 @@ modimport("scripts/main/observer_manager.lua")
 pcall(modimport, "bws_config.lua")
 modimport("scripts/main/config.lua")
 modimport("scripts/main/http_client.lua")
+modimport("scripts/main/connection.lua")
+modimport("scripts/main/heartbeat.lua")
+modimport("scripts/main/telemetry.lua")
+modimport("scripts/main/net.lua")
 modimport("scripts/main/probe.lua")
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
@@ -86,8 +90,15 @@ AddGamePostInit(function()
     -- Phase 2 M2：只有服务端 + 配置里开了 probe 才跑通信探针
     if BWS2 ~= nil and BWS2.probe ~= nil and GLOBAL.TheWorld ~= nil and GLOBAL.TheWorld.ismastersim then
         local ok_cfg, cfg = pcall(BWS2.config.get)
-        if ok_cfg and type(cfg) == "table" and cfg.probe then
-            BWS2.probe.start()
+        if ok_cfg and type(cfg) == "table" then
+            -- M3：心跳 + 状态推送（正式通道）
+            if BWS2.net ~= nil then
+                pcall(BWS2.net.start)
+            end
+            -- M2：通信探针（诊断用，可在 bws_config.lua 里关掉）
+            if cfg.probe and BWS2.probe ~= nil then
+                BWS2.probe.start()
+            end
         end
     end
 end)

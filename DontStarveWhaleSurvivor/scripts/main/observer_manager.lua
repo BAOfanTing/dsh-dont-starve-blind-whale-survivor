@@ -219,6 +219,11 @@ function O.Tick()
             -- 用同一份 meta（tick 相同），Bridge 按 tick 把两条记录配起来
             emit(BWS.serializer.Nearby(record_meta, O.nearby), BWS.serializer.shrink_nearby)
         end
+
+        -- Phase 2 M3：同一份数据走 HTTP 推给 Bridge（日志通道继续保留做诊断/降级）
+        if BWS2 ~= nil and BWS2.telemetry ~= nil then
+            pcall(BWS2.telemetry.submit, record_meta, sections, O.nearby)
+        end
     end)
     if not ok then
         O.error_count = O.error_count + 1

@@ -120,4 +120,146 @@ function J.round(value, digits)
     return math.floor(n * scale + 0.5) / scale
 end
 
+-- ─────────────────── 解码（M3 起用：要读 Bridge 回来的 acknowledged_sequence）───────────────────
+--
+-- 只需要处理我们自己发出去的、以及 Bridge 回的 JSON（都是标准 JSON），所以实现够用即可：
+-- 对象 / 数组 / 字符串（含 \\u 转义）/ 数字 / true / false / null。
+
+local function utf8_char(cp)
+    if cp < 0x80 then
+        return string.char(cp)
+    elseif cp < 0x800 then
+        return string.char(0xC0 + math.floor(cp / 0x40), 0x80 + cp % 0x40)
+    elseif cp < 0x10000 then
+        return string.char(0xE0 + math.floor(cp / 0x1000), 0x80 + math.floor(cp / 0x40) % 0x40, 0x80 + cp % 0x40)
+    end
+    return string.char(
+        0xF0 + math.floor(cp / 0x40000),
+        0x80 + math.floor(cp / 0x1000) % 0x40,
+        0x80 + math.floor(cp / 0x40) % 0x40,
+        0x80 + cp % 0x40
+    )
+end
+
+function J.decode(text)
+    if type(text) ~= 'string' then return nil, 'not_a_string' end
+    local pos = 1
+    local len = #text
+
+    local function err(message) error(message .. '（位置 ' .. tostring(pos) .. '）', 0) end
+
+    local function skip_ws()
+        while pos <= len do
+            local c = string.sub(text, pos, pos)
+            if c == ' ' or c == '\t' or c == '\r' or c == '\n' then pos = pos + 1 else return end
+        end
+    end
+
+    local parse_value
+
+    local function parse_string()
+        pos = pos + 1
+        local buf = {}
+        while pos <= len do
+            local c = string.sub(text, pos, pos)
+            if c == '"' then
+                pos = pos + 1
+                return table.concat(buf)
+            elseif c == '\\' then
+                local e = string.sub(text, pos + 1, pos + 1)
+                pos = pos + 2
+                if e == 'n' then buf[#buf + 1] = '\n'
+                elseif e == 't' then buf[#buf + 1] = '\t'
+                elseif e == 'r' then buf[#buf + 1] = '\r'
+                elseif e == 'b' then buf[#buf + 1] = '\b'
+                elseif e == 'f' then buf[#buf + 1] = '\f'
+                elseif e == 'u' then
+                    local cp = tonumber(string.sub(text, pos, pos + 3), 16) or 63
+                    pos = pos + 4
+                    if cp >= 0xD800 and cp <= 0xDBFF and string.sub(text, pos, pos + 1) == '\\u' then
+                        local low = tonumber(string.sub(text, pos + 2, pos + 5), 16)
+                        if low ~= nil and low >= 0xDC00 and low <= 0xDFFF then
+                            pos = pos + 6
+                            cp = 0x10000 + (cp - 0xD800) * 0x400 + (low - 0xDC00)
+                        end
+                    end
+                    buf[#buf + 1] = utf8_char(cp)
+                else
+                    buf[#buf + 1] = e or ''
+                end
+            else
+                buf[#buf + 1] = c
+                pos = pos + 1
+            end
+        end
+        err('字符串没有结束')
+    end
+
+    local function parse_number()
+        local s, e = string.find(text, '^-?%d+%.?%d*[eE]?[-+]?%d*', pos)
+        if s == nil then err('数字格式不对') end
+        local chunk = string.sub(text, s, e)
+        pos = e + 1
+        local n = tonumber(chunk)
+        if n == nil then err('数字解析失败：' .. chunk) end
+        return n
+    end
+
+    parse_value = function()
+        skip_ws()
+        if pos > len then err('内容突然结束') end
+        local c = string.sub(text, pos, pos)
+        if c == '{' then
+            pos = pos + 1
+            local obj = {}
+            skip_ws()
+            if string.sub(text, pos, pos) == '}' then pos = pos + 1; return obj end
+            while true do
+                skip_ws()
+                if string.sub(text, pos, pos) ~= '"' then err('对象的键必须是字符串') end
+                local key = parse_string()
+                skip_ws()
+                if string.sub(text, pos, pos) ~= ':' then err('缺少冒号') end
+                pos = pos + 1
+                obj[key] = parse_value()
+                skip_ws()
+                local sep = string.sub(text, pos, pos)
+                if sep == ',' then pos = pos + 1
+                elseif sep == '}' then pos = pos + 1; return obj
+                else err('对象没有正常结束') end
+            end
+        elseif c == '[' then
+            pos = pos + 1
+            local arr = {}
+            skip_ws()
+            if string.sub(text, pos, pos) == ']' then pos = pos + 1; return arr end
+            while true do
+                arr[#arr + 1] = parse_value()
+                skip_ws()
+                local sep = string.sub(text, pos, pos)
+                if sep == ',' then pos = pos + 1
+                elseif sep == ']' then pos = pos + 1; return arr
+                else err('数组没有正常结束') end
+            end
+        elseif c == '"' then
+            return parse_string()
+        elseif c == 't' then
+            if string.sub(text, pos, pos + 3) == 'true' then pos = pos + 4; return true end
+            err('看不懂的 true')
+        elseif c == 'f' then
+            if string.sub(text, pos, pos + 4) == 'false' then pos = pos + 5; return false end
+            err('看不懂的 false')
+        elseif c == 'n' then
+            if string.sub(text, pos, pos + 3) == 'null' then pos = pos + 4; return nil end
+            err('看不懂的 null')
+        else
+            return parse_number()
+        end
+    end
+
+    local ok, value = pcall(parse_value)
+    if not ok then return nil, tostring(value) end
+    return value
+end
+
 BWS.json = J

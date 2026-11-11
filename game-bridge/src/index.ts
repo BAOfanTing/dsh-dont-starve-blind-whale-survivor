@@ -9,27 +9,32 @@
 import { loadConfig, maskToken } from './config.js'
 import { createLogger } from './logger.js'
 import { createBridgeServer } from './server.js'
+import { SessionManager } from './session.js'
 import { BridgeState } from './state.js'
 
 async function main(): Promise<void> {
   const config = loadConfig()
   const logger = createLogger({ secrets: [config.token] })
   const state = new BridgeState()
-  const handle = createBridgeServer({ config, logger, state })
+  const sessions = new SessionManager()
+  const handle = createBridgeServer({ config, logger, state, sessions })
 
   try {
     const port = await handle.listen()
     config.port = port
     logger.info(`Bridge 已启动，监听 http://${config.host}:${port}（只本机）`, {
       protocol_version: config.protocolVersion,
-      version: '0.2.0-m1',
+      version: '0.2.0-m3',
     })
     logger.info('Token 已就绪（不写日志）', {
       token_source: config.tokenSource,
       token_mask: maskToken(config.token),
       token_file: config.tokenSource === 'generated' ? config.tokenFile : '(使用环境变量)',
     })
-    logger.info('请求体上限 ' + config.maxBodyBytes + ' 字节；接口：GET /health、GET /api/v1/bridge/status（其余 M3/M4 实现）')
+    logger.info(
+      '请求体上限 ' + config.maxBodyBytes + ' 字节；接口：GET /health、GET /api/v1/bridge/status、'
+      + 'POST /api/v1/heartbeat、POST /api/v1/telemetry（commands/* 在 M4 实现）',
+    )
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code ?? ''
     if (code === 'EADDRINUSE') {
