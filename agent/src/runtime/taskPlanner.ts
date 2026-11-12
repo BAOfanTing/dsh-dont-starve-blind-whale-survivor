@@ -158,14 +158,18 @@ export function buildPlan(input: PlanInput): SurvivalPlan {
   }
 
   // ── 短期：食物储备 ──
-  if (inventory !== null && inventory.hasFood === false) {
+  // 注意：饥饿已经偏低时，上面那条「去采集食物」已经覆盖了这件事，
+  // 这里再产一条会重复（实测踩到：两条都是"找吃的"）。
+  // 所以只在「饥饿尚可、但背包没存货」时给储备提醒。
+  const hungerLow = typeof player?.hungerPercent === 'number' && player.hungerPercent <= risk.thresholds.hungerLow
+  if (inventory !== null && inventory.hasFood === false && hungerLow !== true) {
     const nearbyFood = (resources?.harvestable ?? 0) > 0
     push({
       horizon: 'short',
       priority: nearbyFood ? 3 : 2,
       urgent: false,
-      action: nearbyFood ? '采集附近的可食用资源（浆果丛/胡萝卜/蘑菇）' : '扩大搜索范围找食物来源',
-      reason: '没有食物储备，饥饿会持续下降',
+      action: nearbyFood ? '采集附近的可食用资源，建立食物储备' : '扩大搜索范围找食物来源',
+      reason: '背包没有食物储备，饥饿会持续下降',
       evidence: nearbyFood ? `附近有 ${resources?.harvestable} 个可采集物` : '附近没有明显可采集物',
     })
   }

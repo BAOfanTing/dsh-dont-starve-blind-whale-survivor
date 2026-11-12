@@ -438,3 +438,28 @@ test('Plan：幽灵状态 → 计划第一步是复活，headline 必须说紧�
   assert.match(plan.headline, /紧急/, 'headline 必须与紧急项一致，不能说"没有紧急威胁"')
   assert.equal(plan.summary.immediate >= 1, true)
 })
+
+test('Plan：饥饿偏低且无食物时，食物相关步骤不重复', () => {
+  const risk = assessRisk({ player: { healthPercent: 100, hungerPercent: 19 }, inventory: { hasFood: false } })
+  const plan = buildPlan({
+    risk,
+    player: { healthPercent: 100, hungerPercent: 19 },
+    world: { phase: 'day', day: 2, season: 'autumn' },
+    inventory: { hasFood: false },
+    resources: { harvestable: 10, tree: 9, rock: 9, item: 7 },
+  })
+  const foodSteps = plan.steps.filter((step) => /食物|采集.*食用|吃/.test(step.action))
+  assert.equal(foodSteps.length, 1, '只该有一条食物相关步骤，实际：' + foodSteps.map((s) => s.action).join(' | '))
+})
+
+test('Plan：饥饿尚可但没储备时，仍给储备提醒', () => {
+  const risk = assessRisk({ player: { healthPercent: 100, hungerPercent: 80 }, inventory: { hasFood: false } })
+  const plan = buildPlan({
+    risk,
+    player: { healthPercent: 100, hungerPercent: 80 },
+    world: { phase: 'day', day: 2, season: 'autumn' },
+    inventory: { hasFood: false },
+    resources: { harvestable: 4 },
+  })
+  assert.ok(plan.steps.some((step) => /储备|食物来源/.test(step.action)), '应提醒建立储备')
+})
