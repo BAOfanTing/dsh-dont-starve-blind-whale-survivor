@@ -22,6 +22,15 @@ local lastHeartbeatAt = 0
 local ticks = 0
 local lastReportedState = nil
 
+-- 自愈用的时间戳（os.time 秒级足够，判断"几秒没跑"不需要毫秒）
+local lastTickAt = 0
+local lastRebuildAt = 0
+local rebuildCount = 0
+--- net tick 超过这么多秒没跑过，就由 keepAlive 补跑一次并尝试重建任务
+local KEEPALIVE_GAP = 3
+--- 重建任务的最小间隔，避免世界还没就绪时每秒刷屏
+local REBUILD_GAP = 5
+
 local function now()
     local os_ = GLOBAL.os
     if os_ ~= nil and os_.time ~= nil then
@@ -45,6 +54,7 @@ end
 
 local function tickBody()
     ticks = ticks + 1
+    lastTickAt = now()
     local config = BWS2.config.get()
     local connection = BWS2.connection
 
@@ -80,33 +90,17 @@ local function tick()
     end
 end
 
-function N.start()
-    -- 换存档 / 世界重载会清掉旧的 DoPeriodicTask，但 started 守卫仍是 true，
-    -- 结果周期任务永久消失、心跳停摆（实测踩过：日志只有一条 offline → online 就再没动静）。
-    -- 所以用「任务对象是否还有效」判断，而不是只看 started。
-    if started and tickTask ~= nil then
-        local ok_alive, alive = pcall(function() return tickTask:IsValid() end)
-        if not ok_alive or alive ~= false then
-            return false -- 拿不到 IsValid 时保守认为还活着，避免重复建任务
-        end
-        print('[BWS2] WARN net 周期任务已失效（世界重载过？），重新创建')
-        tickTask = nil
-        started = false
-    end
-    started = true
+--- 判断现有周期任务是否还有效（失效返回 true，表示需要重建）
+local function taskDead()
+    if tickTask == nil then return true end
+    local ok_alive, alive = pcall(function() return tickTask:IsValid() end)
+    if not ok_alive then return false end -- 拿不到 IsValid 时保守认为还活着
+    return alive == false
+end
 
+--- 真正建一次任务（调用方负责前置检查）
+local function createTask()
     local config = BWS2.config.get()
-    if type(config.token) ~= 'string' or #config.token == 0 then
-        print('[BWS2] WARN net 未启动：没有配置 token（先跑 node tools/write-bws-config.mjs）')
-        started = false
-        return false
-    end
-    if GLOBAL.TheWorld == nil or GLOBAL.TheWorld.DoPeriodicTask == nil then
-        print('[BWS2] WARN net 未启动：世界还没就绪')
-        started = false
-        return false
-    end
-
     BWS2.connection.ensureSession()
     print('[BWS2] INFO net 启动：heartbeat ' .. tostring(config.heartbeatSeconds) .. 's / telemetry '
         .. tostring(config.stateSeconds) .. 's（由观察器驱动）/ 统一 1s 调度')
@@ -119,9 +113,57 @@ function N.start()
         started = false
         return false
     end
+    started = true
+    lastTickAt = now()
     -- 立刻发一次心跳，让 Bridge 尽快知道"游戏连上了"
     lastHeartbeatAt = 0
     return true
+end
+
+function N.start()
+    local config = BWS2.config.get()
+    if type(config.token) ~= 'string' or #config.token == 0 then
+        print('[BWS2] WARN net 未启动：没有配置 token（先跑 node tools/write-bws-config.mjs）')
+        return false
+    end
+    if GLOBAL.TheWorld == nil or GLOBAL.TheWorld.DoPeriodicTask == nil then
+        print('[BWS2] WARN net 未启动：世界还没就绪')
+        return false
+    end
+    if started and not taskDead() then return false end -- 已有一个活任务，别重复建
+    if started then
+        print('[BWS2] WARN net 周期任务已失效，重新创建')
+        rebuildCount = rebuildCount + 1
+        pcall(function() if tickTask ~= nil then tickTask:Cancel() end end)
+        tickTask = nil
+        started = false
+    end
+    return createTask()
+end
+
+--- 自愈入口：由「已经被实证还活着的路径」驱动（观察器 Tick / telemetry 提交）。
+--- 真机踩到：世界重载或 Bridge 重启后，DoPeriodicTask 会失效但 started 守卫仍是 true，
+--- 心跳 / telemetry / 命令 poll 全挂在那个 tick 上，于是整体停摆、命令永远 QUEUED。
+--- 这里不依赖任务对象是否"看着有效"，只看 tickBody 最近有没有真的跑过：
+---   · 超时没跑 → 立刻补跑一次（保证心跳和命令轮询不断）
+---   · 同时尝试重建任务（带间隔，避免刷屏）
+function N.keepAlive()
+    if not BWS2.connection.isServerSide() then return end
+    local at = now()
+
+    if at - lastTickAt < KEEPALIVE_GAP then return end -- tick 还活着，什么都不用做
+
+    -- 补跑一次（pcall 隔离，绝不能让观察器 tick 被拖崩）
+    local ok, err = pcall(tickBody)
+    if not ok then
+        print('[BWS2] ERROR net keepAlive 补跑出错（已隔离）：' .. tostring(err))
+    end
+
+    -- 尝试重建周期任务（失败也没关系，下次观察器 tick 还会来）
+    if at - lastRebuildAt >= REBUILD_GAP then
+        lastRebuildAt = at
+        N.start()
+    end
 end
 
 function N.stop()
@@ -136,6 +178,8 @@ function N.status()
     local status = BWS2.connection.status()
     status.ticks = ticks
     status.started = started
+    status.last_tick_ago_s = lastTickAt > 0 and (now() - lastTickAt) or nil
+    status.rebuilds = rebuildCount
     status.heartbeat = BWS2.heartbeat.stats()
     status.telemetry = BWS2.telemetry.status()
     status.http = BWS2.http.stats()

@@ -195,6 +195,19 @@ local function handle(command)
     if executed[command.id] then
         counts.duplicated = counts.duplicated + 1
         print('[BWS2] INFO 命令重投，跳过执行：' .. tostring(command.id))
+        -- 动作还在执行中时**不能**回 SUCCEEDED：那会把 EXECUTING 提前判成终态，
+        -- 之后动作真正完成的回执就被 Bridge 当 duplicate 丢掉了。
+        local stillRunning = false
+        if BWS2.actionExecutor ~= nil and BWS2.actionExecutor.status ~= nil then
+            local ok_s, s = pcall(BWS2.actionExecutor.status)
+            if ok_s and type(s) == 'table' and s.pending_command_id == command.id then
+                stillRunning = true
+            end
+        end
+        if stillRunning then
+            print('[BWS2] INFO 动作仍在执行，重投不覆盖终态：' .. tostring(command.id))
+            return
+        end
         -- 仍然回一次执（幂等），让 Bridge 能把状态收尾
         report(command.id, 'SUCCEEDED', { duplicate = true, skipped = true }, nil, now_ms())
         return

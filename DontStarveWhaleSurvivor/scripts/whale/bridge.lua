@@ -129,6 +129,10 @@ end
 
 function B.Report(ok, text, cmd_id)
     local id = cmd_id or last_cmd_id
+    -- Phase 5 M2：把动作最终结果转给 HTTP 命令通道的 action_executor（一行 hook，不改原逻辑）
+    if BWS2 ~= nil and BWS2.actionExecutor ~= nil and BWS2.actionExecutor.onActionReport ~= nil then
+        pcall(BWS2.actionExecutor.onActionReport, ok and true or false, tostring(text or ""), id)
+    end
     pending_result = Whale.json.encode({
         v = 1,
         id = id,

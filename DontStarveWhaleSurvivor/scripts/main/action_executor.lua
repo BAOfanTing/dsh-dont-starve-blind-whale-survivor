@@ -44,6 +44,14 @@ local lastMove = {
 }
 local counts = { accepted = 0, denied = 0, failed = 0, started = 0 }
 
+-- Phase 5 M2 修复：动作最终成败回执。
+-- 之前启动成功就回 SUCCEEDED，Bridge 命令直接终态，之后 Whale.actions.Tick 的 done/fail
+-- 只写文件桥，HTTP 侧永远不知道结果 → 破坏 NEEDS_RECONCILIATION 语义。
+-- 现在：启动时回 EXECUTING（Bridge 状态机已支持中间态），完成时用同一 command_id 补发终态。
+local pending = nil   -- { command_id, report, startedMs, action }
+local lastReportFn = nil  -- 保存 commands.lua 的 report 函数供完成回调复用
+local completionCounts = { succeeded = 0, failed = 0, reconciled = 0 }
+
 local function now()
     local os_ = GLOBAL.os
     if os_ ~= nil and os_.time ~= nil then
@@ -120,16 +128,107 @@ local function startAction(command, report, startedMs)
     lastMove.ok = nil
     lastMove.text = nil
     lastMove.command_id = command.id
-    -- 立即回执 ACCEPTED（动作还在跑，最终成功/失败由 Whale.actions.Tick 通过文件桥上报；
-    -- M2 的 get_movement_status 会读 Whale.actions.Current() 判断进度）
+
+    -- 回 EXECUTING（中间态），不是终态。Bridge 的 CommandQueue.settle 已支持 EXECUTING，
+    -- 之后会用同一个 command_id 补发 SUCCEEDED / FAILED。
+    -- 记录 pending，供 pollCompletion 在动作结束时补发终态。
+    pending = {
+        command_id = command.id,
+        report = report,
+        startedMs = startedMs,
+        action = command.type,
+        job = jobName,
+    }
+    lastReportFn = report
     if report ~= nil then
-        report(command.id, 'SUCCEEDED', {
+        report(command.id, 'EXECUTING', {
             accepted = true,
             action = command.type,
             job = jobName,
             running = true,
-            note = '动作已启动，由游戏内 Tick 推进；用 get_movement_status 查询',
+            note = '动作执行中；完成后由 action_executor 补发终态回执',
         }, nil, startedMs)
+    end
+end
+
+--- Whale.bridge.Report 的 hook：动作 done/fail 时拿到真实结果与文本。
+--- 只缓存，结算由 pollCompletion 在确认 Whale.actions.Current() 已变 nil 后执行，
+--- 避免"被新指令打断"的 Report 被误当成上一个动作的成功。
+local lastActionOutcome = nil  -- { ok, text, at }
+
+function E.onActionReport(ok, text, _cmdId)
+    lastActionOutcome = { ok = ok and true or false, text = tostring(text or ""), at = now() }
+end
+
+--- 把 pending 动作结算成终态回执（用同一个 command_id）
+local function settle(status, result, errorText)
+    if pending == nil then return false end
+    local p = pending
+    pending = nil
+    local reportFn = p.report or lastReportFn
+    if reportFn ~= nil then
+        reportFn(p.command_id, status, result, errorText, p.startedMs)
+    end
+    lastMove.ok = status == 'SUCCEEDED'
+    lastMove.finished_at = now()
+    lastMove.text = errorText or (type(result) == 'table' and result.text) or nil
+    if status == 'SUCCEEDED' then
+        completionCounts.succeeded = completionCounts.succeeded + 1
+    else
+        completionCounts.failed = completionCounts.failed + 1
+    end
+    return true
+end
+
+--- 周期驱动（由 observer Tick / net.keepAlive 调用）：检测动作是否结束并补发终态。
+--- 断线导致无法确认时进 NEEDS_RECONCILIATION（不盲目重放）。
+function E.pollCompletion()
+    if pending == nil then return end
+
+    local current = nil
+    if Whale ~= nil and Whale.actions ~= nil and Whale.actions.Current ~= nil then
+        local ok, name = pcall(Whale.actions.Current)
+        if ok then current = name end
+    end
+
+    if current ~= nil then
+        -- 动作还在跑：检查是否超时（长动作不能无限等）
+        local timeout = 120
+        if now() - (lastMove.started_at or 0) > timeout then
+            pcall(function()
+                local player = Whale.util.player()
+                if player ~= nil then
+                    if player.components ~= nil and player.components.locomotor ~= nil then
+                        player.components.locomotor:Stop()
+                    end
+                    player:ClearBufferedAction()
+                end
+            end)
+            settle('FAILED', { action = pending.action, timed_out = true },
+                'action_timeout: 超过 ' .. tostring(timeout) .. ' 秒未完成，已停止')
+        end
+        return
+    end
+
+    -- Current() 变 nil：动作已结束（done / fail / 被中断）。
+    -- 优先用 Whale.bridge.Report 的真实结果；拿不到就按"无法确认"处理，绝不假装成功。
+    local outcome = lastActionOutcome
+    lastActionOutcome = nil
+    if outcome ~= nil and outcome.at >= (lastMove.started_at or 0) then
+        local text = outcome.text
+        local interrupted = string.find(text, '打断了', 1, true) ~= nil
+        if interrupted then
+            settle('FAILED', { action = pending.action, interrupted = true }, text)
+        elseif outcome.ok then
+            settle('SUCCEEDED', { action = pending.action, job = pending.job, text = text, completed = true }, nil)
+        else
+            settle('FAILED', { action = pending.action, job = pending.job, text = text }, text)
+        end
+    else
+        -- 完成信号丢了（游戏断线 / 分片重载）→ 结果未知，禁止盲目重放
+        completionCounts.reconciled = completionCounts.reconciled + 1
+        settle('FAILED', { action = pending.action, unknown_completion = true },
+            'unknown_completion: 动作结束但结果无法确认，需人工核对（NEEDS_RECONCILIATION）')
     end
 end
 
@@ -240,6 +339,8 @@ function E.movementStatus()
         player_pos = player,
         last_move = lastMove,
         counts = counts,
+        completion = completionCounts,
+        pending_command_id = pending ~= nil and pending.command_id or nil,
     }
 end
 
@@ -253,6 +354,8 @@ function E.status()
         end)(),
         write_actions = WRITE_ACTIONS,
         counts = counts,
+        completion = completionCounts,
+        pending_command_id = pending ~= nil and pending.command_id or nil,
     }
 end
 

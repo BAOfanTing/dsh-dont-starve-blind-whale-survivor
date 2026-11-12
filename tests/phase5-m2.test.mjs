@@ -188,7 +188,7 @@ test('M2 Lua：move_to 参数校验（缺坐标 / 非数字 / 超范围）', asy
   }
 })
 
-test('M2 Lua：校验通过才启动原生 move_to，且回报 ACCEPTED', async () => {
+test('M2 Lua：校验通过才启动原生 move_to，且回报 EXECUTING（中间态）', async () => {
   const fengari = await import('fengari')
   const { run } = load(fengari, allow)
   run(`
@@ -198,7 +198,7 @@ test('M2 Lua：校验通过才启动原生 move_to，且回报 ACCEPTED', async 
     assert(STARTED.args.x == 12 and STARTED.args.z == 45)
     assert(LAST_POST.path == "/api/v1/control/assert", "必须先走控制权二次校验")
     assert(#REPORTS == 1, "应回报一次")
-    assert(REPORTS[1].status == "SUCCEEDED", "启动成功回 SUCCEEDED")
+    assert(REPORTS[1].status == "EXECUTING", "启动应回中间态 EXECUTING，不是终态 SUCCEEDED")
     assert(REPORTS[1].result.accepted == true and REPORTS[1].result.running == true)
   `)
 })
@@ -210,6 +210,7 @@ test('M2 Lua：stop_movement 映射到 stop，不执行任意字符串', async (
     BWS2.actionExecutor.execute({ id = "c1", type = "stop_movement", params = { controller_id = "C1", session_id = "S1" } }, report)
     assert(STARTED.name == "stop")
     assert(REPORTS[1].result.job == "stop")
+    assert(REPORTS[1].status == "EXECUTING")
   `)
 })
 

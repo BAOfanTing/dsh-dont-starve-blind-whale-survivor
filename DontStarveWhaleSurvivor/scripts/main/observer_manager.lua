@@ -224,6 +224,15 @@ function O.Tick()
         if BWS2 ~= nil and BWS2.telemetry ~= nil then
             pcall(BWS2.telemetry.submit, record_meta, sections, O.nearby)
         end
+        -- Phase 5 M2 修复：观察器 Tick 是实证能长期存活的周期任务，
+        -- 顺带驱动 net 自愈（心跳 / telemetry 补发 / 命令轮询都挂在 net tick 上），
+        -- 以及动作最终成败回执的结算。
+        if BWS2 ~= nil and BWS2.net ~= nil and BWS2.net.keepAlive ~= nil then
+            pcall(BWS2.net.keepAlive)
+        end
+        if BWS2 ~= nil and BWS2.actionExecutor ~= nil and BWS2.actionExecutor.pollCompletion ~= nil then
+            pcall(BWS2.actionExecutor.pollCompletion)
+        end
     end)
     if not ok then
         O.error_count = O.error_count + 1
