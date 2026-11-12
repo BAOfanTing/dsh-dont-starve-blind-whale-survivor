@@ -41,7 +41,10 @@ local WRITE_ACTIONS = { move_to = true, stop_movement = true,
 -- 地面物品（flint/logs/rocks 掉落物）与需工具资源（tree/rock）不在 M3 范围，
 -- 绝不让外部传任意 prefab 名直接被当作目标。
 local GATHER_TARGETS = {
-    twigs = 'twigs',           -- 树枝：sapling / twiggytree 上的可采部分
+    -- 真机验证(2026-11-12)：find_by_name 按 prefab/显示名子串匹配；'twigs' 匹配不到
+    -- twiggytree（那是 tree，走 CHOP 不是 PICK）。真正可采的树枝来源是 sapling（树苗，pickable）。
+    -- 地图里若只有 twiggytree 没有 sapling，游戏会如实回报「附近没有能采的东西」。
+    twigs = 'sapling',
     grass = 'grass',           -- 草
     berries = 'berrybush',     -- 浆果丛
 }

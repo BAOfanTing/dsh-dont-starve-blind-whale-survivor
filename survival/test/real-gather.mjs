@@ -52,9 +52,9 @@ console.log(`  附近: ${s0.json.snapshot.nearby?.returned ?? '?'} 个实体`)
 console.log('\n=== ② probe_game_actions（只读：探测当前构建的 ACTIONS）===')
 const probe = await post('/api/v1/commands/enqueue', { type: 'probe_game_actions', params: {}, shard: 'master' })
 console.log(`  enqueue HTTP ${probe.status} id=${probe.json.command?.id}`)
-const probeRec = await waitCmd(probe.json.command?.id, 15)
-console.log(`  ${probeRec?.status} result=${JSON.stringify(probeRec?.result).slice(0, 600)}`)
-console.log(`  → ACTIONS.PICKUP 可用: ${probeRec?.result?.actions?.PICKUP}`)
+const probeRec = probe.json.command?.id ? await waitCmd(probe.json.command.id, 15) : null
+console.log(`  ${probeRec?.status ?? probe.status} result=${JSON.stringify(probeRec?.result ?? probe.json).slice(0, 600)}`)
+console.log(`  → ACTIONS.PICKUP 可用: ${probeRec?.result?.actions?.PICKUP ?? '未知（探测命令未入队）'}`)
 
 console.log('\n=== ③ 授权控制权 ===')
 const lease = Date.now() + 120000

@@ -1,8 +1,11 @@
 # Phase 5 · M3：基础资源采集系统
 
-> 结论：协议/Bridge/Lua/MCP/Agent 五层都已扩展完成，**沙箱测试全过，
-> 全项目 451 个测试全过**。真机验证脚本已备好，但准备执行时游戏未连上
-> （快照 31 分钟前，大概率又暂停），**真机采集尚未验证** —— 如实标注。
+> 结论：五层扩展完成，**452 个沙箱测试全过**；**真机验证已通过**（2026-11-12 14:40-14:47）：
+> `probe_game_actions` 拿到当前构建的真实 ACTIONS 表，`gather_resource` 真实采到草
+> （`EXECUTING → SUCCEEDED`，游戏内文本「采了 1 次」）。真机还发现并修正了 `twigs` 的映射错误。
+>
+> 同时**更正了一个反复误判的根因**：之前的"连不上"主因不是游戏暂停，而是
+> **mod 的所有周期任务会一起死掉**（见 §4.3）。这是真机测试的阻塞项，留给 M4 修。
 
 ## 0. 前置检查（不假设）
 
@@ -94,40 +97,87 @@
 | Phase 3 MCP | **77** | 全过 |
 | Phase 4 Agent | 110 | 全过 |
 | survival | 48 | 全过 |
-| **合计** | **451** | **全过** |
+| **合计** | **452** | **全过** |
 
-## 4. 真机验证：脚本已备好，未跑成（如实）
+## 4. 真机验证：已通过（2026-11-12 14:40-14:47）
 
-`survival/test/real-gather.mjs`（`node --check` 通过）会：
-1. 等会话连上
-2. `probe_game_actions` → 看真实 `ACTIONS.PICKUP` 是否可用（决定 M4 拾取怎么做）
-3. 授权控制权
-4. `gather_resource` 采 1 次树枝 → 验证 `EXECUTING → 终态` 且带回真实数量文本
-5. 越权采集 → 403；非法资源名 `deerclops` → 被 Lua 拒绝
-6. 清理控制权
+### 4.1 probe_game_actions 拿到真实 ACTIONS 表（关键收获）
 
-新版 mod 已同步到 DST 安装目录（4 个改动文件 MD5 一致，`bws_config.lua` 保留）。
+```json
+{"ok":true,"pickup_supported":true,
+ "actions":{"PICK":true,"HARVEST":true,"CHOP":true,"MINE":true,"DIG":true,
+            "PICKUP":true,"GIVE":true,"EAT":true,"BUILD":true},
+ "gather_targets":["berries","grass","twigs"],
+ "jobs":["attack","build","chop","cook","craft","dig","drop","eat","equip","go_to",
+         "hammer","make_fire","mine","move_to","pick","say","sleep","stop","wait"]}
+```
 
-**准备执行时探测到 `alive=False`（快照 1860 秒前）**，结合前几轮经验大概率是游戏又暂停/没进世界。
-没有空等、没有擅自重启，**真实采集未验证**，这一点不掩饰。
+**`ACTIONS.PICKUP = true`** —— M4 的 `pick_up_item` 可以走原生拾取动作，不必另找路径。
+19 个 JOBS 全部登记在案。
 
-> 给后续真机测试的操作要求（前几轮踩过）：**游戏必须未暂停**，
-> DST 暂停时引擎不触发任何 `DoPeriodicTask`，命令不会被 poll。
+### 4.2 gather_resource 真实采集成功
+
+第一次采 `twigs` 失败（真实原因：附近 12 格没有可采树枝，回执如实说「没有能采的东西」），
+随后改测 `grass`（附近 7.1 格确有草）：
+
+```
+t+2s   EXECUTING
+t+4~8s EXECUTING     ← 角色走过去 + 采摘动作
+t+10s  SUCCEEDED
+result={"completed":true,"action":"gather_resource",
+        "args":{"target":"grass","radius":12,"count":1},
+        "text":"采了 1 次","job":"pick"}
+```
+
+- `EXECUTING → SUCCEEDED` 两阶段（M2 修的终态回执链路在采集动作上同样生效）
+- 完成文本「采了 1 次」来自游戏内 `Whale.actions`，不是编造
+- 越权采集 `403 CONTROL_NOT_HELD`；非法资源 `deerclops` 被 Lua 白名单拒绝
+
+### 4.3 真机发现并修正：twigs 映射错误
+
+`find_by_name` 按 prefab/显示名**子串**匹配。`twigs` 匹配不到 `twiggytree`
+（那是 `tree`，走 CHOP 不是 PICK）。真正可采的树枝来源是 `sapling`（树苗，pickable）。
+已把 `GATHER_TARGETS.twigs` 改为 `'sapling'`，测试断言同步。
+
+### 4.4 更正根因：不是暂停，是 mod 周期任务全死
+
+前几轮把"连不上"归因为游戏暂停，**这次拿到了决定性证据推翻它**：
+
+```
+服务端 PID 15880/37196: 5 秒内 CPU +0.58s  → 模拟在跑
+客户端 PID 37868:       3 秒内 CPU +3.77s  → 在跑
+文件桥 whale_io_hud.json / whale_io_settings.json: 停在 14:47:17（与心跳同一时刻）
+Bridge: connected=False 心跳距 609846ms
+游戏截图：60 FPS、HUD 完整、无暂停菜单
+```
+
+**游戏在跑、画面正常，但 mod 的所有周期任务（net tick + observer tick + 文件桥）
+同时停摆**。所以：
+
+1. M2 的 `net.keepAlive()` 修复**不够** —— 它挂在 observer Tick 上，
+   observer 一起死时它没机会跑。这是真实漏洞。
+2. 顺带查到过一个次要原因：**游戏窗口被最小化时 DST 也会暂停**（`IsIconic=True`），
+   此时发 Esc 无效，必须先 `ShowWindow(SW_RESTORE)`。已写进 `tools/unpause.mjs`。
+
+**M4 必须解决**：周期任务不能只靠单一 `DoPeriodicTask` 链，需要
+"任意外部触发即可自愈"的机制（例如多个独立周期任务互为守护，或由 HTTP 请求反驱）。
+否则每次真机测试跑几分钟就会失联。
 
 ## 5. 未完成 / 风险
 
-1. **真机采集未验证**（§4）
-2. **`ACTIONS.PICKUP` 是否可用未知** —— `probe_game_actions` 真机结果出来后才能决定 `pick_up_item` 怎么做；为 false 时 M4 需另找原生路径，不能凭空写
-3. `collect_dropped_items` 未实现（依赖上一条）
-4. `chop_tree` / `mine_rock` 未开放（M4）
-5. Controller HTTP 门面无认证、控制权变更未联动取消 Bridge 队列命令（M1/M2 遗留）
-6. `unknown_completion` / `action_timeout` 分支只有沙箱验证，真机未触发
+1. **mod 周期任务整体停摆**（§4.4）—— 真机测试阻塞项，M4 必修
+2. `collect_dropped_items` 未实现（`PICKUP` 已确认可用，可基于它做）
+3. `chop_tree` / `mine_rock` 未开放（M4）
+4. Controller HTTP 门面无认证、控制权变更未联动取消 Bridge 队列命令（M1/M2 遗留）
+5. `unknown_completion` / `action_timeout` 分支只有沙箱验证，真机未触发
+6. `twigs` 在只有 `twiggytree` 没有 `sapling` 的地图会采不到（游戏会如实回报，不编造）
 
 ## 6. 复现
 
 ```powershell
 # 沙箱回归
 node --test --test-force-exit "tests/*.test.mjs"
-# 真机（需游戏未暂停）
+# 真机（游戏需未暂停；窗口最小化会暂停，用工具恢复）
+node tools/unpause.mjs
 cd survival; node test/real-gather.mjs
 ```
