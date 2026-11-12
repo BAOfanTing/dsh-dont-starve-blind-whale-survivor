@@ -45,6 +45,7 @@ export interface SurvivalPlan {
 export interface PlanInput {
   risk: RiskAssessment
   player?: {
+    prefab?: string | null
     healthPercent?: number | null
     hungerPercent?: number | null
     sanityPercent?: number | null
