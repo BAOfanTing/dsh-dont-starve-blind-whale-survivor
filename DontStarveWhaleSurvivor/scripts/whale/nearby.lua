@@ -82,10 +82,11 @@ local FOOD_SOURCES = {
 --- 这些 foodtype 虽然"能吃"，但不是 AI 该当食物用的（树枝、种子、齿轮…）
 local FOODTYPE = GLOBAL.FOODTYPE
 local NON_FOOD_TYPES = {}
+-- 防御：某些构建/测试环境可能没有 FOODTYPE（或只有部分键），缺了就当没有这个排除项
 if FOODTYPE ~= nil then
-    NON_FOOD_TYPES[FOODTYPE.ROUGHAGE] = true -- 树枝/草：燃料和材料
-    NON_FOOD_TYPES[FOODTYPE.SEEDS] = true    -- 种子：喂鸟/种地
-    NON_FOOD_TYPES[FOODTYPE.GEARS] = true    -- 齿轮：修机械
+    for _, key in ipairs({ "ROUGHAGE", "SEEDS", "GEARS" }) do
+        if FOODTYPE[key] ~= nil then NON_FOOD_TYPES[FOODTYPE[key]] = true end
+    end
 end
 
 local function is_real_food(edible)
@@ -192,6 +193,38 @@ function N.Classify(ent, actor)
 end
 
 -- ─────────────────────────── 实体 → 紧凑字段 ───────────────────────────
+
+--- 高精度计时（毫秒）。用于 measure 单次扫描耗时。
+--- 优先级：
+---   1) os.clock()  —— CPU 时间，亚毫秒精度（测"这段函数花了多久"最合适）
+---   2) TheSim:GetRealTime() —— 引擎真实时间，单位**毫秒**（见 scripts/mainfunctions.lua:608/612）
+---   两个都拿不到就返回 nil（调用方写 null，不伪装成 0）
+--- 返回：(毫秒 | nil, 来源字符串)
+local function clock_ms()
+    if os ~= nil and os.clock ~= nil then
+        local ok, value = pcall(os.clock)
+        if ok and tonumber(value) ~= nil then
+            return tonumber(value) * 1000, "os.clock"
+        end
+    end
+    local sim = GLOBAL.TheSim
+    if sim ~= nil and sim.GetRealTime ~= nil then
+        local ok, value = pcall(function() return sim:GetRealTime() end)
+        if ok and tonumber(value) ~= nil then
+            local ms = tonumber(value)
+            if ms == ms then return ms, "realtime" end
+        end
+    end
+    return nil, "none"
+end
+
+--- 毫秒差 → 保留 1 位小数（亚毫秒的扫描不再被取整成 0）
+local function duration_of(started_ms, finished_ms)
+    if started_ms == nil or finished_ms == nil then return nil end
+    local delta = finished_ms - started_ms
+    if delta ~= delta or delta < 0 then return nil end
+    return math.floor(delta * 10 + 0.5) / 10
+end
 
 local function round1(value)
     if value == nil then return nil end
@@ -495,7 +528,7 @@ end
 local function build(actor, info, now, opts, identity)
     scan_seq = scan_seq + 1
     local snapshot_id = RUNTIME_ID .. "-n" .. tostring(scan_seq)
-    local started = U.now()
+    local started_ms, timer_source = clock_ms()
 
     local scanned, err = scan(actor, opts.radius)
     if scanned == nil then
@@ -513,7 +546,9 @@ local function build(actor, info, now, opts, identity)
             total_returned = 0,
             truncated = false,
             error = err or "scan_failed",
-            scan = { reused = false, timestamp = now, age_ms = 0, scan_seconds = opts.scan_seconds },
+            scan = { reused = false, timestamp = now, age_ms = 0,
+                     duration_ms = nil, duration_source = "unavailable",
+                     scan_seconds = opts.scan_seconds },
             buckets = { threats = {}, food = {}, resources = {}, containers = {}, structures = {}, creatures = {}, other = {} }, -- 出错时为空，读端按"没有数据"处理
             delta = { status = "reset", added_count = 0, removed_count = 0, changed_count = 0,
                       added = {}, removed = {}, changed = {} },
@@ -564,7 +599,12 @@ local function build(actor, info, now, opts, identity)
         end
     end
     local delta = compute_delta(list, kept_set, baseline_key(identity))
-    local duration_ms = math.floor((U.now() - started) * 1000)
+
+    -- 计时：拿不到可信耗时就写 null（不伪装成 0ms）
+    local finished_ms, finished_source = clock_ms()
+    -- 两次必须用同一个时钟源，否则差值没有意义
+    local duration_ms = (finished_source == timer_source) and duration_of(started_ms, finished_ms) or nil
+    local duration_source = duration_ms ~= nil and timer_source or "unavailable"
 
     return {
         status = (#kept > 0) and "ok" or "empty",
@@ -579,7 +619,14 @@ local function build(actor, info, now, opts, identity)
         total_found = scanned.found,
         total_returned = #kept,
         truncated = #kept < scanned.found,
-        scan = { reused = false, timestamp = now, age_ms = 0, duration_ms = duration_ms, scan_seconds = opts.scan_seconds },
+        scan = {
+            reused = false,
+            timestamp = now,
+            age_ms = 0,
+            duration_ms = duration_ms,
+            duration_source = duration_source,
+            scan_seconds = opts.scan_seconds,
+        },
         buckets = buckets,
         delta = delta_out(delta, not_returned),
     }
@@ -625,6 +672,7 @@ function N.Observe(actor, info, now, opts)
                 timestamp = cached.scan.timestamp,
                 age_ms = math.floor((now - cached.scan.timestamp) * 1000),
                 duration_ms = cached.scan.duration_ms,
+                duration_source = cached.scan.duration_source,
                 scan_seconds = cached.scan_seconds,
             },
             buckets = cached.buckets,
