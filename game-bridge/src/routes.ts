@@ -149,6 +149,84 @@ export function createRoutes(deps: RouteDeps): Route[] {
       },
     },
     {
+      // 只读：给 MCP Server / 其它消费者取"最新一份游戏状态快照"
+      // 设计要点：明确区分"连接是否活着"与"数据有多旧"，绝不让调用方把旧数据当当前状态
+      method: 'GET',
+      path: '/api/v1/state',
+      auth: true,
+      handler: ({ sessions, config, receivedAt, query }) => {
+        const wantedShard = query.get('shard')
+        const list = sessions.list()
+        const alive = list.filter((item) => sessions.isAlive(item))
+
+        // 选会话：优先「活着的 + 有快照的」，其次「有快照的」，再其次「活着的」
+        const withSnapshot = list.filter((item) => item.latest !== null)
+        const prefer = (pool: typeof list) => {
+          const filtered = wantedShard === null ? pool : pool.filter((item) => item.shard === wantedShard)
+          return (filtered.length > 0 ? filtered : pool)[0] ?? null
+        }
+        const chosen =
+          prefer(alive.filter((item) => item.latest !== null)) ??
+          prefer(withSnapshot) ??
+          prefer(alive) ??
+          null
+
+        if (chosen === null) {
+          return {
+            status: 503,
+            body: {
+              success: false,
+              error: {
+                code: 'no_session',
+                message: 'Bridge 还没有任何游戏会话（游戏没开 / 没进世界 / 模组未启用）',
+              },
+              sessions: 0,
+              server_time: receivedAt,
+            },
+          }
+        }
+
+        const alive_ = sessions.isAlive(chosen)
+        const ageMs = chosen.latestAt === null ? null : receivedAt - chosen.latestAt
+        // 过期判定：心跳死了、或者快照比阈值更旧
+        const stale = !alive_ || ageMs === null || ageMs > config.stateStaleMs
+
+        return {
+          status: 200,
+          body: {
+            success: true,
+            protocol_version: config.protocolVersion,
+            server_time: receivedAt,
+            session: {
+              session_id: chosen.sessionId,
+              shard: chosen.shard,
+              game_version: chosen.gameVersion,
+              alive: alive_,
+              reconnects: chosen.reconnects,
+              heartbeats: chosen.heartbeats,
+              acknowledged_sequence: chosen.acknowledgedSequence,
+              duplicates: chosen.duplicates,
+              gaps: chosen.gaps,
+              player_status: chosen.playerStatus,
+            },
+            snapshot: chosen.latest,
+            snapshot_at: chosen.latestAt,
+            snapshot_age_ms: ageMs,
+            stale,
+            stale_reason: stale
+              ? !alive_
+                ? 'heartbeat_timeout'
+                : ageMs === null
+                  ? 'no_snapshot'
+                  : 'snapshot_too_old'
+              : null,
+            stale_after_ms: config.stateStaleMs,
+            other_sessions: list.filter((item) => item.sessionId !== chosen.sessionId).length,
+          },
+        }
+      },
+    },
+    {
       method: 'POST',
       path: '/api/v1/heartbeat',
       auth: true,

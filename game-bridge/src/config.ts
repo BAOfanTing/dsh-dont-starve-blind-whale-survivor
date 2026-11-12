@@ -27,6 +27,8 @@ export interface BridgeConfig {
   requestTimeoutMs: number
   stateFile: string
   saveIntervalMs: number
+  /** 快照超过这个年龄就算过期（工具层据此返回 STATE_STALE） */
+  stateStaleMs: number
   protocolVersion: string
   startedAt: number
 }
@@ -90,6 +92,7 @@ export function loadConfig(options: LoadConfigOptions = {}): BridgeConfig {
     requestTimeoutMs: Number(env.BWS_REQUEST_TIMEOUT_MS ?? 15000),
     stateFile: resolveStateFile(env),
     saveIntervalMs: Number(env.BWS_SAVE_MS ?? 5000),
+    stateStaleMs: Number(env.BWS_STATE_STALE_MS ?? 15000),
     protocolVersion: PROTOCOL_VERSION,
     startedAt: Date.now(),
   }

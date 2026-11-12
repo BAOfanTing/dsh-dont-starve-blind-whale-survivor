@@ -73,7 +73,63 @@ const limitSchema = z.number().int().min(1).max(50).default(20)
 export function createToolDefinitions(): ToolDefinition[] {
   return [
     // ─────────────── 游戏状态 ───────────────
-    todoTool('get_game_status', '游戏总状态', '一次拿到玩家/世界/背包的总览（M3 实现）', z.object({}), 'M3'),
+    {
+      // M2 起：走完整 Bridge Client（快照缓存 + 过期标注），但只做"总览"这一层
+      name: 'get_game_status',
+      title: '游戏总状态',
+      description:
+        '一次拿到当前游戏状态总览：会话/分片、玩家、世界、背包摘要，以及这份数据有多新。数据过期时会明确标记 stale。',
+      schema: z.object({
+        include_raw: z.boolean().default(false).describe('是否附带原始快照 JSON（体积较大）'),
+        shard: z.string().min(1).max(32).optional().describe('指定分片（master/caves），不填则自动选有玩家的那个'),
+      }),
+      readOnly: true,
+      milestone: 'M2',
+      handler: async (rawArgs, ctx) => {
+        const args = rawArgs as { include_raw?: boolean; shard?: string }
+        const read = await ctx.client.readSnapshot({ shard: args.shard ?? null })
+        const snapshot = (read.game.snapshot ?? {}) as Record<string, unknown>
+        const player = snapshot.player as Record<string, unknown> | undefined
+        const world = snapshot.world as Record<string, unknown> | undefined
+        const inventory = snapshot.inventory as Record<string, unknown> | undefined
+        const items = Array.isArray(inventory?.items) ? (inventory?.items as unknown[]) : []
+
+        const payload = {
+          ok: true,
+          source: 'bridge',
+          fetched_at: new Date().toISOString(),
+          // 新鲜度：绝不让调用方把旧数据当当前状态
+          freshness: {
+            stale: read.stale,
+            stale_reason: read.staleReason,
+            age_ms: read.ageMs,
+            snapshot_at: read.game.snapshot_at,
+            stale_after_ms: read.game.stale_after_ms,
+            from_cache: read.fromCache,
+          },
+          session: read.game.session,
+          player: player ?? null,
+          world: world ?? null,
+          inventory: inventory === undefined
+            ? null
+            : { slots: inventory.slots ?? null, used: inventory.used ?? items.length, items },
+          ...(args.include_raw ? { raw_snapshot: snapshot } : {}),
+        }
+
+        const lines = [
+          read.stale
+            ? `⚠️ 数据已过期（${read.staleReason ?? 'unknown'}，约 ${Math.round(read.ageMs / 1000)} 秒前）—— 以下是最后一次已知状态，不代表当前`
+            : `数据新鲜（约 ${Math.max(0, Math.round(read.ageMs / 1000))} 秒前采集${read.fromCache ? '，来自缓存' : ''}）`,
+          `会话：${read.game.session.session_id} [${read.game.session.shard ?? '?'}] alive=${read.game.session.alive}`,
+          player
+            ? `玩家：${String(player.name ?? player.prefab ?? '?')} 血 ${JSON.stringify(player.health ?? null)} 饥饿 ${JSON.stringify(player.hunger ?? null)} 位置 (${JSON.stringify((player.position as { tile_x?: number } | undefined)?.tile_x ?? '?')}, ${JSON.stringify((player.position as { tile_z?: number } | undefined)?.tile_z ?? '?')})`
+            : '玩家：无',
+          world ? `世界：第 ${String(world.day ?? '?')} 天 ${String(world.phase ?? '?')} ${String(world.season ?? '?')} 温度 ${String(world.temperature ?? '?')}` : '世界：无',
+          inventory === undefined ? '背包：无' : `背包：${String(inventory.slots ?? '?')} 格，已用 ${String(inventory.used ?? items.length)}`,
+        ]
+        return { content: [{ type: 'text', text: lines.join('\n') }], structuredContent: payload }
+      },
+    },
     {
       name: 'get_bridge_status',
       title: 'Bridge 通道状态',
