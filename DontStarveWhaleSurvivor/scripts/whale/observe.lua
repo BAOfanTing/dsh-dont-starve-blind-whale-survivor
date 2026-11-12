@@ -537,8 +537,11 @@ function O.Render(data)
             local tail = bucket.truncated and ("（还有 " .. tostring(bucket.total - bucket.shown) .. " 个）") or ""
             lines[#lines + 1] = "  " .. bucket.label .. "：" .. table.concat(parts, "；") .. tail
         end
-    elseif nearby ~= nil and nearby.status ~= "ok" then
-        lines[#lines + 1] = "附近：暂时读不到（" .. tostring(nearby.status) .. "）"
+    elseif nearby ~= nil and nearby.status == "error" then
+        -- 只有"扫描出错"才说读不到；status=legacy 只说明"这套还是旧扫描"，不是故障（M1.2 修）
+        lines[#lines + 1] = "附近：暂时读不到（扫描出错）"
+    elseif nearby ~= nil and nearby.buckets ~= nil then
+        lines[#lines + 1] = "附近（" .. tostring(nearby.radius) .. " 格内）：没什么值得注意的"
     end
 
     local unavailable = obs.unavailable_fields or {}

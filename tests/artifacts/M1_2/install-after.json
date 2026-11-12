@@ -1,0 +1,13 @@
+﻿{
+    "checkedAt":  "2026-11-12T23:24:03+08:00",
+    "installPath":  "E:\\SteamLibrary\\steamapps\\common\\Don\u0027t Starve Together\\mods\\DontStarveWhaleSurvivor",
+    "installedVersion":  "0.12.1",
+    "files":  17,
+    "hasScriptsMain":  false,
+    "hasActorLua":  true,
+    "hasConfigLua":  true,
+    "observeHasM12Fix":  true,
+    "modmainImportsAStack":  0,
+    "modsettingsSha":  "66BC5786697D8B2064B8A76FFD82D9CBEA5D5DDE4BCAA433EBD7C1C997E20B09",
+    "cluster1FileCount":  75
+}

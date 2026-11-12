@@ -6,7 +6,7 @@
 //   【Node】真读文件 + 真跑归一化/工具分发 —— 证明 F8 与 MCP 拿到的是同一份快照。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -520,9 +520,15 @@ test('M1.1-14 快照过期：文件 20 秒没写 → stale，并在文本前提�
     assert.equal(stale.stale, true, '20 秒前写过应该算过期')
     assert.match(freshnessLine(stale), /过期/)
 
-    // get_state 文本里也要体现（F8 和 MCP 都会看到同一句）
+    // get_state 文本里也要体现（F8 和 MCP 都会看到同一句）。
+    // M1.2：以前这里靠"文件 0 秒前写过"这句噪音碰巧通过；现在新鲜文件不啰嗦了，
+    // 所以把文件 mtime 真的往回拨 20 秒，走真实读取路径验证过期提示。
+    const statePath = join(dir, 'whale_state.json')
+    const past = new Date(Date.now() - (STALE_MS + 5000))
+    utimesSync(statePath, past, past)
     const text = await executeTool('get_state', {}, ctx)
-    assert.match(text, /状态已经过期|秒前写过/, '文本里要说明新鲜度：' + text)
+    assert.match(text, /状态已经过期/, '过期文件必须提示：' + text)
+    assert.match(text, /秒前写过/, '过期时要说明多久没更新：' + text)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
