@@ -41,11 +41,11 @@ function setup(mode: 'SUPERVISED' | 'AUTONOMOUS' = 'SUPERVISED') {
 
 // ───────────────────────── Protocol ─────────────────────────
 
-test('Protocol：9 态 + 5 种控制模式 + 17 个动作类型白名单', () => {
+test('Protocol：9 态 + 5 种控制模式 + 18 个动作类型白名单', () => {
   assert.equal(ACTION_STATUSES.length, 9)
   assert.ok(ACTION_STATUSES.includes('NEEDS_RECONCILIATION'))
   assert.equal(CONTROL_MODES.length, 5)
-  assert.equal(ACTION_TYPES.length, 17)
+  assert.equal(ACTION_TYPES.length, 18, 'M1 的 17 个 + M3 新增 probe_game_actions')
   assert.ok(CONFIRMATION_REQUIRED.has('chop_tree'))
   assert.ok(!CONFIRMATION_REQUIRED.has('gather_resource'), '采摘树枝初期允许受限自动执行')
 })

@@ -104,10 +104,11 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
     h.notify('notifications/initialized')
     const list = await h.request(2, 'tools/list')
     assert.ok(Array.isArray(list.result.tools))
-    assert.equal(list.result.tools.length, 13, '应注册 12 个工具，实际 ' + list.result.tools.length)
+    assert.equal(list.result.tools.length, 16, '应注册 16 个工具，实际 ' + list.result.tools.length)
 
     const names = list.result.tools.map((t: { name: string }) => t.name).sort()
     assert.deepEqual(names, [
+      'gather_resource',
       'get_base_status',
       'get_bridge_status',
       'get_command_result',
@@ -120,12 +121,16 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
       'get_player_status',
       'get_recent_events',
       'get_world_status',
+      'move_to_target',
+      'probe_game_actions',
       'refresh_game_state',
     ])
+    // Phase 5 M3：2 个写动作工具显式标 readOnlyHint=false，其余仍为 true
+    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target'])
     for (const tool of list.result.tools) {
       assert.ok(tool.description && tool.description.length > 4, `${tool.name} 缺描述`)
       assert.ok(tool.inputSchema, `${tool.name} 缺 inputSchema`)
-      assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name} 必须标成只读`)
+      assert.equal(tool.annotations?.readOnlyHint, !WRITE_TOOLS.has(tool.name), `${tool.name} readOnlyHint 不对`)
     }
   } finally {
     await h.close()

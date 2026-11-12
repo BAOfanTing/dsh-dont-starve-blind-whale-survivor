@@ -13,17 +13,23 @@
 //   3. 投递失败可重投：DELIVERED 超过 redeliverAfterMs 还没结果 → 同一条命令再投一次（同一个 id，游戏端靠 id 去重）；
 //   4. 队列有上限、命令有 TTL，防止无限堆积。
 
-// Phase 5 M2 扩展：前 4 个是 Phase 2 的测试命令；后 3 个是 M2 的移动动作。
+// Phase 5 M2/M3 扩展：前 4 个是 Phase 2 测试命令；之后是移动(M2)与采集(M3)动作。
 // 动作命令走同一套状态机（QUEUED→DELIVERED→EXECUTING→终态），但 Lua 执行端会额外做
 // 控制权二次校验（POST /api/v1/control/assert），未授权直接回 FAILED，不执行。
 export const COMMAND_TYPES = [
   'ping', 'echo', 'get_state', 'refresh_state',
   'move_to', 'stop_movement', 'get_movement_status',
+  // Phase 5 M3：基础资源采集
+  'gather_resource', 'move_to_target', 'probe_game_actions',
 ] as const
-/** Phase 5 M2：会修改游戏状态的命令类型（Lua 端必须二次校验控制权） */
-export const ACTION_COMMAND_TYPES = ['move_to', 'stop_movement'] as const
+/** 会修改游戏状态的命令类型（Lua 端必须二次校验控制权） */
+export const ACTION_COMMAND_TYPES = ['move_to', 'stop_movement', 'gather_resource', 'move_to_target'] as const
 /** 只读动作命令（不需要控制权） */
-export const READ_ONLY_COMMAND_TYPES = ['get_movement_status'] as const
+export const READ_ONLY_COMMAND_TYPES = ['get_movement_status', 'probe_game_actions'] as const
+/** 需要绑定 master 分片的命令（写动作 + 依赖 master 执行器状态的只读查询） */
+export const MASTER_SHARD_COMMANDS: ReadonlySet<string> = new Set([
+  ...ACTION_COMMAND_TYPES, 'get_movement_status', 'probe_game_actions',
+])
 export type CommandType = (typeof COMMAND_TYPES)[number]
 
 export const COMMAND_STATUSES = [

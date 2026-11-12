@@ -288,12 +288,23 @@ export class BridgeClient {
     return read
   }
 
-  // ───────────────────────── 命令（M4 才开放工具，这里先封装）─────────────────────────
+  // ───────────────────────── 命令 ──────────────────────────
 
-  async enqueueCommand(type: string, params: Record<string, unknown> = {}, shard: string | null = null) {
+  /** Phase 5 M3：动作命令需要顶层 controller_id / session_id 供 Bridge 做控制权校验 */
+  async enqueueCommand(
+    type: string,
+    params: Record<string, unknown> = {},
+    options: { shard?: string | null; controllerId?: string; sessionId?: string } = {},
+  ) {
     return this.postJson<{ command: { id: string; type: string; status: string } }>(
       '/api/v1/commands/enqueue',
-      { type, params, ...(shard === null ? {} : { shard }) },
+      {
+        type,
+        params,
+        ...(options.shard === undefined || options.shard === null ? {} : { shard: options.shard }),
+        ...(options.controllerId === undefined ? {} : { controller_id: options.controllerId }),
+        ...(options.sessionId === undefined ? {} : { session_id: options.sessionId }),
+      },
     )
   }
 

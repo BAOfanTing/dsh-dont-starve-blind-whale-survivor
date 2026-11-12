@@ -16,7 +16,7 @@ import type { Logger } from './logger.js'
 import type { SessionManager } from './session.js'
 import { HttpError } from './http.js'
 import { parseHeartbeat, parsePoll, parseResultReport, parseTelemetry, PROTOCOL_VERSION } from './validate.js'
-import { COMMAND_TYPES, type CommandQueue, type CommandRecord } from './commands.js'
+import { COMMAND_TYPES, ACTION_COMMAND_TYPES, MASTER_SHARD_COMMANDS, type CommandQueue, type CommandRecord } from './commands.js'
 import type { ControlStateStore, ControlMode } from './control.js'
 
 export interface RequestContext {
@@ -391,12 +391,9 @@ export function createRoutes(deps: RouteDeps): Route[] {
         if (params !== null && (typeof params !== 'object' || Array.isArray(params))) {
           throw new HttpError(400, 'bad_request', 'params 必须是对象')
         }
-        // Phase 5 M2：动作命令必须带控制字段，且入队前先过 Bridge 侧控制权校验
+        // Phase 5 M2/M3：动作命令必须带控制字段，且入队前先过 Bridge 侧控制权校验
         // （Lua 执行端还会再做一次二次校验，不能只信这一层）
-        const isAction = (['move_to', 'stop_movement'] as readonly string[]).includes(type)
-        // 只读的移动状态查询也要绑 master：真机实测没绑时 caves 会取走，
-        // 查到 caves 上空的执行器实例（counts 全 0），而不是 master 上的真实动作记录。
-        const isMovementStatus = type === 'get_movement_status'
+        const isAction = (ACTION_COMMAND_TYPES as readonly string[]).includes(type)
         let effectiveParams = (params ?? {}) as Record<string, unknown>
         let actionShard: string | null = typeof record.shard === 'string' ? record.shard : null
         if (isAction) {
@@ -410,11 +407,11 @@ export function createRoutes(deps: RouteDeps): Route[] {
             throw new HttpError(403, 'bad_request', `${verdict.code}: ${verdict.message}`)
           }
           effectiveParams = { ...effectiveParams, controller_id: controllerId, session_id: sessionId }
-          // 实测踩到：shard=null 时 caves 分片也会把动作取走，而 caves 上没有玩家 →
-          // player_not_ready: no_player。动作必须只在玩家所在的 master 分片执行。
-          if (actionShard === null) actionShard = 'master'
         }
-        if (isMovementStatus && actionShard === null) actionShard = 'master'
+        // 真机实测：shard=null 时 caves 分片会把动作取走（caves 上没有玩家 → no_player），
+        // 只读状态查询也会取到 caves 上空的执行器实例。所有动作类 + 依赖 master 执行器的
+        // 只读查询都必须绑 master。
+        if (actionShard === null && MASTER_SHARD_COMMANDS.has(type)) actionShard = 'master'
         const shard = actionShard
         let command: CommandRecord
         try {

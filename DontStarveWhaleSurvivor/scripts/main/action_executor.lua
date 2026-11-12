@@ -27,10 +27,26 @@ local E = {}
 local ACTION_MAP = {
     move_to = 'move_to',
     stop_movement = 'stop',
+    -- Phase 5 M3：基础资源采集（复用已有 pick / go_to，不重写动作状态机）
+    gather_resource = 'pick',
+    move_to_target = 'go_to',
 }
 
--- 需要控制权写权限的动作（get_movement_status 是只读，不在这里）
-local WRITE_ACTIONS = { move_to = true, stop_movement = true }
+-- 需要控制权写权限的动作（get_movement_status / probe_game_actions 是只读）
+local WRITE_ACTIONS = { move_to = true, stop_movement = true,
+    gather_resource = true, move_to_target = true }
+
+-- Phase 5 M3：资源类型 → 游戏内实体名白名单。
+-- 只映射到「可采摘实体」（pickable / harvestable），走 ACTIONS.PICK / HARVEST。
+-- 地面物品（flint/logs/rocks 掉落物）与需工具资源（tree/rock）不在 M3 范围，
+-- 绝不让外部传任意 prefab 名直接被当作目标。
+local GATHER_TARGETS = {
+    twigs = 'twigs',           -- 树枝：sapling / twiggytree 上的可采部分
+    grass = 'grass',           -- 草
+    berries = 'berrybush',     -- 浆果丛
+}
+local GATHER_MAX_COUNT = 10
+local GATHER_MAX_RADIUS = 20
 
 -- 记录最近的移动状态（get_movement_status 用，纯读，不碰游戏实体）
 local lastMove = {
@@ -107,9 +123,52 @@ local function deny(report, commandId, startedMs, code, message)
 end
 
 --- 二次校验回调里真正启动动作
+--- 把外部命令参数规范化成固定 job 的参数。
+--- **绝不透传任意字符串**：资源名只从 GATHER_TARGETS 查表，数值做范围夹取。
+--- @return table args, string|nil err
+local function buildJobArgs(command)
+    local p = command.params or {}
+    if command.type == 'move_to' then
+        return { x = p.x, z = p.z, timeout = p.timeout }, nil
+    elseif command.type == 'stop_movement' then
+        return {}, nil
+    elseif command.type == 'move_to_target' then
+        -- go_to 的 target 也走同一张资源白名单（M3 只允许走向已知可采资源）
+        local name = GATHER_TARGETS[p.resource]
+        if name == nil then
+            return nil, 'unknown_target: 只支持 twigs/grass/berries'
+        end
+        local radius = tonumber(p.radius) or 12
+        if radius < 2 then radius = 2 end
+        if radius > GATHER_MAX_RADIUS then radius = GATHER_MAX_RADIUS end
+        return { target = name, radius = radius }, nil
+    elseif command.type == 'gather_resource' then
+        local name = GATHER_TARGETS[p.resource]
+        if name == nil then
+            return nil, 'unknown_resource: 只支持 twigs/grass/berries（flint/logs/rocks 与需工具资源不在 M3）'
+        end
+        local count = tonumber(p.count) or 1
+        if count < 1 then count = 1 end
+        if count > GATHER_MAX_COUNT then count = GATHER_MAX_COUNT end
+        local radius = tonumber(p.radius) or 12
+        if radius < 2 then radius = 2 end
+        if radius > GATHER_MAX_RADIUS then radius = GATHER_MAX_RADIUS end
+        return { target = name, count = count, radius = radius }, nil
+    end
+    return nil, 'unknown_action'
+end
+
 local function startAction(command, report, startedMs)
     local jobName = ACTION_MAP[command.type]
-    local okStart, err = Whale.actions.Start(jobName, command.params or {})
+    local jobArgs, argErr = buildJobArgs(command)
+    if jobArgs == nil then
+        counts.failed = counts.failed + 1
+        if report ~= nil then
+            report(command.id, 'FAILED', nil, tostring(argErr), startedMs)
+        end
+        return
+    end
+    local okStart, err = Whale.actions.Start(jobName, jobArgs)
     if not okStart then
         counts.failed = counts.failed + 1
         lastMove.ok = false
@@ -122,7 +181,7 @@ local function startAction(command, report, startedMs)
     end
     counts.started = counts.started + 1
     lastMove.action = command.type
-    lastMove.target = { x = (command.params or {}).x, z = (command.params or {}).z }
+    lastMove.target = jobArgs
     lastMove.started_at = now()
     lastMove.finished_at = nil
     lastMove.ok = nil
@@ -138,6 +197,7 @@ local function startAction(command, report, startedMs)
         startedMs = startedMs,
         action = command.type,
         job = jobName,
+        args = jobArgs,
     }
     lastReportFn = report
     if report ~= nil then
@@ -145,6 +205,7 @@ local function startAction(command, report, startedMs)
             accepted = true,
             action = command.type,
             job = jobName,
+            args = jobArgs,
             running = true,
             note = '动作执行中；完成后由 action_executor 补发终态回执',
         }, nil, startedMs)
@@ -214,20 +275,23 @@ function E.pollCompletion()
     -- 优先用 Whale.bridge.Report 的真实结果；拿不到就按"无法确认"处理，绝不假装成功。
     local outcome = lastActionOutcome
     lastActionOutcome = nil
+    local args = pending.args
     if outcome ~= nil and outcome.at >= (lastMove.started_at or 0) then
         local text = outcome.text
         local interrupted = string.find(text, '打断了', 1, true) ~= nil
         if interrupted then
-            settle('FAILED', { action = pending.action, interrupted = true }, text)
+            settle('FAILED', { action = pending.action, args = args, interrupted = true }, text)
         elseif outcome.ok then
-            settle('SUCCEEDED', { action = pending.action, job = pending.job, text = text, completed = true }, nil)
+            -- 真实完成文本来自 Whale.actions（例如「采了 2 次」），原样带回，不编造数量
+            settle('SUCCEEDED', { action = pending.action, job = pending.job, args = args,
+                text = text, completed = true }, nil)
         else
-            settle('FAILED', { action = pending.action, job = pending.job, text = text }, text)
+            settle('FAILED', { action = pending.action, job = pending.job, args = args, text = text }, text)
         end
     else
         -- 完成信号丢了（游戏断线 / 分片重载）→ 结果未知，禁止盲目重放
         completionCounts.reconciled = completionCounts.reconciled + 1
-        settle('FAILED', { action = pending.action, unknown_completion = true },
+        settle('FAILED', { action = pending.action, args = args, unknown_completion = true },
             'unknown_completion: 动作结束但结果无法确认，需人工核对（NEEDS_RECONCILIATION）')
     end
 end
@@ -257,7 +321,7 @@ function E.execute(command, report)
         return deny(report, command.id, startedMs, 'player_not_ready', tostring(playerReason))
     end
 
-    -- 4) 参数校验（move_to 必须有合法数字坐标，且不传任意 ACTIONS 名）
+    -- 4) 参数校验：数值范围 + **资源/目标名白名单**（绝不透传任意字符串给游戏）
     if kind == 'move_to' then
         local x = tonumber((command.params or {}).x)
         local z = tonumber((command.params or {}).z)
@@ -268,9 +332,21 @@ function E.execute(command, report)
         if x < -10000 or x > 10000 or z < -10000 or z > 10000 then
             return deny(report, command.id, startedMs, 'invalid_argument', '坐标超出允许范围')
         end
+    elseif kind == 'gather_resource' or kind == 'move_to_target' then
+        local resource = (command.params or {}).resource
+        if type(resource) ~= 'string' or GATHER_TARGETS[resource] == nil then
+            return deny(report, command.id, startedMs, 'invalid_argument',
+                'resource 必须是 twigs/grass/berries 之一（只允许固定白名单，不接受任意 prefab 名）')
+        end
     end
 
-    -- 5) 控制权二次校验（问 Bridge，不自己存状态）
+    -- 5) 提前用 buildJobArgs 校验一遍（避免等控制权 assert 回调后才报参数错）
+    local earlyArgs, earlyErr = buildJobArgs(command)
+    if earlyArgs == nil then
+        return deny(report, command.id, startedMs, 'invalid_argument', tostring(earlyErr))
+    end
+
+    -- 6) 控制权二次校验（问 Bridge，不自己存状态）
     --    QueryServer 是异步的，所以这里发起请求，在回调里启动动作。
     --    请求失败（比如 Bridge 挂了）一律拒绝，绝不"乐观放行"。
     local controllerId = (command.params or {}).controller_id
@@ -313,6 +389,41 @@ function E.execute(command, report)
 
     -- 同步阶段：校验已发出，等回调
     return { status = 'VALIDATING', note = '控制权二次校验中（异步），结果通过回执返回' }
+end
+
+--- Phase 5 M3：只读探测当前游戏构建里 ACTIONS / 组件是否可用。
+--- 任务书要求「所有 API 必须通过当前游戏构建版本实际验证」，
+--- 所以 pick_up_item 不能凭空写 ACTIONS.PICKUP，先探测再决定。
+--- 只查固定名单里的键是否存在，绝不把外部字符串当动作名执行。
+function E.probeGameActions()
+    local result = { ok = true, actions = {}, components = {}, jobs = {} }
+    local keys = { 'PICK', 'HARVEST', 'CHOP', 'MINE', 'DIG', 'PICKUP', 'GIVE', 'EAT', 'BUILD' }
+    local A = GLOBAL.ACTIONS
+    for _, key in ipairs(keys) do
+        local ok, present = pcall(function() return A ~= nil and A[key] ~= nil end)
+        result.actions[key] = (ok and present == true) or false
+    end
+    -- 已知组件是否存在（决定地面物品拾取能否走原生路径）
+    local ckeys = { 'inventoryitem', 'pickable', 'workable', 'harvestable' }
+    for _, key in ipairs(ckeys) do
+        -- 组件是否注册在实体上要在运行时看，这里只报告"能否安全读取"
+        result.components[key] = 'runtime_only'
+    end
+    -- Whale.actions 里已登记的 JOBS（固定白名单可读）
+    if Whale ~= nil and Whale.actions ~= nil and Whale.actions.Known ~= nil then
+        local ok, list = pcall(Whale.actions.Known)
+        if ok and type(list) == 'table' then result.jobs = list end
+    end
+    -- M3 可用资源白名单
+    result.gather_targets = (function()
+        local list = {}
+        for k in pairs(GATHER_TARGETS) do list[#list + 1] = k end
+        table.sort(list)
+        return list
+    end)()
+    result.pickup_supported = result.actions.PICKUP == true
+    result.note = 'PICKUP 是否可用以真实游戏返回为准；为 false 时 M3 不实现 pick_up_item'
+    return result
 end
 
 --- 只读：移动状态（不需要控制权，不修改游戏）

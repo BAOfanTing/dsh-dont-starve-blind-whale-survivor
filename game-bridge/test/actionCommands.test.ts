@@ -40,12 +40,12 @@ const post = async (base: string, path: string, body: unknown) => {
   return { status: r.status, json: (await r.json()) as any }
 }
 
-test('M2：COMMAND_TYPES 含 3 个移动动作，测试命令仍在', () => {
+test('M2/M3：COMMAND_TYPES 含移动 + 采集动作，测试命令仍在', () => {
   assert.ok(COMMAND_TYPES.includes('move_to'))
   assert.ok(COMMAND_TYPES.includes('stop_movement'))
   assert.ok(COMMAND_TYPES.includes('get_movement_status'))
   assert.ok(COMMAND_TYPES.includes('ping'))
-  assert.equal(COMMAND_TYPES.length, 7)
+  assert.equal(COMMAND_TYPES.length, 10, '4 测试命令 + 3 移动(M2) + 3 采集(M3)')
 })
 
 test('M2：动作命令缺 controller_id/session_id → 400', async () => {
@@ -165,5 +165,51 @@ test('M2 回归：get_movement_status 也绑定 master 分片（真机踩到 cav
       protocol_version: '1.0', token: TOKEN, session_id: 'MASTER2', shard: 'master', last_acknowledged_id: null,
     })
     assert.equal(master.json.command?.type, 'get_movement_status', 'master 应取到只读状态查询')
+  } finally { await h.close() }
+})
+
+test('M3：COMMAND_TYPES 含 3 个采集相关命令', () => {
+  assert.ok(COMMAND_TYPES.includes('gather_resource'))
+  assert.ok(COMMAND_TYPES.includes('move_to_target'))
+  assert.ok(COMMAND_TYPES.includes('probe_game_actions'))
+  assert.equal(COMMAND_TYPES.length, 10)
+})
+
+test('M3：gather_resource 需要控制权 + 自动绑定 master，probe_game_actions 只读且绑 master', async () => {
+  const h = await start()
+  try {
+    const denied = await post(h.base, '/api/v1/commands/enqueue', {
+      type: 'gather_resource', controller_id: 'C1', session_id: 'S1', params: { resource: 'twigs' },
+    })
+    assert.equal(denied.status, 403, '无控制权应拒绝')
+
+    h.control.update({
+      mode: 'SUPERVISED', holder: 'C1', session_id: 'S1', lease_expires_at: Date.now() + 60000,
+      emergency_stop: false, reason: 'M3 测试',
+    })
+    const ok = await post(h.base, '/api/v1/commands/enqueue', {
+      type: 'gather_resource', controller_id: 'C1', session_id: 'S1', params: { resource: 'twigs', count: 3 },
+    })
+    assert.equal(ok.status, 200)
+    assert.equal(ok.json.command.type, 'gather_resource')
+    assert.equal(ok.json.command.params.controller_id, 'C1')
+
+    // caves 不该取走采集动作
+    const caves = await post(h.base, '/api/v1/commands/poll', {
+      protocol_version: '1.0', token: TOKEN, session_id: 'CAVES_M3', shard: 'caves', last_acknowledged_id: null,
+    })
+    assert.notEqual(caves.json.command?.type, 'gather_resource')
+    const master = await post(h.base, '/api/v1/commands/poll', {
+      protocol_version: '1.0', token: TOKEN, session_id: 'MASTER_M3', shard: 'master', last_acknowledged_id: null,
+    })
+    assert.equal(master.json.command?.type, 'gather_resource')
+
+    // 只读探测不需要控制权，但仍绑 master
+    const probe = await post(h.base, '/api/v1/commands/enqueue', { type: 'probe_game_actions', params: {} })
+    assert.equal(probe.status, 200)
+    const caves2 = await post(h.base, '/api/v1/commands/poll', {
+      protocol_version: '1.0', token: TOKEN, session_id: 'CAVES_M3B', shard: 'caves', last_acknowledged_id: null,
+    })
+    assert.notEqual(caves2.json.command?.type, 'probe_game_actions')
   } finally { await h.close() }
 })

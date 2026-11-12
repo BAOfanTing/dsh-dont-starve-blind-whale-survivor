@@ -22,10 +22,12 @@ local tonumber = GLOBAL.tonumber
 
 local C = {}
 
--- Phase 5 M2：会修改游戏状态的动作命令（固定白名单，绝不执行任意外部字符串）
+-- Phase 5 M2/M3：固定白名单，绝不执行任意外部字符串
 local ALLOWED = { ping = true, echo = true, get_state = true, refresh_state = true,
-    move_to = true, stop_movement = true, get_movement_status = true }
-local ACTION_COMMANDS = { move_to = true, stop_movement = true }
+    move_to = true, stop_movement = true, get_movement_status = true,
+    gather_resource = true, move_to_target = true, probe_game_actions = true }
+local ACTION_COMMANDS = { move_to = true, stop_movement = true,
+    gather_resource = true, move_to_target = true }
 
 local polling = false
 local nextPollAt = 0
@@ -158,6 +160,16 @@ local function execute(command)
         local ok, status = pcall(BWS2.actionExecutor.movementStatus)
         if not ok then return 'FAILED', nil, 'movement_status_error: ' .. tostring(status) end
         return 'SUCCEEDED', status, nil
+    elseif kind == 'probe_game_actions' then
+        -- Phase 5 M3：只读探测当前游戏构建里 ACTIONS / 组件是否可用。
+        -- 任务书要求「所有 API 必须通过当前游戏构建版本实际验证」，
+        -- 不把外部字符串当动作名执行，只查固定名单里的键是否存在。
+        if BWS2.actionExecutor == nil then
+            return 'FAILED', nil, 'action_executor_not_loaded'
+        end
+        local ok, result = pcall(BWS2.actionExecutor.probeGameActions)
+        if not ok then return 'FAILED', nil, 'probe_actions_error: ' .. tostring(result) end
+        return 'SUCCEEDED', result, nil
     end
     return 'FAILED', nil, 'unsupported_command: ' .. tostring(kind)
 end
@@ -307,7 +319,8 @@ function C.status()
         last_acknowledged_id = lastAcknowledgedId,
         last_command = lastCommand,
         last_error = lastError,
-        allowed = { 'ping', 'echo', 'get_state', 'refresh_state', 'move_to', 'stop_movement', 'get_movement_status' },
+        allowed = { 'ping', 'echo', 'get_state', 'refresh_state', 'move_to', 'stop_movement',
+            'get_movement_status', 'gather_resource', 'move_to_target', 'probe_game_actions' },
         action_executor = BWS2.actionExecutor ~= nil and BWS2.actionExecutor.status() or nil,
     }
 end

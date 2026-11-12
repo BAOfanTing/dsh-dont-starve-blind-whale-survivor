@@ -227,13 +227,16 @@ test('M2 Lua：get_movement_status 只读，不需要控制权，不启动动作
   `)
 })
 
-test('M2 Lua：status() 只暴露固定白名单动作', async () => {
+test('M2/M3 Lua：status() 只暴露固定白名单动作', async () => {
   const fengari = await import('fengari')
   const { run } = load(fengari)
   run(`
     local s = BWS2.actionExecutor.status()
-    assert(#s.known_actions == 2, "M2 只有 2 个写动作，实际 " .. tostring(#s.known_actions))
-    assert(s.known_actions[1] == "move_to")
-    assert(s.known_actions[2] == "stop_movement")
+    assert(#s.known_actions == 4, "M2(2) + M3(2) 共 4 个写动作，实际 " .. tostring(#s.known_actions))
+    -- Known() 按字母序返回
+    assert(s.known_actions[1] == "gather_resource")
+    assert(s.known_actions[2] == "move_to")
+    assert(s.known_actions[3] == "move_to_target")
+    assert(s.known_actions[4] == "stop_movement")
   `)
 })

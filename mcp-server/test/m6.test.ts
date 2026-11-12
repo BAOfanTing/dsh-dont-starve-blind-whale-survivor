@@ -37,6 +37,7 @@ function realToken(): string {
 const TOKEN = realToken()
 
 const EXPECTED_TOOLS = [
+  'gather_resource',
   'get_base_status',
   'get_bridge_status',
   'get_command_result',
@@ -49,6 +50,8 @@ const EXPECTED_TOOLS = [
   'get_player_status',
   'get_recent_events',
   'get_world_status',
+  'move_to_target',
+  'probe_game_actions',
   'refresh_game_state',
 ]
 
@@ -108,12 +111,14 @@ test('stdio：官方 Client 握手 + 能力发现', async () => {
     assert.ok(client.getServerCapabilities()?.tools, '应声明 tools 能力')
 
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 13)
+    assert.equal(tools.length, 16)
     assert.deepEqual(tools.map((tool) => tool.name).sort(), EXPECTED_TOOLS)
+    // Phase 5 M3：2 个写动作工具显式标 false，其余只读
+    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target'])
     for (const tool of tools) {
       assert.ok(tool.description && tool.description.length > 4, `${tool.name} 缺描述`)
       assert.ok(tool.inputSchema, `${tool.name} 缺 inputSchema`)
-      assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name} 必须只读`)
+      assert.equal(tool.annotations?.readOnlyHint, !WRITE_TOOLS.has(tool.name), `${tool.name} readOnlyHint 不对`)
     }
   } finally {
     await client.close()
@@ -141,24 +146,28 @@ test('stdio：6 个资源 + 4 个提示词', async () => {
   }
 })
 
-test('stdio：12 个工具全部可调用，且都不返回 NOT_IMPLEMENTED', async () => {
+test('stdio：16 个工具全部可调用，且都不返回 NOT_IMPLEMENTED', async () => {
   const client = await connectStdio()
   try {
     const results: Array<{ name: string; isError: boolean; code?: string; text: string }> = []
     for (const name of EXPECTED_TOOLS) {
-      const args = name === 'get_command_result' ? { command_id: 'cmd_nonexistent_1' } : {}
+      const args =
+        name === 'get_command_result' ? { command_id: 'cmd_nonexistent_1' }
+          : name === 'gather_resource' ? { resource: 'twigs', count: 1 }
+            : name === 'move_to_target' ? { resource: 'grass' }
+              : {}
       const result = await callTool(client, name, args)
       const code = (result.structured.error as { code?: string } | undefined)?.code
       results.push({ name, isError: result.isError, code, text: result.text })
     }
 
-    // 不允许任何工具再返回 NOT_IMPLEMENTED（12 个都实现了）
+    // 不允许任何工具再返回 NOT_IMPLEMENTED（16 个都实现了）
     for (const result of results) {
       assert.notEqual(result.code, 'NOT_IMPLEMENTED', `${result.name} 不该再是 NOT_IMPLEMENTED`)
       assert.ok(result.text.length > 0, `${result.name} 应返回文本内容`)
     }
 
-    // 环境类工具在游戏未连上时允许 GAME_DISCONNECTED，但必须是真实原因
+    // 写动作工具在无控制权时应返回 SESSION_INVALID（程序层拒绝，不是崩溃）
     const allowedErrors = ['GAME_DISCONNECTED', 'BRIDGE_UNAVAILABLE', 'STATE_STALE', 'SESSION_INVALID', 'INVALID_ARGUMENT', 'TOOL_TIMEOUT']
     for (const result of results.filter((item) => item.isError)) {
       assert.ok(allowedErrors.includes(String(result.code)), `${result.name} 错误码异常：${String(result.code)}`)
@@ -303,7 +312,7 @@ test('HTTP：官方 Client 走 Streamable HTTP，能力与 stdio 一致', async 
   const client = await connectHttp(h.base)
   try {
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 13)
+    assert.equal(tools.length, 16)
     assert.deepEqual(tools.map((tool) => tool.name).sort(), EXPECTED_TOOLS)
 
     const { resources } = await client.listResources()
@@ -363,8 +372,8 @@ test('HTTP：多会话并发（两个客户端各自独立）', async () => {
     }
     // 两个客户端都能独立发现工具
     const [la, lb] = await Promise.all([a.listTools(), b.listTools()])
-    assert.equal(la.tools.length, 13)
-    assert.equal(lb.tools.length, 13)
+    assert.equal(la.tools.length, 16)
+    assert.equal(lb.tools.length, 16)
   } finally {
     await a.close()
     await b.close()

@@ -63,6 +63,7 @@ export const ACTION_TYPES = [
   'equip_item', 'chop_tree', 'mine_rock',
   'eat_item', 'craft_item', 'build_structure', 'build_campfire',
   'get_action_status', 'cancel_action', 'get_control_status',
+  'probe_game_actions',
 ] as const
 export type ActionType = (typeof ACTION_TYPES)[number]
 
@@ -71,9 +72,16 @@ export const CONFIRMATION_REQUIRED: ReadonlySet<ActionType> = new Set<ActionType
   'chop_tree', 'mine_rock', 'eat_item', 'craft_item', 'build_structure', 'build_campfire',
 ])
 
+/** Phase 5 M3：初期允许在受限策略下自动执行的采集类动作（任务书 §11） */
+export const AUTONOMOUS_SAFE_ACTIONS: ReadonlySet<ActionType> = new Set<ActionType>([
+  'move_to', 'move_to_target', 'gather_resource', 'pick_up_item', 'collect_dropped_items',
+])
+
 /** 纯查询类动作（不修改游戏状态，M1 允许 dry-run） */
 export const READ_ONLY_ACTIONS: ReadonlySet<ActionType> = new Set<ActionType>([
   'get_movement_status', 'get_action_status', 'get_control_status',
+  // Phase 5 M3：只读探测游戏内 ACTIONS 是否可用（不下发任何动作）
+  'probe_game_actions',
 ])
 
 export interface ActionCommand {

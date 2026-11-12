@@ -23,7 +23,13 @@ import type { McpClient, McpToolInfo } from '../mcp/client.js'
 import type { LLMToolDefinition } from '../llm/types.js'
 import type { Logger } from '../utils/logger.js'
 
-/** 只读白名单（Phase 3 的 12 个 + Phase 5 M2 的控制权查询工具；以 MCP Server 实际注册为准） */
+/** 只读白名单（Phase 3 的 12 个 + M2 控制权查询 + M3 动作探测；以 MCP Server 实际注册为准）
+ *
+ * 注意：M3 新增的 `gather_resource` / `move_to_target` 是**写动作**，故意**不**加入这里。
+ * 任务书 §11 要求默认 SUPERVISED、用户确认后才允许修改游戏状态；
+ * 内置 Agent 在这一版只保留读与规划能力，避免模型绕过确认直接改游戏。
+ * 外部 MCP 客户端能看到写工具，但调用时工具内的 requireControl() 会查控制权。
+ */
 export const READ_ONLY_ALLOWLIST = [
   'get_game_status',
   'get_bridge_status',
@@ -39,6 +45,8 @@ export const READ_ONLY_ALLOWLIST = [
   'get_command_result',
   // Phase 5 M2：只读，Agent 执行动作前应能查控制权状态
   'get_control_status',
+  // Phase 5 M3：只读探测游戏原生 ACTIONS 是否可用
+  'probe_game_actions',
 ] as const
 
 export type AllowedToolName = (typeof READ_ONLY_ALLOWLIST)[number]

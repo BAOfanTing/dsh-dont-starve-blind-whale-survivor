@@ -167,22 +167,31 @@ async function harness(options: { stale?: boolean; snapshot?: Record<string, unk
   }
 }
 
-test('工具清单：12 个工具，全部只读，无重复', () => {
-  assert.equal(TOOLS.length, 13)
+test('工具清单：16 个工具，2 个写动作明确标注，无重复', () => {
+  assert.equal(TOOLS.length, 16)
   const names = TOOLS.map((tool) => tool.name)
-  assert.equal(new Set(names).size, 13)
+  assert.equal(new Set(names).size, 16)
+  // Phase 5 M3：只允许这 2 个写动作工具，且必须显式标 readOnly=false
+  const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target'])
+  let writeCount = 0
   for (const tool of TOOLS) {
-    assert.equal(tool.readOnly, true, `${tool.name} 必须只读`)
     assert.ok(tool.description.length > 8, `${tool.name} 描述太短`)
     assert.ok(tool.schema !== undefined, `${tool.name} 缺 schema`)
+    if (WRITE_TOOLS.has(tool.name)) {
+      assert.equal(tool.readOnly, false, `${tool.name} 必须标成写动作`)
+      writeCount += 1
+    } else {
+      assert.equal(tool.readOnly, true, `${tool.name} 必须只读`)
+    }
   }
-  // 只读工具里不允许出现任何写操作命名
+  assert.equal(writeCount, 2, '写动作工具只能有 2 个')
+  // 只读工具里不允许出现任何写操作命名（写动作工具走固定白名单，不在此约束内）
   // 按词边界匹配，避免 threats 里的 "eat" 这类误伤
   const forbidden = ['move', 'attack', 'chop', 'mine', 'eat', 'craft', 'build', 'drop', 'kill', 'teleport']
-  for (const tool of TOOLS) {
+  for (const tool of TOOLS.filter((t) => !WRITE_TOOLS.has(t.name))) {
     const segments = tool.name.split('_')
     for (const word of forbidden) {
-      assert.ok(!segments.includes(word), `工具名不应包含写操作：${tool.name}（${word}）`)
+      assert.ok(!segments.includes(word), `只读工具名不应包含写操作：${tool.name}（${word}）`)
     }
   }
 })

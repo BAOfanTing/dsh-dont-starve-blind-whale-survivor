@@ -58,13 +58,16 @@ async function withAdapter(fn: (adapter: ToolAdapter, client: McpClient) => Prom
   }
 }
 
-test('白名单：只适配 12 个只读工具，全部来自 MCP Server 实际清单', async () => {
+test('白名单：只适配 14 个只读工具；MCP 共 16 个，2 个写动作被跳过', async () => {
   await withAdapter(async (adapter, client) => {
     const names = adapter.names().sort()
-    assert.equal(names.length, 13, `实际 ${names.length}：${names.join(',')}`)
+    assert.equal(names.length, 14, `实际 ${names.length}：${names.join(',')}`)
     assert.deepEqual(names, [...READ_ONLY_ALLOWLIST].sort())
-    // 与 MCP Server 的真实清单一致（不是我们凭空写的）
-    assert.deepEqual(names, client.listTools().map((tool) => tool.name).sort())
+    // MCP Server 真实清单是 16 个；写动作工具故意不加入 Agent 白名单（任务书 §11 默认 SUPERVISED）
+    const all = client.listTools().map((tool) => tool.name).sort()
+    assert.equal(all.length, 16)
+    const nameSet = new Set<string>(names)
+    assert.deepEqual(all.filter((name) => !nameSet.has(name)).sort(), ['gather_resource', 'move_to_target'])
   })
 })
 
@@ -174,7 +177,7 @@ test('白名单：越权工具名一律拒绝，且错误里给出可用工具',
           assert.ok(error instanceof ToolAdapterError)
           assert.equal(error.code, 'TOOL_NOT_ALLOWED', `${name} 应被拒`)
           const detail = error.detail as { allowed?: string[] }
-          assert.equal(detail.allowed?.length, 13, '应列出 13 个可用工具')
+          assert.equal(detail.allowed?.length, 14, '应列出 14 个可用工具')
           return true
         },
         `${name} 不该被允许`,
@@ -260,7 +263,7 @@ test('toToolMessage：保留 tool_call_id 与工具名', async () => {
 test('toolDefinitions：给 LLM 的定义与适配数量一致，且都是 function 类型', async () => {
   await withAdapter(async (adapter) => {
     const defs = adapter.toolDefinitions()
-    assert.equal(defs.length, 13)
+    assert.equal(defs.length, 14)
     for (const def of defs) {
       assert.equal(def.type, 'function')
       assert.ok(def.function.name.length > 0)
@@ -272,9 +275,9 @@ test('toolDefinitions：给 LLM 的定义与适配数量一致，且都是 funct
 test('refresh：MCP 工具清单变化后重建适配（不写死）', async () => {
   await withAdapter(async (adapter) => {
     const first = adapter.refresh()
-    assert.equal(first.adapted, 13)
-    assert.equal(first.skipped.length, 0, '13 个都该适配成功')
+    assert.equal(first.adapted, 14)
+    assert.equal(first.skipped.length, 2, '2 个写动作工具应被跳过')
     const second = adapter.refresh()
-    assert.equal(second.adapted, 13, '重复刷新结果稳定')
+    assert.equal(second.adapted, 14, '重复刷新结果稳定')
   })
 })

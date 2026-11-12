@@ -47,9 +47,9 @@ export function createMcpServer(service: GameToolService, logger: Logger): McpSe
         // zod 4 实现 Standard Schema，SDK 据此生成 JSON Schema 并做参数校验
         inputSchema: tool.schema as unknown as StandardSchemaWithJSON,
         annotations: {
-          readOnlyHint: true,
-          destructiveHint: false,
-          idempotentHint: true,
+          readOnlyHint: tool.readOnly,
+          destructiveHint: !tool.readOnly,
+          idempotentHint: tool.readOnly,
           openWorldHint: false,
         },
       },
