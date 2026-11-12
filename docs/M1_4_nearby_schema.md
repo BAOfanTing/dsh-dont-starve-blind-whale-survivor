@@ -1,6 +1,6 @@
 # M1.4 · 附近实体观察数据结构（协议）
 
-> schema：`bws.nearby/1`（模组 0.13.0 起）
+> schema：`bws.nearby/1`（模组 0.13.0 起；**0.13.2 起 `snapshot_id` 带运行实例号**）
 > 生产者：Lua `scripts/whale/nearby.lua`（唯一实现），由 `observe.lua` 放进 `data.nearby`
 > 消费者：Node `lib/state/snapshot.js`（原样透传）→ `get_state`（text / json）
 > 原则：**只报真实读到的东西**；读不到就 `null` / 不出现；**GUID 只在 Lua 内部用于跨扫描匹配，绝不发给模型**。
@@ -13,7 +13,8 @@
 "nearby": {
   "status": "ok",              // ok | empty | error
   "schema": "bws.nearby/1",
-  "snapshot_id": "n17",        // ★ 扫描快照号：#N 只在这个 id 内有效
+  "runtime_id": "r1794500000-5138",  // 0.13.2+：运行实例号（模块每加载一次换一个）
+  "snapshot_id": "r1794500000-5138-n17", // ★ 扫描快照号：#N 只在这个 id 内有效
   "radius": 20,                // 来自 OBSERVER_SCAN_RADIUS（格）
   "scan_seconds": 4,           // 来自 OBSERVER_SCAN_SECONDS
   "cached": false,             // true = 本次没重扫，用的是上一次结果
@@ -56,10 +57,10 @@
 | 桶 | 判据（全部来自真实 tag / 组件） | 备注 |
 |---|---|---|
 | `threats` | 有 `health` 且未死，并且：`HasTag("hostile")` **或** `combat.target == 当前观察对象` | 不看 prefab 名字 |
-| `food` | ①地上的可食用物品（`inventoryitem.owner == nil` 且有 `edible`）；②可采/可收且来源在食物白名单（浆果丛、胡萝卜、蘑菇、玉米…） | 白名单 `FOOD_SOURCES` |
-| `resources` | 有 `workable`（CHOP/MINE/DIG/HAMMER）；或可采/可收但**不是食物**；或地上的材料（`inventoryitem` 无 owner 且不可食用） | 草/树枝/木头/石头都在这 |
+| `food` | ①**地上的真食物**：`inventoryitem.owner == nil` 且**没有 `health`** 且 `edible.foodtype` 不属于 {ROUGHAGE, SEEDS, GEARS}；②可采/可收且来源在食物白名单（浆果丛、胡萝卜、蘑菇、玉米…） | 白名单 `FOOD_SOURCES` + `is_real_food()`（0.13.1：`twigs` 带 edible(ROUGHAGE)，不能当食物） |
+| `resources` | 有 `workable`（CHOP/MINE/DIG/HAMMER）；或可采/可收但**不是食物**；或**地上的材料/工具/燃料**（`inventoryitem.owner == nil` 且**没有 `health`**） | 草/树枝/木头/石头；**活物与设施不算**（0.13.1：红雀/南瓜灯都带 inventoryitem） |
 | `containers` | 有 `container` 组件 | 箱子、冰箱、锅 |
-| `structures` | `HasTag("structure")`；或 `prototyper`（科技设施）；或 `fueled` + `HasTag("fire")`（火堆/火坑） | 容器优先于本桶 |
+| `structures` | `HasTag("structure")`；或 `prototyper`（科技设施）；或 `fueled` + `HasTag("fire")`（火堆/火坑）；或 `HasTag("light")`（南瓜灯这类摆出来的光源） | 容器优先于本桶 |
 | `creatures` | 有 `health` 但不是威胁；或 `animal`/`monster` 标签 | 猪人、兔子、牛 |
 | `other` | 有观察价值但不属于上面任何一类 | 兜底 |
 
@@ -111,7 +112,7 @@ GUID 只存在于 Lua 内部的 refs 表与 delta 基线里，用于"两次扫�
 | 唯一性 | 一份快照内唯一；`#N` 与 `buckets` 里的对象一一对应 |
 | 文本/JSON | 用**同一个** `ref` 字段（文本渲染只读这份数据） |
 | 复用 | 缓存命中（`scan.reused = true`）时**不重新编号**，`snapshot_id` 也不变 |
-| 绑定 | 绑定 `nearby.snapshot_id`（扫描快照号），**不是** `observer.snapshot_id`（写盘序号） |
+| 绑定 | 绑定 `nearby.snapshot_id`（= `<运行实例号>-n<序号>`），**不是** `observer.snapshot_id`（写盘序号）；0.13.2 前它只有 `n<序号>`，重启会撞号 |
 | 过期 | 新扫描 = 新 `snapshot_id`，旧 `#N` 不能当新快照里的同一个实体 |
 
 **为什么不用 `observer.snapshot_id`**：状态文件每秒重写一次（`INTERVAL`），但扫描按 `OBSERVER_SCAN_SECONDS` 才做一次。

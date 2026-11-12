@@ -18,9 +18,32 @@ local GLOBAL = GLOBAL
 local pcall = GLOBAL.pcall
 local tonumber = GLOBAL.tonumber
 local type = type
+local os = GLOBAL.os or { time = function() return 0 end }
 
 local U = Whale.util
 local N = {}
+
+--- 运行实例号：模块每加载一次就换一个（= 一次"运行实例"：游戏启动 / 重新进世界）。
+--- 为什么需要它：scan_seq 每次运行都从 1 开始，如果 snapshot_id 只有 "n1"，游戏重启后
+--- 新实例也会产出 "n1"；Node/M2 拿着上一次运行的 (#1, n1) 来解析，就会命中**另一个实体**。
+--- Session 不可靠：真机测过两次重启 session_id 没变。所以必须有"这是哪一次运行"的标识。
+local RUNTIME_ID = (function()
+    local stamp = 0
+    if os ~= nil and os.time ~= nil then
+        local ok, value = pcall(os.time)
+        if ok and tonumber(value) ~= nil then stamp = tonumber(value) end
+    end
+    local salt = 0
+    if math ~= nil and math.random ~= nil then
+        local ok, value = pcall(math.random, 1000, 9999)
+        if ok and tonumber(value) ~= nil then salt = tonumber(value) end
+    end
+    return string.format("r%d-%04d", stamp, salt)
+end)()
+
+function N.runtime_id()
+    return RUNTIME_ID
+end
 
 N.SCHEMA = "bws.nearby/1"
 
@@ -55,6 +78,23 @@ local FOOD_SOURCES = {
     corn = true, pumpkin = true, eggplant = true, watermelon = true, pomegranate = true,
     dragonfruit = true, durian = true, lichen = true, stonefruit = true,
 }
+
+--- 这些 foodtype 虽然"能吃"，但不是 AI 该当食物用的（树枝、种子、齿轮…）
+local FOODTYPE = GLOBAL.FOODTYPE
+local NON_FOOD_TYPES = {}
+if FOODTYPE ~= nil then
+    NON_FOOD_TYPES[FOODTYPE.ROUGHAGE] = true -- 树枝/草：燃料和材料
+    NON_FOOD_TYPES[FOODTYPE.SEEDS] = true    -- 种子：喂鸟/种地
+    NON_FOOD_TYPES[FOODTYPE.GEARS] = true    -- 齿轮：修机械
+end
+
+local function is_real_food(edible)
+    if edible == nil then return false end
+    local foodtype = edible.foodtype
+    if foodtype == nil then return true end
+    if NON_FOOD_TYPES[foodtype] then return false end
+    return true
+end
 
 local function has_tag(ent, tag)
     return ent ~= nil and ent:HasTag(tag)
@@ -115,8 +155,12 @@ function N.Classify(ent, actor)
     local harvestable = comp(ent, "harvestable") ~= nil
     local work = work_action_of(ent)
 
-    -- 2) 食物：地上能直接吃的，或采下来就是吃的
-    if item ~= nil and edible ~= nil and item.owner == nil then return "food" end
+    -- 地上物品：**必须没有 health**。红雀/南瓜灯这类"带 inventoryitem 的生物/设施"不算掉落物
+    -- （真机踩到：红雀因为带 inventoryitem 被归到 resources；南瓜灯也是）
+    local ground_item = item ~= nil and item.owner == nil and h == nil
+
+    -- 2) 食物：地上真能吃的，或采下来就是吃的（树枝/种子/齿轮这种"能吃但不算食物"的不算）
+    if ground_item and is_real_food(edible) then return "food" end
     if pickable or harvestable then
         local prefab = string.lower(tostring(ent.prefab or ""))
         if FOOD_SOURCES[prefab] then return "food" end
@@ -125,20 +169,21 @@ function N.Classify(ent, actor)
         end
     end
 
-    -- 3) 资源：能砍/挖/铲/拆的，能采的非食物，地上的材料
+    -- 3) 资源：能砍/挖/铲/拆的，能采的非食物，地上的材料/工具/燃料
     if work ~= nil then return "resources" end
     if pickable or harvestable then return "resources" end
-    if item ~= nil and item.owner == nil then return "resources" end
+    if ground_item then return "resources" end
 
     -- 4) 容器（箱子、冰箱、锅这类带 container 的）
     if comp(ent, "container") ~= nil then return "containers" end
 
-    -- 5) 建筑 / 工作站 / 火堆
+    -- 5) 建筑 / 工作站 / 火堆 / 光源（南瓜灯这类摆出来的照明设施）
     if has_tag(ent, "structure") then return "structures" end
     if comp(ent, "prototyper") ~= nil then return "structures" end
     if comp(ent, "fueled") ~= nil and has_tag(ent, "fire") then return "structures" end
+    if has_tag(ent, "light") and not has_tag(ent, "player") then return "structures" end
 
-    -- 6) 生物：有血有战斗但不是敌对（猪人、兔子、牛……）
+    -- 6) 生物：有血但不是敌对（猪人、兔子、牛、红雀……）
     if h ~= nil then return "creatures" end
     if has_tag(ent, "animal") or has_tag(ent, "monster") then return "creatures" end
 
@@ -194,12 +239,10 @@ local function describe(ent, actor, category)
     end
 
     local item = comp(ent, "inventoryitem")
-    if item ~= nil and item.owner == nil then
+    local health_comp = comp(ent, "health")
+    if item ~= nil and item.owner == nil and health_comp == nil then
         block.stack_size = U.count(ent)
-    end
-
-    if block.is_workable == nil and comp(ent, "inventoryitem") ~= nil and comp(ent, "edible") ~= nil then
-        block.edible = true
+        if is_real_food(comp(ent, "edible")) then block.edible = true end
     end
 
     local container = comp(ent, "container")
@@ -406,7 +449,7 @@ end
 
 local function build(actor, info, now, opts, identity)
     scan_seq = scan_seq + 1
-    local snapshot_id = "n" .. tostring(scan_seq)
+    local snapshot_id = RUNTIME_ID .. "-n" .. tostring(scan_seq)
     local started = U.now()
 
     local scanned, err = scan(actor, opts.radius)
@@ -459,7 +502,9 @@ local function build(actor, info, now, opts, identity)
         ref_map[entry.block.ref] = entry.ent
         buckets[entry.block.category][#buckets[entry.block.category] + 1] = entry.block
     end
-    refs[snapshot_id] = ref_map
+    -- 只保留**当前**扫描的引用表：旧快照的 #N 必须失效（否则 M2 会拿过期引用去操作），
+    -- 顺手也避免 refs 越攒越多。
+    refs = { [snapshot_id] = ref_map }
 
     local delta = compute_delta(kept, baseline_key(identity))
     local duration_ms = math.floor((U.now() - started) * 1000)
@@ -467,6 +512,7 @@ local function build(actor, info, now, opts, identity)
     return {
         status = (#kept > 0) and "ok" or "empty",
         schema = N.SCHEMA,
+        runtime_id = RUNTIME_ID,
         snapshot_id = snapshot_id,
         radius = opts.radius,
         scan_seconds = opts.scan_seconds,
@@ -507,6 +553,7 @@ function N.Observe(actor, info, now, opts)
         return {
             status = cached.status,
             schema = cached.schema,
+            runtime_id = RUNTIME_ID,
             snapshot_id = cached.snapshot_id,   -- 同一个扫描快照号：引用仍然有效
             radius = cached.radius,
             scan_seconds = cached.scan_seconds,
@@ -540,6 +587,11 @@ end
 --- 把 #N 解析回实体（给 M2 的动作执行器用；现在只做"能不能解析"的基础设施）
 --- @return entity|nil, reason
 function N.Resolve(snapshot_id, ref)
+    -- 先挡掉"上一次运行"的快照：重启/重进世界后 scan_seq 会从头开始，编号会撞，
+    -- 不挡的话旧 #N 会解析成新实例里的另一个实体（M2 的动作安全前提）。
+    if type(snapshot_id) ~= "string" or string.sub(snapshot_id, 1, #RUNTIME_ID + 1) ~= (RUNTIME_ID .. "-") then
+        return nil, "stale_snapshot"
+    end
     local map = refs[snapshot_id]
     if map == nil then return nil, "stale_snapshot" end
     local ent = map[ref]

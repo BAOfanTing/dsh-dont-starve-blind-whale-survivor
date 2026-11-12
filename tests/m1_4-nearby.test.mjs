@@ -24,6 +24,9 @@ GLOBAL.STRINGS = { NAMES = {
     LOG = "木头", CARROT = "胡萝卜",
 } }
 GLOBAL.EQUIPSLOTS = { HANDS = "hands", HEAD = "head", BODY = "body" }
+GLOBAL.FOODTYPE = { GENERIC = "GENERIC", MEAT = "MEAT", VEGGIE = "VEGGIE", INSECT = "INSECT",
+                    GOODIES = "GOODIES", ELEMENTAL = "ELEMENTAL", ROUGHAGE = "ROUGHAGE",
+                    SEEDS = "SEEDS", GEARS = "GEARS" }
 GLOBAL.ACTIONS = { CHOP = { id = "CHOP" }, MINE = { id = "MINE" }, DIG = { id = "DIG" }, HAMMER = { id = "HAMMER" },
                    PICK = { id = "PICK" }, PICKUP = { id = "PICKUP" }, HARVEST = { id = "HARVEST" } }
 GLOBAL.TheNet = { GetSessionIdentifier = function() return SESSION end }
@@ -73,7 +76,7 @@ function mkent(opts)
             ent.components.stackable = { StackSize = function() return opts.stack end }
         end
     end
-    if opts.edible then ent.components.edible = { foodtype = "VEGGIE" } end
+    if opts.edible then ent.components.edible = { foodtype = opts.edible_type or "VEGGIE" } end
     if opts.container then
         ent.components.container = { IsOpen = function() return opts.container_open == true end }
     end
@@ -642,4 +645,60 @@ test('M1.4-22 Node 归一化：buckets / refs / delta 原样保留，不被重�
   assert.equal(payload.nearby.delta.added[0].ref, '#1')
   assert.equal(payload.nearby.snapshot_id, 'n7')
   assert.equal(payload.nearby.truncated, true)
+})
+
+// ─────────────────────────── 真机暴露的分类回归（2026-11-12 实机采样）───────────────────────────
+//
+// 实机样本里发现三个错判，根因都来自《饥荒》自己的组件定义（不是我们的假数据能猜到的）：
+//   · twigs 真的带 edible（foodtype=ROUGHAGE）→ 以前被判成 food
+//   · 红雀(crow) 带 inventoryitem + health + combat      → 以前被判成 resources
+//   · 南瓜灯(pumpkin_lantern) 带 inventoryitem + health + light → 以前被判成 resources
+
+test('M1.4-23 真机回归：树枝（edible 但 foodtype=ROUGHAGE）算资源，不算食物', async () => {
+  const env = await load()
+  env.reset()
+  env.run('NEARBY = { mkent({ prefab = "twigs", x = 8, z = 0, guid = 1, item = true, stack = 3, edible = true, edible_type = "ROUGHAGE" }) }', '地上的树枝')
+  const { nearby } = env.observe()
+  assert.equal(nearby.buckets.food.length, 0, '树枝是材料/燃料，别喂给 AI 当食物')
+  assert.equal(nearby.buckets.resources.length, 1)
+  assert.equal(nearby.buckets.resources[0].stack_size, 3)
+  assert.equal(nearby.buckets.resources[0].edible, undefined, '不该标成可食用')
+})
+
+test('M1.4-24 真机回归：种子（foodtype=SEEDS）算资源', async () => {
+  const env = await load()
+  env.reset()
+  env.run('NEARBY = { mkent({ prefab = "seeds", x = 4, z = 0, guid = 2, item = true, edible = true, edible_type = "SEEDS" }) }', '种子')
+  const { nearby } = env.observe()
+  assert.equal(nearby.buckets.food.length, 0)
+  assert.equal(nearby.buckets.resources.length, 1)
+})
+
+test('M1.4-25 真机回归：地上的真食物（VEGGIE）仍是食物', async () => {
+  const env = await load()
+  env.reset()
+  env.run('NEARBY = { mkent({ prefab = "carrot", x = 4, z = 0, guid = 3, item = true, edible = true, edible_type = "VEGGIE" }) }', '地上的胡萝卜')
+  const { nearby } = env.observe()
+  assert.equal(nearby.buckets.food.length, 1)
+  assert.equal(nearby.buckets.food[0].edible, true)
+})
+
+test('M1.4-26 真机回归：红雀（有 health+combat+inventoryitem）算生物，不算掉落物', async () => {
+  const env = await load()
+  env.reset()
+  env.run('NEARBY = { mkent({ prefab = "crow", x = 8, z = 0, guid = 4, hp = 25, item = true, tags = { bird = true, smallcreature = true } }) }', '一只红雀')
+  const { nearby } = env.observe()
+  assert.equal(nearby.buckets.resources.length, 0, '活物不该被当成地上的资源')
+  assert.equal(nearby.buckets.creatures.length, 1)
+  assert.equal(nearby.buckets.creatures[0].prefab, 'crow')
+})
+
+test('M1.4-27 真机回归：南瓜灯（有 health+light+inventoryitem）算建筑（光源），不算资源', async () => {
+  const env = await load()
+  env.reset()
+  env.run('NEARBY = { mkent({ prefab = "pumpkin_lantern", x = 4, z = 0, guid = 5, hp = 20, item = true, tags = { light = true, veggie = true } }) }', '南瓜灯')
+  const { nearby } = env.observe()
+  assert.equal(nearby.buckets.resources.length, 0)
+  assert.equal(nearby.buckets.structures.length, 1)
+  assert.equal(nearby.buckets.structures[0].prefab, 'pumpkin_lantern')
 })

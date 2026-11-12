@@ -1,6 +1,6 @@
 # M1.4 · 实现报告（附近实体结构化观察）
 
-> 版本：**0.12.1 → 0.13.0**（新增状态字段 + 两个配置项，属于 minor）
+> 版本：**0.12.1 → 0.13.2**（0.13.0 结构化 nearby；0.13.1 修真机暴露的分类错判；0.13.2 加引用运行实例防护）
 > 结论：附近实体已经结构化（分类桶 + `#N` 引用 + 上限/截断 + delta + 复用不重编号），
 > 文本与 JSON 同源，Node 侧零改动即兼容；**单元测试 233 → 255，全过**。
 > 真机：本轮**没有启动游戏**（上一轮 M1.2 已有 Master 单分片真机采样，但那是 M1.1 的 nearby 结构）。
@@ -123,3 +123,38 @@ build() 里：
 6. **`is_open` 依赖组件是否有 `IsOpen`**：没有就不给这个字段。
 7. **`#N` 只活在一次扫描内**：M2 必须按 `nearby.snapshot_id` 校验，不能跨快照复用编号。
 8. **没有做局部地图**（M1.5）、没有做任何动作（M2）。
+
+
+---
+
+## 8. 交付后的两次修正（都有真机依据）
+
+### 0.13.1 · 分类按真实组件修正
+
+真机采样发现三个错判，根因都在《饥荒》自己的 prefab 定义里：
+
+| 现象 | 根因（游戏源码） | 修正 |
+|---|---|---|
+| 12 根 `树枝` 被判成"食物" | `twigs.lua` 真的 `AddComponent("edible")`（foodtype=ROUGHAGE） | 食物加 `is_real_food()`：排除 ROUGHAGE / SEEDS / GEARS |
+| `种子` 被判成"食物" | `seeds.lua` 有 edible（foodtype=SEEDS） | 同上 |
+| `红雀` 被判成"资源（掉落物）" | `birds.lua` 带 `inventoryitem` + health + combat | "地上物品"分支要求**没有 health** |
+| `南瓜灯` 被判成"资源" | `pumpkin_lantern.lua` 带 `inventoryitem` + health + light | 同上；并新增 `HasTag("light")` → structures |
+
+新增 5 条回归用例（M1.4-23…27）。
+
+### 0.13.2 · 引用运行实例防护（M1.4 验收发现）
+
+真机确认 **session_id 跨重启不变**，而 `scan_seq` 每次运行从 1 开始 →
+`snapshot_id` 只有 `n<序号>` 时，重启后新旧实例会撞号，旧 `#N` 能解析成新实例里的另一个实体。
+
+修法（`nearby.lua` 约 25 行）：
+
+- 模块加载时生成 `RUNTIME_ID`（`r<os.time>-<4位随机>`），`snapshot_id = "<RUNTIME_ID>-n<序号>"`；
+- 输出 `nearby.runtime_id`，供 Node/M2 绑定；
+- `Resolve()` 先校验前缀，非当前实例一律 `stale_snapshot`；
+- `refs` 只保留当前扫描（旧快照的 #N 同时失效，也不再无限增长）。
+
+新增测试：`tests/m1_4-runtime-id.test.mjs`（跨实例拒绝、同实例旧扫描号拒绝）。
+
+> 仍未修（已报告、等你确认）：**Delta 用截断后的集合比较**，会把被挤出窗口的实体误报成 `removed`
+> （见 `docs/M1_4_acceptance_audit.md` Q2 的最小修复建议）。
