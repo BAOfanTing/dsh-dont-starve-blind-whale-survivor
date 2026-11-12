@@ -126,3 +126,28 @@ test('M2：未知命令仍被拒（白名单不开放任意动作）', async () 
     assert.equal(r.status, 400)
   } finally { await h.close() }
 })
+
+test('M2 回归：动作命令自动绑定 master 分片（真实踩到 caves 取走导致 no_player）', async () => {
+  const h = await start()
+  try {
+    h.control.update({
+      mode: 'SUPERVISED', holder: 'C1', session_id: 'S1', lease_expires_at: Date.now() + 60000,
+      emergency_stop: false, reason: '测试授权',
+    })
+    const enq = await post(h.base, '/api/v1/commands/enqueue', {
+      type: 'move_to', controller_id: 'C1', session_id: 'S1', params: { x: 1, z: 2 },
+    })
+    assert.equal(enq.status, 200)
+    // 用 poll 模拟两个分片来取，验证 shard 绑定生效
+    // 用 poll 模拟 caves 分片来取：应取不到这条动作
+    const caves = await post(h.base, '/api/v1/commands/poll', {
+      protocol_version: '1.0', token: TOKEN, session_id: 'CAVES', shard: 'caves', last_acknowledged_id: null,
+    })
+    assert.equal(caves.json.command?.type !== 'move_to', true, 'caves 分片不该取走 move_to')
+
+    const master = await post(h.base, '/api/v1/commands/poll', {
+      protocol_version: '1.0', token: TOKEN, session_id: 'MASTER', shard: 'master', last_acknowledged_id: null,
+    })
+    assert.equal(master.json.command?.type, 'move_to', 'master 分片应该取到 move_to')
+  } finally { await h.close() }
+})

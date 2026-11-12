@@ -395,6 +395,7 @@ export function createRoutes(deps: RouteDeps): Route[] {
         // （Lua 执行端还会再做一次二次校验，不能只信这一层）
         const isAction = (['move_to', 'stop_movement'] as readonly string[]).includes(type)
         let effectiveParams = (params ?? {}) as Record<string, unknown>
+        let actionShard: string | null = typeof record.shard === 'string' ? record.shard : null
         if (isAction) {
           const controllerId = typeof record.controller_id === 'string' ? record.controller_id : ''
           const sessionId = typeof record.session_id === 'string' ? record.session_id : ''
@@ -406,8 +407,11 @@ export function createRoutes(deps: RouteDeps): Route[] {
             throw new HttpError(403, 'bad_request', `${verdict.code}: ${verdict.message}`)
           }
           effectiveParams = { ...effectiveParams, controller_id: controllerId, session_id: sessionId }
+          // 实测踩到：shard=null 时 caves 分片也会把动作取走，而 caves 上没有玩家 →
+          // player_not_ready: no_player。动作必须只在玩家所在的 master 分片执行。
+          if (actionShard === null) actionShard = 'master'
         }
-        const shard = typeof record.shard === 'string' ? record.shard : null
+        const shard = actionShard
         let command: CommandRecord
         try {
           command = queue.enqueue(type, effectiveParams, { shard })
