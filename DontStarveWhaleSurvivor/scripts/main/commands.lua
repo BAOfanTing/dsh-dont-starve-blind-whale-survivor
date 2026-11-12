@@ -28,15 +28,23 @@ local ALLOWED = { ping = true, echo = true, get_state = true, refresh_state = tr
     gather_resource = true, move_to_target = true, probe_game_actions = true,
     equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
     eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
-    start_task = true, stop_task = true, get_task_status = true }
+    start_task = true, stop_task = true, get_task_status = true,
+    -- Phase 6 M4：战斗 / 撤退 / 规避 / 中止 + 战斗状态查询 + 战后治疗
+    start_combat = true, retreat_from_combat = true, evade_threat = true,
+    abort_combat = true, get_combat_status = true, probe_combat_api = true,
+    heal_self = true }
 -- 走独立执行器（action_executor）的命令：这些是**原子游戏动作**，需要控制权二次校验 + 异步回执。
 -- Phase 5 M6：start_task / stop_task **不在这里** —— 它们是任务链命令，由本文件自己处理
 -- （任务链内部会自己去调原子动作，不需要 action_executor 的 assert 流程）。
 -- 真机踩到：把它们放进来会被转给 action_executor，那里没有同名动作 → unknown_action。
+-- Phase 6 M4：战斗类命令也走 action_executor（复用它的白名单/服务端权威/控制权 assert），
+-- 到了里面再转交 BWS2.combat（战斗有自己的 0.1 秒 tick 和状态机）。
 local ACTION_COMMANDS = { move_to = true, stop_movement = true,
     gather_resource = true, move_to_target = true,
     equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
-    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
+    start_combat = true, retreat_from_combat = true, evade_threat = true, abort_combat = true,
+    heal_self = true }
 
 local polling = false
 local nextPollAt = 0
@@ -179,6 +187,22 @@ local function execute(command)
         local ok, result = pcall(BWS2.actionExecutor.probeGameActions)
         if not ok then return 'FAILED', nil, 'probe_actions_error: ' .. tostring(result) end
         return 'SUCCEEDED', result, nil
+    elseif kind == 'get_combat_status' then
+        -- Phase 6 M4：只读，返回战斗执行器状态（状态机、目标、命中数、装备、API 探测）
+        if BWS2.combat == nil then
+            return 'FAILED', nil, 'combat_executor_not_loaded'
+        end
+        local ok, status = pcall(BWS2.combat.status)
+        if not ok then return 'FAILED', nil, 'combat_status_error: ' .. tostring(status) end
+        return 'SUCCEEDED', status, nil
+    elseif kind == 'probe_combat_api' then
+        -- Phase 6 M4：只读，探测当前构建的战斗 API 是否可用（任务书要求逐项验证）
+        if BWS2.combat == nil then
+            return 'FAILED', nil, 'combat_executor_not_loaded'
+        end
+        local ok, api = pcall(BWS2.combat.ProbeApi)
+        if not ok then return 'FAILED', nil, 'combat_probe_error: ' .. tostring(api) end
+        return 'SUCCEEDED', { ok = true, api = api }, nil
     elseif kind == 'get_task_status' then
         -- Phase 5 M6：只读，返回任务链当前进度
         if BWS2.tasks == nil then
@@ -365,8 +389,11 @@ function C.status()
             'get_movement_status', 'gather_resource', 'move_to_target', 'probe_game_actions',
             'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item',
             'eat_item', 'craft_item', 'build_structure', 'build_campfire',
-            'start_task', 'stop_task', 'get_task_status' },
+            'start_task', 'stop_task', 'get_task_status',
+            'start_combat', 'retreat_from_combat', 'evade_threat', 'abort_combat',
+            'get_combat_status', 'probe_combat_api' },
         action_executor = BWS2.actionExecutor ~= nil and BWS2.actionExecutor.status() or nil,
+        combat = BWS2.combat ~= nil and BWS2.combat.status() ~= nil and 'loaded' or 'missing',
     }
 end
 

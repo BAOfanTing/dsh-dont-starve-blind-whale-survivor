@@ -11,7 +11,7 @@ function names(tools: Array<{ name: string }>) {
 test('M3：新增 3 个采集工具，MCP 总工具数 20（含 M4 4 个）', () => {
   const gather = createGatherTools()
   assert.deepEqual(names(gather).sort(), ['gather_resource', 'move_to_target', 'probe_game_actions'])
-  assert.equal(createToolDefinitions().length, 27)
+  assert.equal(createToolDefinitions().length, 43)
 })
 
 test('M3：2 个写动作标 readOnly=false，探测工具标 true', () => {

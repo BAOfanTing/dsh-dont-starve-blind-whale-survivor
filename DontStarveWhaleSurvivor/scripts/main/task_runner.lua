@@ -258,6 +258,132 @@ TASKS.forage = {
 
 T.TASKS = TASKS
 
+-- ───────── Phase 6 M5：四季准备任务链 ─────────
+-- 说明（如实）：这四条链只做"机械的那一半" —— 采草/砍木/捡木/做工具/生火/进食。
+-- 季节专属的细节（做保暖帽、保温石、雨伞、降温石）不在链里：那些配方第一批没进
+-- 制作白名单，而且要看材料够不够，交给 AI 用 craft_item 单独决定（TS 侧 season.ts 给计划）。
+-- 四条链的顺序不同，就是因为四季的"先做什么"不同（冬天先保命、夏天先别中暑）。
+
+--- 秋季准备：先把木料和基础设施打下来（冬天前要备足）
+TASKS.autumn_prep = {
+    name = 'autumn_prep',
+    desc = '秋季准备：砍木 → 采草 → 采枝 → 斧头 → 营火 → 进食',
+    steps = {
+        { job = 'chop', args = { count = 2, radius = 25, until_gone = true },
+          need = function(p) return nearby_has(p, 'tree', 25) end,
+          retry = 1, optional = true, timeout = 240, why = '砍 2 棵树（冬季燃料与建造）' },
+        { job = 'pickup', args = { item = 'log', count = 6, radius = 25 },
+          need = function(p) return nearby_has(p, 'log', 25) end,
+          retry = 1, optional = true, timeout = 120, why = '把木头捡起来' },
+        { job = 'pick', args = { target = 'grass', count = 6, radius = 25 },
+          need = function(p) return nearby_has(p, 'grass', 25) end,
+          retry = 1, optional = true, timeout = 120, why = '采 6 个草' },
+        { job = 'pick', args = { target = 'sapling', count = 5, radius = 25 },
+          need = function(p) return nearby_has(p, 'sapling', 25) end,
+          retry = 1, optional = true, timeout = 120, why = '采 5 个树枝' },
+        { job = 'craft', args = { recipe = 'axe', count = 1 },
+          need = function(p)
+              local has = count_prefab(p, 'axe') > 0 or equipped(p) == 'axe'
+              return not has and count_prefab(p, 'twigs') >= 1 and count_prefab(p, 'flint') >= 1
+          end,
+          retry = 1, optional = true, timeout = 60, why = '做一把斧头' },
+        { job = 'make_fire', args = { recipe = 'campfire' },
+          need = function(p) return count_prefab(p, 'cutgrass') >= 3 and count_prefab(p, 'log') >= 2 end,
+          retry = 1, optional = true, timeout = 180, why = '建营火（夜里保命）' },
+        { job = 'eat', args = {},
+          need = function(p) return (p.components ~= nil and p.components.hunger ~= nil
+              and p.components.hunger:GetPercent() < 0.5) end,
+          retry = 0, optional = true, timeout = 60, why = '饿了就吃' },
+    },
+}
+
+--- 冬季准备：先火把（天黑得早）+ 燃料，再谈别的
+TASKS.winter_prep = {
+    name = 'winter_prep',
+    desc = '冬季准备：草 → 树枝 → 火把 → 木头 → 营火 → 进食（快进快出，别在夜里乱跑）',
+    steps = {
+        { job = 'pick', args = { target = 'grass', count = 4, radius = 20 },
+          need = function(p) return nearby_has(p, 'grass', 20) end,
+          retry = 1, optional = true, timeout = 120, why = '采草（火把/营火材料）' },
+        { job = 'pick', args = { target = 'sapling', count = 4, radius = 20 },
+          need = function(p) return nearby_has(p, 'sapling', 20) end,
+          retry = 1, optional = true, timeout = 120, why = '采树枝' },
+        { job = 'craft', args = { recipe = 'torch', count = 1 },
+          need = function(p)
+              local has = count_prefab(p, 'torch') > 0 or equipped(p) == 'torch'
+              return not has and count_prefab(p, 'cutgrass') >= 2 and count_prefab(p, 'twigs') >= 2
+          end,
+          retry = 1, optional = true, timeout = 60, why = '做火把（冬天黑得早）' },
+        { job = 'chop', args = { count = 1, radius = 20, until_gone = true },
+          need = function(p) return nearby_has(p, 'tree', 20) end,
+          retry = 1, optional = true, timeout = 240, why = '砍 1 棵树（补充燃料）' },
+        { job = 'pickup', args = { item = 'log', count = 4, radius = 20 },
+          need = function(p) return nearby_has(p, 'log', 20) end,
+          retry = 1, optional = true, timeout = 120, why = '捡木头' },
+        { job = 'make_fire', args = { recipe = 'campfire' },
+          need = function(p) return count_prefab(p, 'cutgrass') >= 3 and count_prefab(p, 'log') >= 2 end,
+          retry = 1, optional = false, timeout = 180, why = '建营火（冬天没火会冻死）' },
+        { job = 'eat', args = {},
+          need = function(p) return (p.components ~= nil and p.components.hunger ~= nil
+              and p.components.hunger:GetPercent() < 0.6) end,
+          retry = 0, optional = true, timeout = 60, why = '饿了就吃（寒冷加速饥饿）' },
+    },
+}
+
+--- 春季准备：雨季前把火源与食物备好（雨会浇灭火，潮会掉温）
+TASKS.spring_prep = {
+    name = 'spring_prep',
+    desc = '春季准备：草 → 树枝 → 火把 → 营火 → 食物',
+    steps = {
+        { job = 'pick', args = { target = 'grass', count = 5, radius = 25 },
+          need = function(p) return nearby_has(p, 'grass', 25) end,
+          retry = 1, optional = true, timeout = 120, why = '采草（雨天备用燃料）' },
+        { job = 'pick', args = { target = 'sapling', count = 4, radius = 25 },
+          need = function(p) return nearby_has(p, 'sapling', 25) end,
+          retry = 1, optional = true, timeout = 120, why = '采树枝' },
+        { job = 'craft', args = { recipe = 'torch', count = 1 },
+          need = function(p)
+              local has = count_prefab(p, 'torch') > 0 or equipped(p) == 'torch'
+              return not has and count_prefab(p, 'cutgrass') >= 2 and count_prefab(p, 'twigs') >= 2
+          end,
+          retry = 1, optional = true, timeout = 60, why = '做火把（雨天照明）' },
+        { job = 'pick', args = { target = 'berrybush', count = 3, radius = 25 },
+          need = function(p) return nearby_has(p, 'berry', 25) end,
+          retry = 1, optional = true, timeout = 120, why = '采浆果（春季食物）' },
+        { job = 'make_fire', args = { recipe = 'campfire' },
+          need = function(p) return count_prefab(p, 'cutgrass') >= 3 and count_prefab(p, 'log') >= 2 end,
+          retry = 1, optional = true, timeout = 180, why = '建营火（烘干/保暖）' },
+        { job = 'eat', args = {},
+          need = function(p) return (p.components ~= nil and p.components.hunger ~= nil
+              and p.components.hunger:GetPercent() < 0.5) end,
+          retry = 0, optional = true, timeout = 60, why = '饿了就吃' },
+    },
+}
+
+--- 夏季准备：少跑远路，把草/木头/火源备在近处
+TASKS.summer_prep = {
+    name = 'summer_prep',
+    desc = '夏季准备：草 → 木头 → 营火 → 食物（避免正午长时间在外）',
+    steps = {
+        { job = 'pick', args = { target = 'grass', count = 3, radius = 15 },
+          need = function(p) return nearby_has(p, 'grass', 15) end,
+          retry = 1, optional = true, timeout = 90, why = '就近采草（别跑远）' },
+        { job = 'chop', args = { count = 1, radius = 15, until_gone = true },
+          need = function(p) return nearby_has(p, 'tree', 15) end,
+          retry = 1, optional = true, timeout = 180, why = '就近砍 1 棵树' },
+        { job = 'pickup', args = { item = 'log', count = 3, radius = 15 },
+          need = function(p) return nearby_has(p, 'log', 15) end,
+          retry = 1, optional = true, timeout = 90, why = '捡木头' },
+        { job = 'make_fire', args = { recipe = 'campfire' },
+          need = function(p) return count_prefab(p, 'cutgrass') >= 3 and count_prefab(p, 'log') >= 2 end,
+          retry = 1, optional = true, timeout = 180, why = '建营火（夜里驱暗，注意别靠建筑）' },
+        { job = 'eat', args = {},
+          need = function(p) return (p.components ~= nil and p.components.hunger ~= nil
+              and p.components.hunger:GetPercent() < 0.6) end,
+          retry = 0, optional = true, timeout = 60, why = '饿了就吃（过热时更耗体力）' },
+    },
+}
+
 -- ─────────────────────────── 运行时状态 ───────────────────────────
 
 local run = nil   -- { name, step_index, started_at, steps_done, steps_skipped, last_error, retries }

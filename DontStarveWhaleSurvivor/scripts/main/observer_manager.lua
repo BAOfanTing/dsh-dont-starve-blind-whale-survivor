@@ -37,6 +37,8 @@ local O = {
     error_count = 0,
     last_error = nil,
     nearby = nil,             -- 最近一次实体扫描结果（缓存）
+    threats = nil,            -- Phase 6 M1：最近一次威胁扫描结果（缓存）
+    environment = nil,        -- Phase 6 M1：最近一次环境危险读数（缓存）
     scan_ticks = 1,           -- 每多少个 state 周期扫一次
     last_scan_tick = -1000,
     radius_tiles = DEFAULT_RADIUS,
@@ -168,6 +170,27 @@ local function maybe_scan(player_entity)
     end
 end
 
+--- 威胁扫描（Phase 6 M1）：和实体扫描同一个节流周期，先扫资源再扫威胁。
+--- 威胁要"每次 state 都尽量新"，但也不能比 nearby 更勤 —— 一次 FindEntities 就够贵了，
+--- 所以复用一个扫描周期；combat_executor 自己的 0.1 秒 tick 才是实时的那条线。
+local function maybe_scan_threats(player_entity)
+    if player_entity == nil then return end
+    if BWS.threat_observer == nil then return end
+    local threats, threat_err = safe_observe("threats", BWS.threat_observer, function()
+        return BWS.threat_observer.Observe(player_entity, { radius_tiles = O.radius_tiles })
+    end)
+    if threats ~= nil then
+        threats.scanned_at_tick = O.loop_count
+        O.threats = threats
+    elseif threat_err ~= nil and threat_err ~= "unavailable" then
+        O.threats = nil
+    end
+    local environment = safe_observe("environment", BWS.threat_observer, function()
+        return BWS.threat_observer.ObserveEnvironment(player_entity)
+    end)
+    if environment ~= nil then O.environment = environment end
+end
+
 --- 收集这次要输出的各段
 local function collect(player_entity)
     local sections = {}
@@ -183,6 +206,7 @@ local function collect(player_entity)
         note("player", "no_player")
     else
         maybe_scan(player_entity)
+        maybe_scan_threats(player_entity)
         local player, player_err = safe_observe("player", BWS.player_observer, function()
             return BWS.player_observer.Observe(player_entity, O.side)
         end)
@@ -192,6 +216,10 @@ local function collect(player_entity)
             return BWS.inventory_observer.Observe(player_entity)
         end)
         if inventory ~= nil then sections.inventory = inventory else note("inventory", inventory_err) end
+
+        -- Phase 6 M1：威胁与环境（只进 telemetry 大包，不进日志单行记录 —— 长度不够）
+        if O.threats ~= nil then sections.threats = O.threats end
+        if O.environment ~= nil then sections.environment = O.environment end
     end
 
     local world, world_err = safe_observe("world", BWS.world_observer, function()
@@ -256,6 +284,10 @@ function O.Tick()
         -- Phase 5 M6：推进任务链（一次 Tick 只走一步的状态机）
         if BWS2 ~= nil and BWS2.tasks ~= nil and BWS2.tasks.Tick ~= nil then
             pcall(BWS2.tasks.Tick)
+        end
+        -- Phase 6 M4：战斗执行器补跑（它自己的 0.1 秒任务挂了就由这里兜底）
+        if BWS2 ~= nil and BWS2.combat ~= nil and BWS2.combat.Drive ~= nil then
+            pcall(BWS2.combat.Drive)
         end
     end)
     if not ok then

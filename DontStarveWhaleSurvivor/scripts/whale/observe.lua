@@ -68,7 +68,11 @@ local function player_section(p)
     end
     lines[#lines + 1] = "你：" .. table.concat(pieces, "  ")
 
-    local tx, tz = U.tile_of(U.pos(p))
+    -- 真机 bug（2026-11-12 审计发现）：U.pos() 返回三个值 (x,y,z)，而 U.tile_of(x,z) 只吃两个参数。
+    -- 直接写 U.tile_of(U.pos(p)) 会把 **y（离地高度，≈0）当成 z 传进去**，
+    -- 结果"位置"永远写成 (x,0)：实测人物在 (-44,18)，状态里却写 (-44,0)，AI 照着它走就会偏掉 18 格。
+    local px, _, pz = U.pos(p)
+    local tx, tz = U.tile_of(px, pz)
     lines[#lines + 1] = "位置：(" .. tx .. "," .. tz .. ")"
 
     -- 手 / 身体 / 头
@@ -170,12 +174,22 @@ end
 
 local function nearby_section(p, radius)
     local lines = {}
+    -- 同一个东西只报一次：真机反馈里「可拆」和「建筑」把同一批猪屋各列一遍，
+    -- 「可捡」里还混进红雀和便携锅 —— 都是白花的 token。
+    local shown = {}
     local function add(label, list, limit, extra)
-        if list ~= nil and #list > 0 then
-            local text = entries_filtered(list, limit, extra)
-            lines[#lines + 1] = "  " .. label .. "：" .. table.concat(text, "；")
-                .. (#list > (limit or 6) and string.format("（还有 %d 个）", #list - (limit or 6)) or "")
+        if list == nil or #list == 0 then return end
+        local kept = {}
+        for _, entry in ipairs(list) do
+            if not shown[entry.ent] then
+                shown[entry.ent] = true
+                kept[#kept + 1] = entry
+            end
         end
+        if #kept == 0 then return end
+        local text = entries_filtered(kept, limit, extra)
+        lines[#lines + 1] = "  " .. label .. "：" .. table.concat(text, "；")
+            .. (#kept > (limit or 6) and string.format("（还有 %d 个）", #kept - (limit or 6)) or "")
     end
 
     local pickables = U.find_all(p, radius, nil, nil, function(e)
@@ -191,7 +205,13 @@ local function nearby_section(p, radius)
 
     local ground_items = U.find_all(p, radius, nil, nil, function(e)
         local item = e.components ~= nil and e.components.inventoryitem or nil
-        return item ~= nil and item.owner == nil
+        if item == nil or item.owner ~= nil then return false end
+        -- 「能捡的东西」= 掉落物/能拿在手上的材料。红雀（bird）、便携烹饪锅这类
+        -- 也有 inventoryitem 组件，但它们不是"捡了就有用"的掉落物，别占位置。
+        if e:HasTag("bird") or e:HasTag("structure") or e:HasTag("cooker") then return false end
+        local c = e.components
+        if c ~= nil and (c.stewer ~= nil or c.cookpot ~= nil) then return false end
+        return true
     end)
     add("可捡", ground_items, 6, function(e)
         local n = U.count(e)

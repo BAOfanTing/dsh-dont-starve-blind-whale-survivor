@@ -37,35 +37,51 @@ function realToken(): string {
 const TOKEN = realToken()
 
 const EXPECTED_TOOLS = [
-  
-    'build_campfire',
-    'build_structure',
-    'chop_tree',
-    'craft_item',
-    'eat_item',
-    'equip_item',
-    'gather_resource',
-    'get_base_status',
-    'get_bridge_status',
-    'get_command_result',
-    'get_control_status',
-    'get_game_status',
-    'get_inventory',
-    'get_nearby_entities',
-    'get_nearby_resources',
-    'get_nearby_threats',
-    'get_player_status',
-    'get_recent_events',
-    'get_task_status',
-    'get_world_status',
-    'mine_rock',
-    'move_to_target',
-    'pick_up_item',
-    'probe_game_actions',
-    'refresh_game_state',
-    'start_task',
-    'stop_task',
-  ]
+  // Phase 6：+10 只读（威胁/战斗/规避/季节/Boss/仲裁）+ 6 写
+  'abort_combat',
+  'build_campfire',
+  'build_structure',
+  'chop_tree',
+  'craft_item',
+  'eat_item',
+  'equip_item',
+  'evade_threat',
+  'evaluate_combat_target',
+  'gather_resource',
+  'get_base_status',
+  'get_boss_readiness',
+  'get_bridge_status',
+  'get_combat_readiness',
+  'get_combat_recommendation',
+  'get_combat_status',
+  'get_command_result',
+  'get_control_status',
+  'get_environment_hazards',
+  'get_escape_options',
+  'get_game_status',
+  'get_inventory',
+  'get_nearby_entities',
+  'get_nearby_resources',
+  'get_nearby_threats',
+  'get_player_status',
+  'get_recent_events',
+  'get_seasonal_readiness',
+  'get_survival_priority',
+  'get_task_status',
+  'get_threat_assessment',
+  'get_world_status',
+  'mine_rock',
+  'move_to_target',
+  'pick_up_item',
+  'prepare_for_season',
+  'probe_game_actions',
+  'recover_after_combat',
+  'refresh_game_state',
+  'retreat_from_combat',
+  'start_combat',
+  'start_task',
+  'stop_task',
+]
 
 async function connectStdio(): Promise<Client> {
   const transport = new StdioClientTransport({
@@ -123,10 +139,10 @@ test('stdio：官方 Client 握手 + 能力发现', async () => {
     assert.ok(client.getServerCapabilities()?.tools, '应声明 tools 能力')
 
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 27)
+    assert.equal(tools.length, 43)
     assert.deepEqual(tools.map((tool) => tool.name).sort(), EXPECTED_TOOLS)
     // Phase 5 M3：2 个写动作工具显式标 false，其余只读
-    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire', 'start_task', 'stop_task'])
+    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire', 'start_task', 'stop_task', 'start_combat', 'retreat_from_combat', 'evade_threat', 'abort_combat', 'prepare_for_season', 'recover_after_combat'])
     for (const tool of tools) {
       assert.ok(tool.description && tool.description.length > 4, `${tool.name} 缺描述`)
       assert.ok(tool.inputSchema, `${tool.name} 缺 inputSchema`)
@@ -332,7 +348,7 @@ test('HTTP：官方 Client 走 Streamable HTTP，能力与 stdio 一致', async 
   const client = await connectHttp(h.base)
   try {
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 27)
+    assert.equal(tools.length, 43)
     assert.deepEqual(tools.map((tool) => tool.name).sort(), EXPECTED_TOOLS)
 
     const { resources } = await client.listResources()
@@ -392,8 +408,8 @@ test('HTTP：多会话并发（两个客户端各自独立）', async () => {
     }
     // 两个客户端都能独立发现工具
     const [la, lb] = await Promise.all([a.listTools(), b.listTools()])
-    assert.equal(la.tools.length, 27)
-    assert.equal(lb.tools.length, 27)
+    assert.equal(la.tools.length, 43)
+    assert.equal(lb.tools.length, 43)
   } finally {
     await a.close()
     await b.close()

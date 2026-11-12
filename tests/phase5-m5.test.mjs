@@ -312,7 +312,7 @@ test('M5：status() 暴露 12 个写动作（M2 2 + M3 2 + M4 4 + M5 4）', asyn
   const { run } = load(fengari)
   run(`
     local s = BWS2.actionExecutor.status()
-    assert(#s.known_actions == 12, '写动作应 12 个，实际 ' .. tostring(#s.known_actions))
+    assert(#s.known_actions == 13, '写动作应 13 个（Phase 6 加了 heal_self），实际 ' .. tostring(#s.known_actions))
     for _, k in ipairs({ 'eat_item', 'craft_item', 'build_structure', 'build_campfire' }) do
       assert(s.write_actions[k] == true, k .. ' 应标为写动作')
     end

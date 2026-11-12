@@ -193,6 +193,89 @@ local function take_over()
     refresh()
 end
 
+-- ─────────────────── 客户端：服务端在挪我的时候，把动画补上 ───────────────────
+--
+-- DST 里人物动画由客户端自己产生（player_classified 没有 ismoving 这类同步字段）：
+-- 纯 move_to 我们会让客户端自己也走一遍（有动画）；但**动作**（砍树/捡东西/打架时走到目标旁边）
+-- 那一段是服务端引擎在走，客户端只负责画位置 —— 表现就是"走到树边在滑行"。
+-- 这里在客户端加一个纯视觉的看门狗：发现"位置在变，但自己的状态机没在走"，就自己播 run_loop；
+-- 停下再回到 idle_loop。它**不碰移动**，所以不会和服务端抢角色。
+
+local MOVE_SPEED = 1.2   -- 世界单位/秒，低于这个算没动
+
+--- 纯函数，方便测：这个 tick 该播什么动画（nil = 别管）
+function H.anim_for(speed, sg_moving)
+    if sg_moving then return nil end          -- 自己在走（玩家操作或客户端预测），交给状态机
+    if speed ~= nil and speed > MOVE_SPEED then return "run_loop" end
+    return "idle_loop"
+end
+
+local watch = { x = nil, z = nil, t = nil, forced = false }
+
+function H.WatchServerMove(owner, every)
+    if owner == nil or owner.Transform == nil then return end
+    local gettime = GLOBAL.GetTime
+    owner:DoPeriodicTask(every or 0.12, function(p)
+        local ok = pcall(function()
+            if p == nil or not p:IsValid() then return end
+            local x, _, z = p.Transform:GetWorldPosition()
+            local now = gettime ~= nil and gettime() or nil
+            local speed = nil
+            if watch.x ~= nil and now ~= nil and watch.t ~= nil and now > watch.t then
+                local dx, dz = x - watch.x, z - watch.z
+                speed = math.sqrt(dx * dx + dz * dz) / (now - watch.t)
+            end
+            watch.x, watch.z, watch.t = x, z, now
+            local sg_moving = p.sg ~= nil and p.sg:HasStateTag("moving")
+            local want = H.anim_for(speed, sg_moving)
+            if want == "run_loop" then
+                if not p.AnimState:IsCurrentAnimation("run_loop") then
+                    p.AnimState:PlayAnimation("run_loop", true)
+                end
+                watch.forced = true
+            elseif want == "idle_loop" and watch.forced then
+                watch.forced = false
+                if not p.AnimState:IsCurrentAnimation("idle_loop") then
+                    p.AnimState:PlayAnimation("idle_loop")
+                end
+            end
+        end)
+        if not ok then watch.forced = false end
+    end)
+end
+
+-- ─────────────────── 客户端：服务端让我们走，我们真的走 ───────────────────
+--
+-- DST 里人物的走路/跑步动画是客户端自己预测出来的（player_classified 里没有
+-- ismoving/isrunning 这类同步字段）：服务端只改物理位置的话，玩家看到的就是"平移滑行"。
+-- 所以服务端在 GoToPoint 之后用 mod RPC 通知这边，让客户端的 locomotor 也走一遍，
+-- sg 自己会进 run 状态 → 动画、脚步声、朝向都正常；位置仍以服务端为准。
+
+local function install_walk_rpc()
+    local add = (env ~= nil and env.AddClientModRPCHandler) or GLOBAL.AddClientModRPCHandler
+    if add == nil then return end
+    local name = Whale.actions ~= nil and Whale.actions.MODNAME or "DontStarveWhaleSurvivor"
+
+    pcall(add, name, "walkto", function(x, z, run)
+        local p = GLOBAL.ThePlayer
+        if p == nil or p.components == nil or p.components.locomotor == nil then return end
+        pcall(function()
+            p.components.locomotor:GoToPoint(GLOBAL.Vector3(x, 0, z), nil, run == 1)
+        end)
+    end)
+
+    pcall(add, name, "walkstop", function()
+        local p = GLOBAL.ThePlayer
+        if p == nil or p.components == nil or p.components.locomotor == nil then return end
+        pcall(function()
+            p.components.locomotor:Stop()
+            p:ClearBufferedAction()
+        end)
+    end)
+end
+
+install_walk_rpc()
+
 function H.BindKeys()
     local ok = pcall(function()
         GLOBAL.TheInput:AddKeyHandler(function(key, down)
@@ -227,6 +310,8 @@ function H.Attach(owner)
             Whale.util.log("HUD 刷新出错，关掉它：" .. tostring(err))
         end
     end)
+    -- 服务端挪人的时候把走路/跑步动画补上（纯视觉，见 WatchServerMove 注释）
+    pcall(H.WatchServerMove, owner)
     refresh()
 end
 

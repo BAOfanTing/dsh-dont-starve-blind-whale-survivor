@@ -49,6 +49,17 @@ export const READ_ONLY_ALLOWLIST = [
   'probe_game_actions',
   // Phase 5 M6：只读查询任务链进度（start_task/stop_task 是写动作，不加入）
   'get_task_status',
+  // Phase 6：生存智能（威胁/战斗/规避/季节/Boss/仲裁，全部只读）
+  'get_threat_assessment',
+  'get_combat_readiness',
+  'get_combat_status',
+  'get_combat_recommendation',
+  'evaluate_combat_target',
+  'get_escape_options',
+  'get_seasonal_readiness',
+  'get_environment_hazards',
+  'get_boss_readiness',
+  'get_survival_priority',
 ] as const
 
 export type AllowedToolName = (typeof READ_ONLY_ALLOWLIST)[number]
@@ -83,6 +94,14 @@ export const WRITE_ALLOWLIST = [
   // M6 任务链
   'start_task',
   'stop_task',
+  // Phase 6：战斗/撤退/规避/中止（start_combat 必须 confirmed=true 且目标在白名单）
+  'start_combat',
+  'retreat_from_combat',
+  'evade_threat',
+  'abort_combat',
+  // Phase 6：季节准备任务链 / 战后恢复
+  'prepare_for_season',
+  'recover_after_combat',
 ] as const
 
 export type WriteToolName = (typeof WRITE_ALLOWLIST)[number]

@@ -58,17 +58,17 @@ async function withAdapter(fn: (adapter: ToolAdapter, client: McpClient) => Prom
   }
 }
 
-test('白名单：只适配 15 个只读工具；MCP 共 24 个，10 个写动作被跳过', async () => {
+test('白名单：只适配 25 个只读工具；MCP 共 43 个，18 个写动作被跳过', async () => {
   await withAdapter(async (adapter, client) => {
     const names = adapter.names().sort()
-    assert.equal(names.length, 15, `实际 ${names.length}：${names.join(',')}`)
+    assert.equal(names.length, 25, `实际 ${names.length}：${names.join(',')}`)
     assert.deepEqual(names, [...READ_ONLY_ALLOWLIST].sort())
     // MCP Server 真实清单是 16 个；写动作工具故意不加入 Agent 白名单（任务书 §11 默认 SUPERVISED）
     const all = client.listTools().map((tool) => tool.name).sort()
-    assert.equal(all.length, 27)
+    assert.equal(all.length, 43)
     const nameSet = new Set<string>(names)
     assert.deepEqual(all.filter((name) => !nameSet.has(name)).sort(),
-      ['build_campfire', 'build_structure', 'chop_tree', 'craft_item', 'eat_item', 'equip_item', 'gather_resource', 'mine_rock', 'move_to_target', 'pick_up_item', 'start_task', 'stop_task'])
+      ['abort_combat', 'build_campfire', 'build_structure', 'chop_tree', 'craft_item', 'eat_item', 'equip_item', 'evade_threat', 'gather_resource', 'mine_rock', 'move_to_target', 'pick_up_item', 'prepare_for_season', 'recover_after_combat', 'retreat_from_combat', 'start_combat', 'start_task', 'stop_task'])
   })
 })
 
@@ -178,7 +178,7 @@ test('白名单：越权工具名一律拒绝，且错误里给出可用工具',
           assert.ok(error instanceof ToolAdapterError)
           assert.equal(error.code, 'TOOL_NOT_ALLOWED', `${name} 应被拒`)
           const detail = error.detail as { allowed?: string[] }
-          assert.equal(detail.allowed?.length, 15, '应列出 15 个可用工具')
+          assert.equal(detail.allowed?.length, 25, '应列出 25 个可用工具')
           return true
         },
         `${name} 不该被允许`,
@@ -264,7 +264,7 @@ test('toToolMessage：保留 tool_call_id 与工具名', async () => {
 test('toolDefinitions：给 LLM 的定义与适配数量一致，且都是 function 类型', async () => {
   await withAdapter(async (adapter) => {
     const defs = adapter.toolDefinitions()
-    assert.equal(defs.length, 15)
+    assert.equal(defs.length, 25)
     for (const def of defs) {
       assert.equal(def.type, 'function')
       assert.ok(def.function.name.length > 0)
@@ -276,9 +276,9 @@ test('toolDefinitions：给 LLM 的定义与适配数量一致，且都是 funct
 test('refresh：MCP 工具清单变化后重建适配（不写死）', async () => {
   await withAdapter(async (adapter) => {
     const first = adapter.refresh()
-    assert.equal(first.adapted, 15)
-    assert.equal(first.skipped.length, 12, '12 个写动作工具应被跳过')
+    assert.equal(first.adapted, 25)
+    assert.equal(first.skipped.length, 18, '18 个写动作工具应被跳过（Phase 6 加了 6 个）')
     const second = adapter.refresh()
-    assert.equal(second.adapted, 15, '重复刷新结果稳定')
+    assert.equal(second.adapted, 25, '重复刷新结果稳定')
   })
 })

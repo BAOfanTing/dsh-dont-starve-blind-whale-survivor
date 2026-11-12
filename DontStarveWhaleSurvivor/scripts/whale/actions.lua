@@ -31,6 +31,12 @@ local job = nil
 
 -- ─────────────────────────── 基础 ───────────────────────────
 
+-- 让"那个玩家自己的客户端"也走一遍（详见下面 client_walk 的注释）。
+-- 先在这里声明，是因为 push() 也要用它：动作自己让引擎走到目标旁边的那段路，
+-- 同样是服务端单方面移动，客户端不自己走就只能平移。
+local client_walk
+local client_stop
+
 local function busy(p)
     if p == nil then return false end
     if p:GetBufferedAction() ~= nil then return true end
@@ -39,6 +45,7 @@ local function busy(p)
 end
 A.busy = busy
 
+--- 让引擎走过去（动作、追击、采集都要走这一步）
 local function push(p, ba)
     if p == nil or ba == nil then return false end
     local loco = p.components.locomotor
@@ -47,6 +54,11 @@ local function push(p, ba)
     else
         p:PushBufferedAction(ba)
     end
+    -- 注意：这里**故意不通知客户端走路**。
+    -- 真机（2026-11-12 晚）试过"动作也通知客户端走"，结果客户端和服务端各有一份移动意图，
+    -- 客户端把人拖到树上了，服务端这边 `busy` 却一直是 false → chop 报"推不动"。
+    -- 动作接近目标那一段的动画改由客户端自己补（hud.lua 的 WatchServerMove：
+    -- 发现"位置在变但自己没在走"就播 run_loop，纯视觉，不参与移动）。
     return true
 end
 
@@ -63,15 +75,58 @@ end
 --- 解包 locomotor.lua 确认签名：GoToPoint(pt, bufferedaction, run, overridedest)，
 --- run 会写进 self.wantstorun，并决定 RunForward() 还是 WalkForward()。
 --- 正常玩按方向键是跑，所以这里默认跑（run=true），距离很近时再走，避免冲过头。
+---
+--- 真机反馈 2（2026-11-12 晚）：**还是平移**。查了 game scripts 才明白：
+--- DST 里人物的走路动画是在**客户端**由它自己的 locomotor 预测出来的
+--- （player_classified 里根本没有 ismoving/isrunning 这类同步字段），
+--- 服务端 GoToPoint 只改物理位置 → 客户端只能看到位移，没人播动画。
+--- 所以服务端走一遍的同时，还要用 mod RPC 通知"那个玩家的客户端"自己也走一遍，
+--- 动画、脚步声、朝向就都对了（客户端那边 `ThePlayer.sg` 自己会进 run 状态）。
+local MODNAME = type(modname) == "string" and modname or "DontStarveWhaleSurvivor"
+
+local function env_fn(name)
+    if env ~= nil and env[name] ~= nil then return env[name] end
+    local fn = GLOBAL[name]
+    if fn ~= nil then return fn end
+    return nil
+end
+
+--- 让玩家自己的客户端去走（拿不到客户端就当无事发生）
+client_walk = function(p, x, z, run)
+    if p == nil or p.userid == nil then return false end
+    local ok = pcall(function()
+        local getrpc = env_fn("GetClientModRPC")
+        local send = env_fn("SendModRPCToClient")
+        if getrpc == nil or send == nil then return end
+        send(getrpc(MODNAME, "walkto"), p.userid, x, z, run and 1 or 0)
+    end)
+    return ok
+end
+
+client_stop = function(p)
+    if p == nil or p.userid == nil then return false end
+    local ok = pcall(function()
+        local getrpc = env_fn("GetClientModRPC")
+        local send = env_fn("SendModRPCToClient")
+        if getrpc == nil or send == nil then return end
+        send(getrpc(MODNAME, "walkstop"), p.userid)
+    end)
+    return ok
+end
+
 local function walk_to(p, tx, tz, run)
     local x, z = U.tile_center(tx, tz)
     local loco = p.components.locomotor
     if loco == nil then return false end
     if run == nil then run = true end
     loco:GoToPoint(Vector3(x, 0, z), nil, run)
+    client_walk(p, x, z, run)
     return true
 end
 A.walk_to = walk_to
+A.client_walk = client_walk
+A.client_stop = client_stop
+A.MODNAME = MODNAME
 
 local function equip_if_needed(p, item)
     local inv = p.components.inventory
@@ -378,7 +433,7 @@ local function job_work(j, p, action_id)
         end
         if j.data.until_gone and j.data.done_targets >= j.data.count then
             hold_control(p, false)
-            return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, j.data.done_count)
+            return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, math.max(1, j.data.done_count or 0))
         end
         if j.data.done_count >= j.data.max_hits then
             hold_control(p, false)
@@ -404,7 +459,7 @@ local function job_work(j, p, action_id)
                     j.data.done_targets = j.data.done_targets + 1
                     if j.data.done_targets >= j.data.count then
                         hold_control(p, false)
-                        return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, j.data.done_count)
+                        return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, math.max(1, j.data.done_count or 0))
                     end
                 end
                 hold_control(p, false)
@@ -419,6 +474,7 @@ local function job_work(j, p, action_id)
         if item ~= nil then equip_if_needed(p, item) end
         local ba = BufferedAction(p, target, action, item)
         j.data.target = target
+        j.data.pushed_target = target     -- 给"砍倒计数"留证据（引擎连砍时 cur_hits 不涨）
         j.data.counted = false              -- 新目标，重置计数标记
         j.data.ba = ba                      -- 保存，连砍时复用（不重建，避免打断状态机）
         j.data.last_name = U.pretty(target)
@@ -447,7 +503,14 @@ local function job_work(j, p, action_id)
                     j.data.skip_count = (j.data.skip_count or 0) + 1
                     if j.data.skip_count >= 3 then
                         hold_control(p, false)
-                        return "fail", string.format("推不动 %s：可能需要更好的工具", U.pretty(target))
+                        -- 报错要能定位：说清目标是谁（中文名 + prefab）、手里拿的是什么工具。
+                        -- 真机上"推不动 多枝树：可能需要更好的工具"这种话查不出原因。
+                        local hands = nil
+                        local inv = p.components.inventory
+                        if inv ~= nil then hands = inv:GetEquippedItem(EQUIPSLOTS.HANDS) end
+                        return "fail", string.format("推不动 %s（prefab=%s）：手里是 %s，可能工具不对或者够不着",
+                            U.pretty(target), tostring(target ~= nil and target.prefab or "?"),
+                            hands ~= nil and U.describe_item(hands) or "空手")
                     end
                     -- 换目标重试：回到 next 重新挑（跳过已拉黑的）
                     j.data.target = nil
@@ -463,6 +526,13 @@ local function job_work(j, p, action_id)
             if U.now() - j.data.phase_start > 120 then
                 hold_control(p, false)
                 return "fail", "这个活儿做不完（可能工具不对或者够不着）"
+            end
+            -- 整个任务的兜底：引擎"按住动作键"连砍时，单次动作永远不会结束，
+            -- 上面的 120 秒（按单次 push 计时）永远不触发 → 必须有一个按任务总时长的出口。
+            if j.data.until_gone and U.now() - j.t0 > (tonumber(j.args.timeout) or 240) then
+                hold_control(p, false)
+                return "fail", string.format("超时了：干了 %d 下、干倒 %d 个目标（要 %d 个），先看看周围还有没有能干的",
+                    j.data.done_count, j.data.done_targets or 0, j.data.count)
             end
             -- 真机验证（2026-11-12）：hold_control 一开，引擎就在状态机内部自己连砍，
             -- 效果是"按住空格"——实测 push 1 次就砍倒了 6 棵树（完全连续、无顿挫）。
@@ -483,10 +553,16 @@ local function job_work(j, p, action_id)
                 if done_this then
                     -- 目标倒了：立刻松手，避免继续砍下一棵
                     hold_control(p, false)
-                    -- 真机 bug（2026-11-12 第二次）：done_this 只看"目标无效/动作变了"，
+                    -- 真机 bug（2026-11-12 真机验证）：done_this 只看"目标无效/动作变了"，
                     -- 但如果这一斧根本没挥出去（cur_hits == 0），那是换目标而不是砍倒，
                     -- 不能计数 —— 否则 chop(count=3) 会报"砍倒 3 个"实际只倒 1 棵。
-                    local actually_chopped = (j.data.cur_hits or 0) > 0
+                    --
+                    -- 真机 bug 2（2026-11-12 二次真机）：一旦引擎"按住动作键"连砍真的生效
+                    -- （hold_control 打开后引擎自己在状态机里重推），人物**一直是 busy**，
+                    -- 走不到下面 +1 的分支 → cur_hits 永远是 0 → 一棵都被判成"没挥过"→
+                    -- done_targets 永远不涨 → count=1 也会一路砍下去（实测 2 分钟砍了 16 棵）。
+                    -- 所以改用"这个目标我真的推过动作"作为证据。
+                    local actually_chopped = j.data.pushed_target == t or (j.data.cur_hits or 0) > 0
                     if actually_chopped and not j.data.counted then
                         j.data.counted = true
                         j.data.done_targets = (j.data.done_targets or 0) + 1
@@ -496,7 +572,7 @@ local function job_work(j, p, action_id)
                     end
                     if j.data.done_targets >= j.data.count then
                         return "done", string.format("干倒了 %d 个目标（连续砍，共 %d 下）",
-                            j.data.done_targets, j.data.done_count)
+                            j.data.done_targets, math.max(1, j.data.done_count or 0))
                     end
                     -- 还要继续砍下一棵：清掉目标回 next 重新挑
                     j.data.target = nil
@@ -561,7 +637,7 @@ local function job_work(j, p, action_id)
             j.data.cur_hits = 0
             if j.data.done_targets >= j.data.count then
                 hold_control(p, false)
-                return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, j.data.done_count)
+                return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, math.max(1, j.data.done_count or 0))
             end
         end
         j.step = "next"
@@ -1107,8 +1183,116 @@ JOBS.wait = function(j, p)
     return "run"
 end
 
+-- ─────────────────── Phase M1：续火 / 回血 ───────────────────
+-- 这两件事是"活过第 10 天"的底线：火灭了查理来打，血见底了没处回。
+
+--- 背包里最适合当柴烧的东西（优先燃料值高的，尽量不烧吃的）
+local function best_fuel(p, want)
+    local inv = p.components.inventory
+    if inv == nil then return nil end
+    if want ~= nil and want ~= "" then return U.find_item(p, want) end
+    local best, best_score = nil, -1
+    inv:ForEachItem(function(item)
+        local fuel = item.components.fuel
+        if fuel ~= nil then
+            local score = tonumber(fuel.fuelvalue) or 1
+            if item.components.edible ~= nil then score = score * 0.2 end
+            if score > best_score then
+                best, best_score = item, score
+            end
+        end
+    end)
+    return best
+end
+
+JOBS.add_fuel = function(j, p)
+    if j.step == "start" then
+        local fire = U.find_nearest(p, tonumber(j.args.radius) or 12, { "fire" }, nil, function(e)
+            local fueled = e.components ~= nil and e.components.fueled or nil
+            return fueled ~= nil and not fueled:IsEmpty()
+        end)
+        if fire == nil then
+            return "fail", "附近没有烧着的火堆（营火/火坑）—— 火灭了要先重新生火"
+        end
+        local fuel = best_fuel(p, j.args.item)
+        if fuel == nil then
+            return "fail", j.args.item ~= nil and ("背包里没有 " .. tostring(j.args.item))
+                or "背包里没有能烧的东西（木头/树枝/草/木炭）"
+        end
+        if busy(p) then
+            if U.now() - j.t0 > 20 then return "fail", "手上忙着，没添上柴" end
+            return "run"
+        end
+        local fueled = fire.components.fueled
+        local before = fueled ~= nil and fueled:GetPercent() or nil
+        j.data.name = U.pretty(fuel)
+        j.data.fire = fire
+        j.data.before = before
+        push(p, BufferedAction(p, fire, ACTIONS.ADDFUEL, fuel))
+        j.data.phase_start = U.now()
+        j.step = "acting"
+        return "run"
+    end
+    if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
+    local fueled = j.data.fire ~= nil and j.data.fire:IsValid() and j.data.fire.components.fueled or nil
+    local after = fueled ~= nil and fueled:GetPercent() or nil
+    if after ~= nil and j.data.before ~= nil then
+        return "done", string.format("往火里添了 %s，燃料 %d%% → %d%%",
+            j.data.name, math.floor(j.data.before * 100), math.floor(after * 100))
+    end
+    return "done", "添了 " .. j.data.name .. "（火盆可能已经灭了）"
+end
+
+JOBS.heal = function(j, p)
+    if j.step == "start" then
+        local hp = p.components.health
+        if hp == nil then return "fail", "现在没有生命数据" end
+        if hp:IsDead() then return "fail", "已经死了，吃东西救不回来" end
+
+        local item = nil
+        if j.args.item ~= nil and j.args.item ~= "" then
+            item = U.find_item(p, j.args.item)
+            if item == nil then return "fail", "背包里没有 " .. tostring(j.args.item) end
+        else
+            -- 优先治疗类（药膏/蜘蛛腺体/蜂蜜药膏），没有就吃东西回血
+            local inv = p.components.inventory
+            if inv ~= nil then
+                inv:ForEachItem(function(it)
+                    if item == nil and it.components.healer ~= nil then item = it end
+                end)
+            end
+            if item == nil then item = best_food(p) end
+            if item == nil then return "fail", "背包里没有能回血的东西（治疗药膏/蜘蛛腺体/吃的）" end
+        end
+        if busy(p) then
+            if U.now() - j.t0 > 20 then return "fail", "手上忙着，没吃上药" end
+            return "run"
+        end
+        j.data.item = item
+        j.data.name = U.pretty(item)
+        j.data.before = hp.currenthealth
+        if item.components.healer ~= nil then
+            push(p, BufferedAction(p, p, ACTIONS.HEAL, item))
+        else
+            push(p, BufferedAction(p, nil, ACTIONS.EAT, item))
+        end
+        j.data.phase_start = U.now()
+        j.step = "acting"
+        return "run"
+    end
+    if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
+    local hp = p.components.health
+    local now = hp ~= nil and hp.currenthealth or nil
+    if now ~= nil and j.data.before ~= nil and now - j.data.before > 0.5 then
+        return "done", string.format("用了 %s，生命 %d → %d", j.data.name,
+            math.floor(j.data.before), math.floor(now))
+    end
+    return "done", "用了 " .. j.data.name .. "（血量没明显变化）"
+end
+
 JOBS.stop = function(j, p)
     if p ~= nil then
+        client_stop(p)
         pcall(function()
             if p.components.locomotor ~= nil then p.components.locomotor:Stop() end
             p:ClearBufferedAction()
@@ -1119,7 +1303,37 @@ end
 
 -- ─────────────────────────── 对外 ───────────────────────────
 
-function A.Start(name, args)
+-- ── 结果校验：背包净变化 ──
+-- 只回"干了 N 下"没有用：模型不知道到底拿到了什么，就会开始编造（phase5 的 M7 就是被这条坑到的）。
+-- 每个动作开始前拍一张背包快照，成功结束时把差值附在后面："（背包：log+4）"。
+local function snapshot_counts(p)
+    local out = {}
+    local inv = p ~= nil and p.components.inventory or nil
+    if inv == nil then return out end
+    inv:ForEachItem(function(item)
+        local key = item.prefab or "?"
+        out[key] = (out[key] or 0) + U.count(item)
+    end)
+    return out
+end
+
+local function count_diff(before, after)
+    if before == nil or after == nil then return nil end
+    local parts = {}
+    for k, v in pairs(after) do
+        local d = v - (before[k] or 0)
+        if d > 0 then parts[#parts + 1] = string.format("%s+%d", k, d) end
+    end
+    for k, v in pairs(before) do
+        local d = (after[k] or 0) - v
+        if d < 0 then parts[#parts + 1] = string.format("%s%d", k, d) end
+    end
+    table.sort(parts)
+    if #parts == 0 then return nil end
+    return table.concat(parts, "，")
+end
+
+function A.Start(name, args, cmd_id)
     local fn = JOBS[name]
     if fn == nil then
         local known = {}
@@ -1130,20 +1344,27 @@ function A.Start(name, args)
     local p = U.player()
     if p == nil then return false, "现在没有玩家（游戏可能还在读档）" end
     if job ~= nil then
-        -- 旧动作还在跑：先停掉，把上一个的结果交代清楚，别让外面一直等
+        -- 旧动作还在跑：先停掉，把上一个的结果交代清楚，别让外面一直等。
+        -- 真机 bug（2026-11-12）：这里原来用的是 last_cmd_id —— 而 last_cmd_id 已经是"新指令"的 id，
+        -- 于是新指令立刻收到一句"被新指令打断了（上一件事没做完）"当成自己的结果，
+        -- 真正做完的结果反而没人等（实测：pickup 报失败、但木头确实进了背包）。
+        local prev_id = job.cmd_id
         pcall(function()
             if p.components.locomotor ~= nil then p.components.locomotor:Stop() end
             p:ClearBufferedAction()
         end)
-        Whale.bridge.Report(false, "被新指令打断了（上一件事没做完）")
+        Whale.bridge.Report(false, "被新指令打断了（上一件事没做完）", prev_id)
     end
     job = {
         name = name,
         args = args or {},
+        cmd_id = cmd_id,
         step = "start",
         data = {},
         t0 = U.now(),
     }
+    -- 动作开始前拍背包快照（结束时用来算净变化）
+    job.data.inv_before = snapshot_counts(p)
     Whale.job = job
     return true, nil
 end
@@ -1157,7 +1378,8 @@ function A.Abort(reason)
                 p:ClearBufferedAction()
             end)
         end
-        Whale.bridge.Report(false, tostring(reason or "被打断了"))
+        Whale.bridge.Report(false, tostring(reason or "被打断了"), job.cmd_id)
+        client_stop(U.player())
         job = nil
         Whale.job = nil
     end
@@ -1168,7 +1390,7 @@ function A.Tick()
     if j == nil then return end
     local p = U.player()
     if p == nil then
-        Whale.bridge.Report(false, "玩家不见了（可能退出游戏了）")
+        Whale.bridge.Report(false, "玩家不见了（可能退出游戏了）", j.cmd_id)
         job = nil
         Whale.job = nil
         return
@@ -1177,17 +1399,23 @@ function A.Tick()
     local ok, status, text = pcall(fn, j, p)
     if not ok then
         Whale.util.log("动作 " .. tostring(j.name) .. " 出错：" .. tostring(status))
-        Whale.bridge.Report(false, "动作出错：" .. tostring(status))
+        client_stop(p)
+        Whale.bridge.Report(false, "动作出错：" .. tostring(status), j.cmd_id)
         job = nil
         Whale.job = nil
         return
     end
     if status == "done" then
-        Whale.bridge.Report(true, text or "好了")
+        client_stop(p)
+        local change = count_diff(j.data.inv_before, snapshot_counts(p))
+        local done_text = text or "好了"
+        if change ~= nil then done_text = done_text .. "（背包：" .. change .. "）" end
+        Whale.bridge.Report(true, done_text, j.cmd_id)
         job = nil
         Whale.job = nil
     elseif status == "fail" then
-        Whale.bridge.Report(false, text or "做不了")
+        client_stop(p)
+        Whale.bridge.Report(false, text or "做不了", j.cmd_id)
         job = nil
         Whale.job = nil
     end
@@ -1196,6 +1424,46 @@ end
 function A.Current()
     if job == nil then return nil end
     return job.name, job.args
+end
+
+--- 客户端走路心跳：人物在走的时候，隔一会儿把"现在要去哪"再告诉客户端一次。
+--- 客户端的路径可能和服务端不完全一样（先到、绕开、或者被预测打断），
+--- 一旦客户端先停下，而服务端还在走，画面又变回滑行 —— 重发一次就同步了。
+local walk_rpc_tick = 0
+function A.refresh_client_walk(force)
+    -- 只对"纯走路"的任务补发：动作（砍/挖/捡/打）让引擎走过去的那一段**不能**发，
+    -- 否则客户端和服务端各有一份移动意图，会互相拽（真机踩到 chop 报"推不动"）。
+    local j = job
+    if j == nil or (j.name ~= "move_to" and j.name ~= "go_to") then
+        walk_rpc_tick = 0
+        return false
+    end
+    local p = U.player()
+    if p == nil then return false end
+    local loco = p.components.locomotor
+    if loco == nil then return false end
+    local moving = false
+    local ok_m, mv = pcall(function() return loco:WantsToMoveForward() end)
+    if ok_m then moving = mv == true end
+    if not moving then
+        walk_rpc_tick = 0
+        return false
+    end
+    walk_rpc_tick = walk_rpc_tick + 1
+    -- server_tick 是 0.2 秒一次，每 5 次≈1 秒重发一次
+    if not force and (walk_rpc_tick % 5) ~= 0 then return false end
+    local x, z = nil, nil
+    local dest = nil
+    pcall(function() dest = loco.dest end)
+    if dest ~= nil then
+        local ok_p, px, _, pz = pcall(function() return dest:GetPoint() end)
+        if ok_p and px ~= nil then x, z = px, pz end
+    end
+    if x == nil then return false end
+    local run = true
+    local ok_r, wants = pcall(function() return loco:WantsToRun() end)
+    if ok_r and wants ~= nil then run = wants == true end
+    return client_walk(p, x, z, run)
 end
 
 function A.Known()

@@ -110,6 +110,9 @@ function S.GameState(meta, sections)
     if sections.inventory ~= nil then state.inventory = sections.inventory end
     if sections.world ~= nil then state.world = sections.world end
     if sections.nearby ~= nil then state.nearby = sections.nearby end
+    -- Phase 6 M1：威胁 / 环境（只走 telemetry 大包，不进日志单行记录）
+    if sections.threats ~= nil then state.threats = sections.threats end
+    if sections.environment ~= nil then state.environment = sections.environment end
     local observer = {
         interval = meta.interval,
         errors = meta.errors,

@@ -91,21 +91,57 @@ F8 开/停 · F7 停手
 - 12 格内：能采的、地上能捡的、能砍的树、能挖的矿、能铲的、能拆的、敌人（带血量）、火堆（带燃料）、建筑、队友
 - 提醒：血量低、快饿死、理智低、天黑了没光源、太冷/太热、已经死了
 
-## AI 能做什么（22 个动作）
+## AI 能做什么（25 个动作）
 
 | 类别 | 工具 |
 |---|---|
 | 看 | `get_state`、`get_guide`、`update_notes` |
 | 移动 | `move_to`（格子坐标，自动绕障碍）、`go_to`（走到某个东西旁边，可按名字或 tag） |
-| 采集 | `pick`（浆果/草/树枝/蘑菇/胡萝卜…）、`chop`（砍树）、`mine`（挖矿）、`dig`（铲）、`hammer`（拆） |
+| 采集 | `pick`（浆果/草/树枝/蘑菇/胡萝卜…）、`pickup`（捡地上的木头/石头/燧石/丝…）、`chop`（砍树）、`mine`（挖矿）、`dig`（铲）、`hammer`（拆） |
 | 战斗 | `attack`（自动换最好的武器，血少于 30% 先吃东西） |
-| 吃和做 | `eat`（自动挑最划算的）、`cook`（火上烤）、`craft`（做东西）、`build`（摆建筑）、`make_fire`（生营火） |
+| 吃和做 | `eat`（自动挑最划算的）、`heal`（药膏/腺体，没有就吃东西回血）、`cook`（火上烤）、`craft`（做东西）、`build`（摆建筑）、`make_fire`（生营火）、`add_fuel`（往火里添柴续命） |
 | 装备 | `equip`（拿火把/武器/穿护甲）、`drop` |
 | 生活 | `sleep`（帐篷/睡袋）、`say`（游戏聊天说话）、`wait`、`stop`（立刻停下） |
+
+砍树/挖矿/拆东西的 `count` 指「干倒几棵/挖空几块」（默认一直干到目标消失才计数）；掉落物**不会自动进背包**，要用 `pickup` 捡。动作做完会附带**背包净变化**（例如「（背包：log+4）」），模型不用靠猜。
+
+## Phase 6：高级生存智能（威胁 / 战斗 / 规避 / 四季 / Boss）
+
+除了上面那套给模型用的 25 个动作，仓库里还有一条更完整的**生存智能层**（MCP Server + Bridge，
+和 Phase 1~5 同一套链路，文档在 [`docs/phase6/`](docs/phase6/00-index.md)）：
+
+| 能回答什么 | 工具 |
+|---|---|
+| 现在有多危险？为什么？ | `get_threat_assessment`（0~100 分 + 每个因素的贡献 + 每个敌人的战术档案） |
+| 打得过吗？ | `get_combat_readiness` / `get_combat_recommendation` / `evaluate_combat_target` |
+| 往哪跑？ | `get_escape_options`（敌群 / Boss / 黑夜无光 / 低温 / 高温 / 火灾 / 雷雨） |
+| 这季要准备什么？ | `get_seasonal_readiness` / `prepare_for_season` |
+| 这是 Boss 吗？能打吗？ | `get_boss_readiness`（识别 + 准备报告；**不自动开 Boss 战**） |
+| 现在最该干什么？ | `get_survival_priority`（P0 紧急生存 → P5 探索，硬规则在程序层） |
+
+真正打起来时：
+
+- **战斗执行器在 Lua 里 0.1 秒跑一次** Kiting（`scripts/main/combat_executor.lua`），只用游戏原生
+  `combat:TryAttack` / `locomotor:GoToPoint`，**不用 ForceAttack**；
+- 普通敌人第一版是 **SUPERVISED_COMBAT**（`start_combat` 必须 `confirmed=true`）；
+- 只有 7 种验证过的普通敌人在自动白名单里；**Boss 一律硬拦**，没档案的生物一律避战；
+- 战斗期间每 2 秒复核控制权：紧急停止 / 人工接管会立刻让它停手；
+- 生命低于**动态阈值**（随敌人强度 / 追击数 / 护甲浮动，不是固定 30%）会自动脱离。
+
+## 自助保命（模组自己动手，不等 AI 想）
+AI 一步一步想，每步要几秒，而天黑、火烧完、血见底、猎犬贴脸都不等人。模组里有一层**反射**（模组设置里可关），只在**没有任务在跑**的空档触发，每件事做完会在游戏聊天里说一句：
+| 触发条件 | 动作 |
+|---|---|
+| 生命 < 25% | `heal`：先用药膏/腺体，没有就吃东西 |
+| 黄昏/夜晚且没有光源 | 举起背包里的火把；没有就现做一把 |
+| 站在火堆边且燃料 < 15% | 自动添柴 |
+| 生命 < 35% 且敌人贴脸 | 往反方向后撤 |
 
 所有动作都走游戏自己的逻辑，不是改数据：走路是 `locomotor:GoToPoint`，干活是 `BufferedAction(...)`，工具耐久、体力、掉落、被打断都和手动玩一样。
 
 ## 已知限制（第一版）
+
+- **走路动画**：饥荒里人物动画是**客户端**自己预测出来的（服务端只同步位置），所以模组一边让服务端走，一边用 mod RPC 通知那个玩家的客户端一起走，动画才正常。**客户端也要装这个模组**（本地装的时候本来就是同一份）；别人没装模组的话，在他们眼里 AI 是在"平移"。
 
 - **没有「睡到天亮」**：饥荒本来就只能睡帐篷/睡袋，`sleep` 找帐篷或睡袋。
 - **锅（crockpot）只支持到「往里放」这一步**：`cook` 目前是营火/火坑直接烤；用锅做菜要靠 `go_to` + 后续版本补。
@@ -123,14 +159,14 @@ dsh-dont-starve-blind-whale-survivor/
 │  ├─ lib/index.js       插件本体：设置、会话预设、dst 入口工具、自动续玩、自动装模组
 │  ├─ lib/mcp-server.js  本机 MCP 服务器（Streamable HTTP + SSE 心跳）+ /settings + /status
 │  ├─ lib/bridge.js      文件桥：找目录、读状态、发指令等结果、推设置/暂停
-│  ├─ lib/tools.js       22 个工具的说明和参数 + 执行（还有给模型的规则和攻略）
+│  ├─ lib/tools.js       25 个工具的说明和参数 + 执行（还有给模型的规则和攻略）
 │  ├─ lib/mod-install.js 把 Lua 模组装进游戏 mods、写 modsettings.lua
 │  └─ lib/client.js      插件页的配置卡片（由 tools/build-client.mjs 生成，不要手改）
 ├─ DontStarveWhaleSurvivor/  饥荒模组（纯 Lua，直接复制进 mods 就能用）
 │  ├─ modinfo.lua / modmain.lua
 │  ├─ scripts/whale/bridge.lua    文件桥 + 主循环（服务端看和做；客户端管暂停）
 │  ├─ scripts/whale/observe.lua   游戏状态 → 文字
-│  ├─ scripts/whale/actions.lua   20 个动作的状态机
+│  ├─ scripts/whale/actions.lua   22 个动作的状态机
 │  ├─ scripts/whale/util.lua      找实体、算距离、读背包
 │  ├─ scripts/whale/hud.lua        游戏里的小窗 + F8/F7 快捷键（客户端）
 │  ├─ scripts/whale/json.lua      迷你 JSON（游戏自带的那个 encode 不合规范）

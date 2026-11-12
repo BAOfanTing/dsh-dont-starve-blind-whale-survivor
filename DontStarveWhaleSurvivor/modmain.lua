@@ -14,7 +14,10 @@ local GLOBAL = GLOBAL
 
 Whale = {
     name = "大肥鱼饿不死",
-    version = "0.1.0",
+    -- 版本号跟 modinfo.lua 走：状态文件里的 mod 字段要和模组列表里显示的一致，
+    -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
+    -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
+    version = (type(version) == "string" and version) or "0.10.0",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -47,11 +50,14 @@ end
 
 Whale.verbose = modconfig("VERBOSE", false) and true or false
 Whale.interval = tonumber(modconfig("INTERVAL", 1)) or 1
+Whale.reflex_on = modconfig("REFLEX", true) and true or false
 
 modimport("scripts/whale/json.lua")
 modimport("scripts/whale/util.lua")
 modimport("scripts/whale/observe.lua")
 modimport("scripts/whale/actions.lua")
+-- 保命反射层：血见底/入夜没光/火要灭/被贴脸时自己动手（要有动作模块，所以放这之后）
+modimport("scripts/whale/reflex.lua")
 modimport("scripts/whale/bridge.lua")
 modimport("scripts/whale/hud.lua")
 
@@ -62,6 +68,8 @@ modimport("scripts/main/player_observer.lua")
 modimport("scripts/main/inventory_observer.lua")
 modimport("scripts/main/world_observer.lua")
 modimport("scripts/main/entity_observer.lua")
+-- Phase 6 M1：威胁 / 环境观察器（敌人战斗状态、光源、体温、季节读数）
+modimport("scripts/main/threat_observer.lua")
 modimport("scripts/main/state_serializer.lua")
 modimport("scripts/main/observer_manager.lua")
 
@@ -80,6 +88,8 @@ modimport("scripts/main/net.lua")
 modimport("scripts/main/probe.lua")
 -- Phase 5 M6：任务链引擎（依赖 Whale.actions / Whale.util，所以放最后）
 modimport("scripts/main/task_runner.lua")
+-- Phase 6 M4：战斗执行器 / Kiting（高频 tick 在 Lua 里跑，0.1 秒一次）
+modimport("scripts/main/combat_executor.lua")
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
 AddClassPostConstruct("screens/playerhud", function(self, owner)
@@ -119,5 +129,9 @@ end)
 AddPlayerPostInit(function(inst)
     inst:ListenForEvent("death", function()
         if Whale.actions then Whale.actions.Abort("你死了") end
+        -- Phase 6 M4：死亡时战斗也必须立刻收手（不等观察器 tick）
+        if BWS2 ~= nil and BWS2.combat ~= nil and BWS2.combat.ForceStop ~= nil then
+            pcall(BWS2.combat.ForceStop, "你死了")
+        end
     end)
 end)

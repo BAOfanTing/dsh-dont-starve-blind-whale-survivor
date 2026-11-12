@@ -40,18 +40,29 @@ local ACTION_MAP = {
     craft_item = 'craft',
     build_structure = 'build',
     build_campfire = 'make_fire',
+    -- Phase 6 M4：战后恢复要能真的治伤（JOBS.heal 是 Phase 5 就有的原生动作）
+    heal_self = 'heal',
 }
 
 -- 需要控制权写权限的动作（get_movement_status / probe_game_actions 是只读）
 local WRITE_ACTIONS = { move_to = true, stop_movement = true,
     gather_resource = true, move_to_target = true,
     equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
-    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
+    heal_self = true }
+
+-- ─────────────── Phase 6 M4：战斗类命令 ───────────────
+-- 这些命令**不走** ACTION_MAP → Whale.actions 那套单步 job，而是交给 BWS2.combat
+-- （它有自己的 0.1 秒 tick 和 9 态状态机，Kiting 需要高频判断）。
+-- 但它们共享本文件的安全链：未知动作拒绝 → 服务端权威 → 玩家可用 → 控制权二次 assert。
+local COMBAT_COMMANDS = { start_combat = true, retreat_from_combat = true,
+    evade_threat = true, abort_combat = true }
 
 -- Phase 5 M4：需人工确认的动作（任务书 §11：砍伐/采矿/进食/制作/建造初期建议人工确认）。
 -- **程序层强制**：params 必须显式带 confirmed=true，不靠提示词。
 local CONFIRM_REQUIRED = { chop_tree = true, mine_rock = true,
-    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
+    heal_self = true }
 
 -- Phase 5 M3：资源类型 → 游戏内实体名白名单。
 -- 只映射到「可采摘实体」（pickable / harvestable），走 ACTIONS.PICK / HARVEST。
@@ -358,8 +369,10 @@ local function buildJobArgs(command)
         if radius < 2 then radius = 2 end
         if radius > GATHER_MAX_RADIUS then radius = GATHER_MAX_RADIUS end
         return { item = item, count = count, radius = radius }, nil
-    elseif command.type == 'eat_item' then
-        -- 进食：item 可选（不传 = 让游戏自动挑最好的食物），传了必须在白名单
+    elseif command.type == 'heal_self' then
+        -- Phase 6 M4：战后恢复用。JOBS.heal 自己会挑药膏/腺体，没有就吃东西回血。
+        return {}, nil
+    elseif command.type == 'eat_item' then        -- 进食：item 可选（不传 = 让游戏自动挑最好的食物），传了必须在白名单
         local args = {}
         if p.item ~= nil and p.item ~= '' then
             local item = EAT_ITEMS[p.item]
@@ -467,6 +480,15 @@ local function startAction(command, report, startedMs)
             if ok then hungerBefore = tonumber(v) end
         end
     end
+    -- Phase 6 M4：治疗要记动作前的生命值，完成后做差核验"真的治到了"
+    local hpBefore = nil
+    do
+        local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+        if player ~= nil and player.components ~= nil and player.components.health ~= nil then
+            local ok, v = pcall(function() return player.components.health.currenthealth end)
+            if ok then hpBefore = tonumber(v) end
+        end
+    end
     pending = {
         command_id = command.id,
         report = report,
@@ -476,6 +498,7 @@ local function startAction(command, report, startedMs)
         args = jobArgs,
         loot_before = lootBefore,
         hunger_before = hungerBefore,
+        hp_before = hpBefore,
     }
     lastReportFn = report
     if report ~= nil then
@@ -595,6 +618,18 @@ function E.pollCompletion()
                 local got = equipped_hands_prefab()
                 verify = { equipped = got, requested = args.item,
                     confirmed_gain = got == args.item }
+            elseif pending.action == 'heal_self' then
+                -- Phase 6 M4：治疗核验 —— 生命值前后差（不靠动作自报）
+                local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+                local hpNow = nil
+                if player ~= nil and player.components ~= nil and player.components.health ~= nil then
+                    local ok, v = pcall(function() return player.components.health.currenthealth end)
+                    if ok then hpNow = tonumber(v) end
+                end
+                local before = pending.hp_before
+                local delta = (hpNow ~= nil and before ~= nil) and (hpNow - before) or nil
+                verify = { hp_before = before, hp_after = hpNow, hp_delta = delta,
+                    confirmed_gain = delta ~= nil and delta > 0.5 }
             elseif pending.action == 'eat_item' then
                 -- Phase 5 M5：进食核验 —— 看饥饿值是否真的涨了（不靠动作自报）
                 local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
@@ -642,8 +677,17 @@ function E.execute(command, report)
     local kind = command.type
 
     -- 1) 固定白名单（未知动作直接拒，不执行任意代码）
-    if ACTION_MAP[kind] == nil then
+    if ACTION_MAP[kind] == nil and not COMBAT_COMMANDS[kind] then
         return deny(report, command.id, startedMs, 'unknown_action', '没有这个动作：' .. tostring(kind))
+    end
+
+    -- 1.5) Phase 6 M4：单一执行者。战斗进行中不允许插原子动作（两个人抢一个角色 = 打不成）
+    if not COMBAT_COMMANDS[kind] and BWS2.combat ~= nil and BWS2.combat.is_active ~= nil then
+        local ok_active, active = pcall(BWS2.combat.is_active)
+        if ok_active and active == true then
+            return deny(report, command.id, startedMs, 'combat_in_progress',
+                '战斗进行中：同一时间只允许一个执行者，先 abort_combat 再干别的')
+        end
     end
 
     -- 2) 服务端权威
@@ -699,13 +743,16 @@ function E.execute(command, report)
     -- 5) 提前用 buildJobArgs 校验一遍（避免等控制权 assert 回调后才报参数错）
     --    错误码透传：invalid_target / invalid_item / unknown_resource 等，
     --    让上层能区分"目标错"和"参数错"，而不是一律 invalid_argument。
-    local earlyArgs, earlyErr = buildJobArgs(command)
-    if earlyArgs == nil then
-        local msg = tostring(earlyErr)
-        local code = 'invalid_argument'
-        local head = string.match(msg, '^(%w+):')
-        if head ~= nil then code = head end
-        return deny(report, command.id, startedMs, code, msg)
+    --    战斗命令的参数校验在 BWS2.combat.executeCommand 里（含 Boss/白名单硬拦）。
+    if not COMBAT_COMMANDS[kind] then
+        local earlyArgs, earlyErr = buildJobArgs(command)
+        if earlyArgs == nil then
+            local msg = tostring(earlyErr)
+            local code = 'invalid_argument'
+            local head = string.match(msg, '^(%w+):')
+            if head ~= nil then code = head end
+            return deny(report, command.id, startedMs, code, msg)
+        end
     end
 
     -- 6) 控制权二次校验（问 Bridge，不自己存状态）
@@ -746,6 +793,18 @@ function E.execute(command, report)
             return
         end
         counts.accepted = counts.accepted + 1
+        -- Phase 6 M4：战斗命令转交战斗执行器（它自己回 EXECUTING / 终态）
+        if COMBAT_COMMANDS[kind] then
+            if BWS2.combat == nil or BWS2.combat.executeCommand == nil then
+                deny(report, command.id, startedMs, 'combat_executor_not_loaded', '战斗执行器没加载')
+                return
+            end
+            local ok_combat, outcome = pcall(BWS2.combat.executeCommand, command, report, startedMs)
+            if not ok_combat then
+                deny(report, command.id, startedMs, 'combat_executor_error', tostring(outcome))
+            end
+            return
+        end
         startAction(command, report, startedMs)
     end, 6)
 
@@ -826,6 +885,8 @@ function E.status()
             return list
         end)(),
         write_actions = WRITE_ACTIONS,
+        combat_commands = COMBAT_COMMANDS,
+        combat = (BWS2.combat ~= nil and BWS2.combat.status ~= nil) and BWS2.combat.status() or nil,
         counts = counts,
         completion = completionCounts,
         pending_command_id = pending ~= nil and pending.command_id or nil,

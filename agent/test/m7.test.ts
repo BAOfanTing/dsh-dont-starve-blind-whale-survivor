@@ -10,11 +10,11 @@ import {
 } from '../src/mcp/toolAdapter.js'
 import { loadConfig } from '../src/config.js'
 
-test('M7：两档工具数量正确（read 15 / supervised 27）', () => {
-  assert.equal(READ_ONLY_ALLOWLIST.length, 15, '只读白名单 15 个')
-  assert.equal(WRITE_ALLOWLIST.length, 12, '写白名单 12 个')
-  assert.equal(toolsForPermission('read').length, 15, 'read 档 15 个')
-  assert.equal(toolsForPermission('supervised').length, 27, 'supervised 档 27 个')
+test('M7：两档工具数量正确（read 25 / supervised 43）', () => {
+  assert.equal(READ_ONLY_ALLOWLIST.length, 25, '只读白名单 25 个（Phase 6 加了 10 个生存智能只读工具）')
+  assert.equal(WRITE_ALLOWLIST.length, 18, '写白名单 18 个（Phase 6 加了 6 个）')
+  assert.equal(toolsForPermission('read').length, 25, 'read 档 25 个')
+  assert.equal(toolsForPermission('supervised').length, 43, 'supervised 档 43 个')
 })
 
 test('M7：read 档不含任何写工具', () => {

@@ -169,7 +169,7 @@ local function handle_command(json_text)
         B.Report(false, "指令里没有 action", id)
         return
     end
-    local started, err = Whale.actions.Start(action, type(cmd.args) == "table" and cmd.args or {})
+    local started, err = Whale.actions.Start(action, type(cmd.args) == "table" and cmd.args or {}, id)
     if not started then
         B.Report(false, err or "动作没能开始", id)
     end
@@ -270,6 +270,14 @@ local function server_tick()
     step("读设置", poll_settings)
     step("读指令", poll_command)
     step("跑动作", function() Whale.actions.Tick() end)
+    -- 保命反射：只在没有任务在跑的时候动手（血见底/入夜没光/火要灭/被贴脸）
+    step("保命反射", function()
+        if Whale.reflex ~= nil then Whale.reflex.Tick() end
+    end)
+    -- 人物在走的时候顺手把"要去哪"再告诉客户端一次（否则客户端先停下就变回滑行）
+    step("同步客户端走路", function()
+        if Whale.actions.refresh_client_walk ~= nil then Whale.actions.refresh_client_walk(false) end
+    end)
     step("写状态", function() B.WriteState(false) end)
 end
 

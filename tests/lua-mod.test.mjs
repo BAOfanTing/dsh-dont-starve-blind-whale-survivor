@@ -23,8 +23,9 @@ GLOBAL.STRINGS = {
 GLOBAL.EQUIPSLOTS = { HANDS = "hands", BODY = "body", HEAD = "head" }
 local function act(id) return { id = id } end
 GLOBAL.ACTIONS = { CHOP = act("CHOP"), MINE = act("MINE"), DIG = act("DIG"), HAMMER = act("HAMMER"),
-                   PICK = act("PICK"), HARVEST = act("HARVEST"), ATTACK = act("ATTACK"), EAT = act("EAT"),
-                   COOK = act("COOK"), SLEEPIN = act("SLEEPIN"), DROP = act("DROP") }
+                   PICK = act("PICK"), PICKUP = act("PICKUP"), HARVEST = act("HARVEST"), ATTACK = act("ATTACK"),
+                   EAT = act("EAT"), COOK = act("COOK"), SLEEPIN = act("SLEEPIN"), DROP = act("DROP"),
+                   ADDFUEL = act("ADDFUEL"), HEAL = act("HEAL") }
 GLOBAL.Vector3 = function(x, y, z) return { x = x, y = y, z = z } end
 GLOBAL.BufferedAction = function(doer, target, action, invobject, pos)
     return { doer = doer, target = target, action = action, invobject = invobject, pos = pos }
@@ -277,6 +278,63 @@ test('砍树：自动拿斧头、把动作推给游戏、做完报结果', async
   assert.match(global('OUT_TEXT'), /干了 1 次/)
 })
 
+test('位置行和坐标数据对得上（不能把 y 当成 z）', async () => {
+  // 真机 bug（2026-11-12 审计）：observe 里写的是 U.tile_of(U.pos(p))，
+  // U.pos 返回 (x,y,z)，于是 y（离地高度≈0）被当成 z —— 位置永远显示 (x,0)。
+  const fengari = await import('fengari')
+  const { runFile } = loadMod(fengari)
+
+  runFile(`
+    local player = GLOBAL.AllPlayers[1]
+    local text, data = Whale.observe.Build(player)
+    assert(data.x == 12 and data.z == 45,
+        "格子坐标不对：" .. tostring(data.x) .. "," .. tostring(data.z))
+    local want = "位置：(" .. data.x .. "," .. data.z .. ")"
+    assert(string.find(text, want, 1, true) ~= nil,
+        "位置行应该是「" .. want .. "」，实际：\\n" .. text)
+  `)
+})
+
+test('捡东西：地上掉的东西能用 pickup 捡起来（不然砍树拿不到木头）', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run, global } = loadMod(fengari)
+
+  run(`
+    local log = {
+        prefab = "log",
+        components = { inventoryitem = { owner = nil } },
+        IsValid = function(self) return true end,
+        HasTag = function(self, tag) return false end,
+        Transform = { GetWorldPosition = function() return 12 * 4 + 4, 0, 45 * 4 + 4 end },
+    }
+    NEARBY = { log }
+  `, '在地上放一根木头')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    local started, err = Whale.actions.Start("pickup", { item = "log", count = 2 })
+    assert(started == true, "捡东西应该能开始：" .. tostring(err))
+    Whale.actions.Tick()
+    assert(PUSHED ~= nil, "应该把动作推给游戏了")
+    assert(PUSHED.action.id == "PICKUP", "动作类型不对：" .. tostring(PUSHED.action.id))
+    assert(PUSHED.target.prefab == "log", "目标不是地上的木头：" .. tostring(PUSHED.target.prefab))
+    BUFFERED = PUSHED
+    Whale.actions.Tick()
+    NEARBY = {}          -- 捡走了，地上没东西了
+    BUFFERED = nil
+    Whale.actions.Tick()
+    Whale.actions.Tick()
+    assert(REPORTED ~= nil and REPORTED.ok == true,
+        "应该报告成功，实际：" .. tostring(REPORTED and REPORTED.text))
+    assert(Whale.job == nil, "捡完以后不该还挂着任务")
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /捡了 1 个/)
+})
+
 test('附近什么都没有时老实说做不了', async () => {
   const fengari = await import('fengari')
   const { runFile, run, global } = loadMod(fengari)
@@ -328,6 +386,314 @@ test('文件桥写的状态能被外面的 JSON.parse 读（格式对得上）',
   assert.equal(state.data.z, 45)
 })
 
+test('引擎连砍（一直忙）时，砍倒一棵也要算数并停下来（真机砍了 16 棵才停）', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadMod(fengari)
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    local tree = nil
+    for _, e in ipairs(NEARBY) do
+      if e.prefab == "evergreen" then tree = e end
+    end
+    assert(tree ~= nil, "假环境里应该有一棵树")
+
+    Whale.actions.Start("chop", { count = 1, until_gone = true }, "cmd-A")
+    Whale.actions.Tick()
+    assert(PUSHED ~= nil and PUSHED.target == tree, "应该推砍树动作")
+    -- 引擎"按住动作键"连砍：人物一直 busy，走不到 done_count 那条分支
+    BUFFERED = PUSHED
+    Whale.actions.Tick()
+    Whale.actions.Tick()
+    assert(REPORTED == nil, "树还没倒，不该报结果")
+    -- 树被砍倒：workable 从 CHOP 变成 DIG（树桩）
+    tree.components.workable.action = GLOBAL.ACTIONS.DIG
+    tree.components.workable.workleft = 0
+    Whale.actions.Tick()
+    assert(REPORTED ~= nil and REPORTED.ok == true,
+        "砍倒一棵就该报成功，实际：" .. tostring(REPORTED and REPORTED.text))
+    assert(string.find(REPORTED.text, "干倒", 1, true) ~= nil,
+        "结果里应该说清砍倒了几个：" .. REPORTED.text)
+    assert(Whale.job == nil, "count=1 砍倒一棵就该停，实际还在干")
+    OUT_TEXT = REPORTED.text
+    OUT_ID = REPORTED.id
+  `)
+  assert.match(global('OUT_TEXT'), /干倒/)
+  assert.equal(global('OUT_ID'), 'cmd-A')
+})
+
+test('连砍卡住时有总时长出口（不能无限砍下去）', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run } = loadMod(fengari)
+
+  runFile(`
+    -- U.now() 会优先用 TheSim:GetTime()，但它要求 > 0；所以先把假时钟拨离 0，
+    -- 否则会掉到 os.time() 那条兜底上，时间基准变了就测不出超时。
+    NOW = 1000
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    Whale.actions.Start("chop", { count = 5, until_gone = true, timeout = 10 }, "cmd-T")
+    Whale.actions.Tick()
+    BUFFERED = PUSHED
+    Whale.actions.Tick()
+    NOW = 1060                -- 一直砍不下去，时间过去 60 秒
+    Whale.actions.Tick()
+    assert(REPORTED ~= nil and REPORTED.ok == false,
+        "超时应该老实报失败，实际：" .. tostring(REPORTED and REPORTED.text))
+    assert(string.find(REPORTED.text, "超时", 1, true) ~= nil, "要说清是超时：" .. REPORTED.text)
+    assert(Whale.job == nil, "超时后要停手")
+  `)
+  run('BUFFERED = nil', '收拾')
+})
+
+test('打断旧动作时，失败要回给「旧」指令，不能挂在新指令头上', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadMod(fengari)
+
+  runFile(`
+    REPORTS = {}
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTS[#REPORTS + 1] = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    Whale.actions.Start("chop", { count = 1 }, "cmd-OLD")
+    Whale.actions.Tick()
+    Whale.actions.Start("pickup", { item = "log", count = 1 }, "cmd-NEW")
+    assert(#REPORTS >= 1, "旧动作被打断要有个交代")
+    assert(REPORTS[1].id == "cmd-OLD",
+        "打断的失败必须回给旧指令，实际挂在：" .. tostring(REPORTS[1].id))
+    OUT_TEXT = REPORTS[1].text
+  `)
+  assert.match(global('OUT_TEXT'), /打断/)
+})
+
+test('走路时会通知玩家自己的客户端一起走（不然客户端只看到平移，没有动画）', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run, global } = loadMod(fengari)
+
+  run(`
+    SENT = {}
+    GLOBAL.GetClientModRPC = function(mod, name) return "rpc:" .. tostring(name) end
+    GLOBAL.SendModRPCToClient = function(rpc, userid, a, b, c)
+        SENT[#SENT + 1] = { rpc = rpc, userid = userid, a = a, b = b, c = c }
+    end
+  `, '装上 RPC 桩')
+
+  runFile(`
+    local p = GLOBAL.AllPlayers[1]
+    p.userid = "KU_123"
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    -- move_to 会调 walk_to → 服务端走 + 通知客户端
+    Whale.actions.Start("move_to", { x = 20, z = 30 }, "cmd-M")
+    Whale.actions.Tick()
+    assert(#SENT >= 1, "应该给客户端发了 RPC，实际一条都没发")
+    local msg = SENT[1]
+    assert(msg.rpc == "rpc:walkto", "RPC 名字不对：" .. tostring(msg.rpc))
+    assert(msg.userid == "KU_123", "应该只发给这个玩家：" .. tostring(msg.userid))
+    OUT_X, OUT_Z, OUT_RUN = msg.a, msg.b, msg.c
+    -- 停下时也要通知，不然客户端会一直跑
+    Whale.actions.Start("stop", {}, "cmd-S")
+    Whale.actions.Tick()
+    local stopped = false
+    for _, m in ipairs(SENT) do
+        if m.rpc == "rpc:walkstop" then stopped = true end
+    end
+    assert(stopped, "停手时应该通知客户端停下来")
+  `)
+  // 目标格子 (20,30) 的中心 = 20*4+2, 30*4+2
+  assert.equal(Number(global('OUT_X')), 82)
+  assert.equal(Number(global('OUT_Z')), 122)
+  assert.equal(Number(global('OUT_RUN')), 1, '默认应该是跑（run=1）')
+})
+
+test('动作"走过去"那一段不发 walkto：客户端和服务端不能各有一份移动意图', async () => {
+  // 真机踩到：动作也通知客户端走 → 客户端把人拖到树上了，服务端 busy 一直 false
+  // → chop 报「推不动」。那一段的动画改由客户端的 WatchServerMove 补。
+  const fengari = await import('fengari')
+  const { runFile, run } = loadMod(fengari)
+
+  run(`
+    SENT = {}
+    GLOBAL.GetClientModRPC = function(mod, name) return "rpc:" .. tostring(name) end
+    GLOBAL.SendModRPCToClient = function(rpc, userid, a, b, c)
+        SENT[#SENT + 1] = { rpc = rpc, userid = userid, a = a, b = b, c = c }
+    end
+  `, '装上 RPC 桩')
+
+  runFile(`
+    local p = GLOBAL.AllPlayers[1]
+    p.userid = "KU_9"
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    Whale.actions.Start("chop", { count = 1, until_gone = true }, "cmd-C")
+    Whale.actions.Tick()
+    assert(PUSHED ~= nil, "应该推了砍树动作")
+    for _, m in ipairs(SENT) do
+        assert(m.rpc ~= "rpc:walkto", "动作接近目标时不该发 walkto（会和引擎抢移动）")
+    end
+    -- 心跳也只应该伺候纯走路任务
+    assert(Whale.actions.refresh_client_walk(false) == false, "chop 期间的心跳应该什么都不做")
+  `)
+})
+
+test('走路时每秒补一次"要去哪"，客户端先停下也能跟上', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run, global } = loadMod(fengari)
+
+  run(`
+    SENT = {}
+    GLOBAL.GetClientModRPC = function(mod, name) return "rpc:" .. tostring(name) end
+    GLOBAL.SendModRPCToClient = function(rpc, userid, a, b, c)
+        SENT[#SENT + 1] = { rpc = rpc, userid = userid, a = a, b = b, c = c }
+    end
+  `, '装上 RPC 桩')
+
+  runFile(`
+    local p = GLOBAL.AllPlayers[1]
+    p.userid = "KU_9"
+    local loco = p.components.locomotor
+    -- 假 locomotor：正在往 (100,0,200) 走
+    loco.WantsToMoveForward = function() return true end
+    loco.WantsToRun = function() return true end
+    loco.dest = { GetPoint = function() return 100, 0, 200 end }
+
+    Whale.bridge = { Report = function() end, WriteState = function() end }
+    -- 心跳只伺候"纯走路"的任务
+    Whale.actions.Start("move_to", { x = 25, z = 50 }, "cmd-H")
+
+    -- 心跳按 tick 计数，每 5 次发一次
+    for i = 1, 5 do Whale.actions.refresh_client_walk(false) end
+    assert(#SENT >= 1, "走了 5 个 tick 应该补发一次，实际没有")
+    OUT_X, OUT_Z = SENT[#SENT].a, SENT[#SENT].b
+  `)
+  assert.equal(Number(global('OUT_X')), 100)
+  assert.equal(Number(global('OUT_Z')), 200)
+})
+
+test('添柴：往烧着的火里扔燃料，回来报燃料百分比变化', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run, global } = loadMod(fengari)
+
+  run(`
+    -- 一堆烧到 40% 的火（fuelpct 用闭包，方便中途改）
+    local fuelpct = 0.4
+    local fire = {
+        prefab = "firepit",
+        components = { fueled = {
+            GetPercent = function() return fuelpct end,
+            IsEmpty = function() return false end,
+        } },
+        IsValid = function() return true end,
+        HasTag = function(self, tag) return tag == "fire" end,
+        Transform = { GetWorldPosition = function() return 12 * 4 + 6, 0, 45 * 4 + 2 end },
+    }
+    FIRE = fire
+    SET_FIRE_PCT = function(v) fuelpct = v end
+    NEARBY = { fire }
+    -- 背包里放一块木头（燃料值 4）
+    local log = {
+        prefab = "log",
+        components = { fuel = { fuelvalue = 4 } },
+        IsValid = function() return true end,
+        HasTag = function() return false end,
+        Transform = { GetWorldPosition = function() return 0, 0, 0 end },
+    }
+    GLOBAL.AllPlayers[1].components.inventory._items[3] = log
+  `, '摆一堆火和一块木头')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    Whale.actions.Start("add_fuel", {}, "cmd-F")
+    Whale.actions.Tick()
+    assert(PUSHED ~= nil, "应该往火里推 ADDFUEL")
+    assert(PUSHED.action.id == "ADDFUEL", "动作类型不对：" .. tostring(PUSHED.action.id))
+    assert(PUSHED.target ~= nil and PUSHED.target.prefab == "firepit", "目标应该是那堆火")
+    assert(PUSHED.invobject ~= nil and PUSHED.invobject.prefab == "log", "应该拿木头当柴")
+    -- 火被添柴后到 80%
+    SET_FIRE_PCT(0.8)
+    Whale.actions.Tick()
+    assert(REPORTED ~= nil and REPORTED.ok == true, "应该报成功：" .. tostring(REPORTED and REPORTED.text))
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /40% → 80%/)
+})
+
+test('回血：有治疗物品就走 HEAL，指自己；没有就吃东西', async () => {
+  const fengari = await import('fengari')
+  const { runFile, run, global } = loadMod(fengari)
+
+  run(`
+    local salve = {
+        prefab = "healing_salve",
+        components = { healer = {} },
+        IsValid = function() return true end,
+        HasTag = function() return false end,
+        Transform = { GetWorldPosition = function() return 0, 0, 0 end },
+    }
+    local p = GLOBAL.AllPlayers[1]
+    p.components.inventory._items[3] = salve
+  `, '背包里放一瓶药膏')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    local p = GLOBAL.AllPlayers[1]
+    Whale.actions.Start("heal", {}, "cmd-H")
+    Whale.actions.Tick()
+    assert(PUSHED ~= nil, "应该推治疗动作")
+    assert(PUSHED.action.id == "HEAL", "治疗物品应该走 HEAL，实际：" .. tostring(PUSHED.action.id))
+    assert(PUSHED.target == p, "HEAL 的目标应该是自己")
+    assert(PUSHED.invobject.prefab == "healing_salve", "应该用药膏")
+    -- 回血 20
+    p.components.health.currenthealth = 65
+    Whale.actions.Tick()
+    assert(REPORTED ~= nil and REPORTED.ok == true, "应该报成功：" .. tostring(REPORTED and REPORTED.text))
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /生命 45 → 65/)
+})
+
+test('结果带背包净变化（verify）：只说"干了 N 下"模型会编造', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadMod(fengari)
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+      WriteState = function() end,
+    }
+    Whale.actions.Start("say", { text = "hi" }, "cmd-V")
+    -- 动作过程中背包多了两根木头
+    local inv = GLOBAL.AllPlayers[1].components.inventory
+    inv._items[3] = {
+        prefab = "log",
+        components = { stackable = { StackSize = function() return 2 end } },
+        IsValid = function() return true end,
+        HasTag = function() return false end,
+        Transform = { GetWorldPosition = function() return 0, 0, 0 end },
+    }
+    Whale.actions.Tick()
+    assert(REPORTED ~= nil and REPORTED.ok == true, "应该报成功")
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /背包：log\+2/)
+})
+
 test('modmain.lua 能在沙箱里加载（0.1.0 就是这里崩的）', async () => {
   const fengari = await import('fengari')
   const { lua, lauxlib, to_luastring, to_jsstring } = fengari
@@ -368,20 +734,27 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
   assert.equal(status, lua.LUA_OK, 'modmain.lua 加载失败（游戏里就是这句会让启动崩溃）：' + fail())
 
   lauxlib.luaL_loadstring(L, to_luastring(`
-    assert(#MODIMPORTS == 24, "应该 modimport 了 24 个模块（M2 action_executor + M6 task_runner），实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 27, "应该 modimport 了 27 个模块（Phase 5 +reflex，Phase 6 +threat_observer/combat_executor），实际 " .. #MODIMPORTS)
     assert(MODIMPORTS[1] == "scripts/whale/json.lua", "第一个应该是 json.lua")
-    assert(MODIMPORTS[7] == "scripts/main/json_encoder.lua", "Phase 1 的编码器要跟上")
-    assert(MODIMPORTS[8] == "scripts/main/player_observer.lua", "Phase 1 的玩家观察器要跟上")
-    assert(MODIMPORTS[11] == "scripts/main/entity_observer.lua", "Phase 1 的实体扫描要跟上")
-    assert(MODIMPORTS[12] == "scripts/main/state_serializer.lua", "Phase 1 的序列化器要跟上")
-    assert(MODIMPORTS[13] == "scripts/main/observer_manager.lua", "Phase 1 的观察器管理器要跟上")
-    assert(MODIMPORTS[14] == "bws_config.lua", "Phase 2 的生成配置要跟上")
-    assert(MODIMPORTS[15] == "scripts/main/config.lua", "Phase 2 的 config 要跟上")
-    assert(MODIMPORTS[17] == "scripts/main/connection.lua", "Phase 2 的连接管理要跟上")
-    assert(MODIMPORTS[20] == "scripts/main/commands.lua", "Phase 2 的命令接收要跟上")
-    assert(MODIMPORTS[21] == "scripts/main/action_executor.lua", "Phase 5 M2 的动作执行器要跟上")
-    assert(MODIMPORTS[22] == "scripts/main/net.lua", "Phase 2 的网络调度要跟上")
-    assert(MODIMPORTS[23] == "scripts/main/probe.lua", "Phase 2 的探针要跟上")
+    assert(MODIMPORTS[4] == "scripts/whale/actions.lua", "动作模块的位置")
+    assert(MODIMPORTS[5] == "scripts/whale/reflex.lua", "M1 的保命反射层要跟上（在 actions 之后、bridge 之前）")
+    assert(MODIMPORTS[6] == "scripts/whale/bridge.lua", "文件桥的位置")
+    assert(MODIMPORTS[7] == "scripts/whale/hud.lua", "小窗的位置")
+    assert(MODIMPORTS[8] == "scripts/main/json_encoder.lua", "Phase 1 的编码器要跟上")
+    assert(MODIMPORTS[9] == "scripts/main/player_observer.lua", "Phase 1 的玩家观察器要跟上")
+    assert(MODIMPORTS[12] == "scripts/main/entity_observer.lua", "Phase 1 的实体扫描要跟上")
+    assert(MODIMPORTS[13] == "scripts/main/threat_observer.lua", "Phase 6 的威胁观察器要跟上（在 entity 之后）")
+    assert(MODIMPORTS[14] == "scripts/main/state_serializer.lua", "Phase 1 的序列化器要跟上")
+    assert(MODIMPORTS[15] == "scripts/main/observer_manager.lua", "Phase 1 的观察器管理器要跟上")
+    assert(MODIMPORTS[16] == "bws_config.lua", "Phase 2 的生成配置要跟上")
+    assert(MODIMPORTS[17] == "scripts/main/config.lua", "Phase 2 的 config 要跟上")
+    assert(MODIMPORTS[19] == "scripts/main/connection.lua", "Phase 2 的连接管理要跟上")
+    assert(MODIMPORTS[22] == "scripts/main/commands.lua", "Phase 2 的命令接收要跟上")
+    assert(MODIMPORTS[23] == "scripts/main/action_executor.lua", "Phase 5 M2 的动作执行器要跟上")
+    assert(MODIMPORTS[24] == "scripts/main/net.lua", "Phase 2 的网络调度要跟上")
+    assert(MODIMPORTS[25] == "scripts/main/probe.lua", "Phase 2 的探针要跟上")
+    assert(MODIMPORTS[26] == "scripts/main/task_runner.lua", "Phase 5 M6 的任务链要在战斗执行器之前")
+    assert(MODIMPORTS[27] == "scripts/main/combat_executor.lua", "Phase 6 的战斗执行器要最后加载")
     assert(#POSTINITS == 3, "应该有 3 个 postinit，实际 " .. #POSTINITS)
     assert(CPOSTS[1] == "screens/playerhud", "应该往玩家 HUD 上挂小窗")
     assert(Whale.files.state == "whale_state.json", "文件名表没装上")
@@ -528,6 +901,12 @@ Whale = { files = {}, util = { log = function() end } }
     KEYHANDLERS[1](GLOBAL.KEY_F7, true)
     local data3 = Whale.json.decode(WRITTEN["whale_toggle.json"])
     assert(data3.stop == true and data3.ai == false, "F7 应该是停手")
+    -- 服务端挪人时的"补动画"判定（纯视觉，不参与移动）
+    assert(type(Whale.hud.anim_for) == "function", "少了 anim_for")
+    assert(Whale.hud.anim_for(8, true) == nil, "自己在走的时候别插手，交给状态机")
+    assert(Whale.hud.anim_for(8, false) == "run_loop", "服务端在挪我，应该自己播跑步")
+    assert(Whale.hud.anim_for(0.1, false) == "idle_loop", "停下了就应该回 idle")
+    assert(Whale.hud.anim_for(nil, false) == "idle_loop", "还测不出速度时按停着算")
     OUT = "ok"
   `))
   assert.equal(lua.lua_pcall(L, 0, 0, 0), lua.LUA_OK, 'HUD 行为不对：' + fail())

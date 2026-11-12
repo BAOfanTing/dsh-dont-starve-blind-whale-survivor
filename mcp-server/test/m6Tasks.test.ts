@@ -6,10 +6,10 @@ import { createToolDefinitions, runTool } from '../src/tools/definitions.js'
 
 const byName = () => new Map(createTaskTools().map((t) => [t.name, t]))
 
-test('M6：新增 3 个任务链工具，MCP 总工具数 27', () => {
+test('M6：新增 3 个任务链工具，MCP 总工具数 43', () => {
   assert.deepEqual(createTaskTools().map((t) => t.name).sort(),
     ['get_task_status', 'start_task', 'stop_task'])
-  assert.equal(createToolDefinitions().length, 27)
+  assert.equal(createToolDefinitions().length, 43)
 })
 
 test('M6：readOnly 标记正确（start/stop 写，status 只读）', () => {

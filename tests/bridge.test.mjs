@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { GameBridge, stripKleiHeader } from '../lib/bridge.js'
+import { executeTool } from '../lib/tools.js'
 import { FakeGame, tempDir } from './helpers.mjs'
 
 test('找不到游戏时 state() 是空的，status() 会说清楚原因', () => {
@@ -23,10 +24,76 @@ test('能读到模组写的状态，并认得出它是新的', () => {
   assert.ok(state)
   assert.equal(state.json.ready, true)
   assert.match(state.json.text, /威尔逊/)
+  // 时间字段必须可算：曾经 readState 只给 mtime，上层读 mtimeMs 就得到 NaN，
+  // 于是每次 get_state 都多一句「这份状态是 NaN 秒前的，游戏可能暂停了」。
+  assert.ok(Number.isFinite(state.mtimeMs), 'state.mtimeMs 必须是数字')
+  assert.ok(Number.isFinite(state.ageMs) && state.ageMs >= 0, 'state.ageMs 必须是数字')
   const status = bridge.status()
   assert.equal(status.connected, true)
   assert.equal(status.channel, 'persist')
   game.stop()
+})
+
+test('get_state 不该出现「NaN 秒前的」这种假警报', async () => {
+  const dir = tempDir()
+  const game = new FakeGame(dir).start()
+  const bridge = new GameBridge({ bridgeDir: dir, lockDir: true })
+  const text = await executeTool('get_state', {}, {
+    bridge,
+    notes: { read: () => '', write: () => {} },
+    guides: {},
+    extraInstructions: '',
+  })
+  assert.doesNotMatch(text, /NaN/, 'get_state 里出现了 NaN：时间字段又没对上')
+  assert.doesNotMatch(text, /可能暂停/, '刚写出来的状态不该提示“游戏可能暂停了”')
+  assert.match(text, /威尔逊/)
+  game.stop()
+})
+
+test('Master / Caves 两份状态同时在写时，要挑里面真的有人的那份', () => {
+  // 真机踩到：人在 Master 上玩，但两个分片的 whale_state.json 时间戳几乎一样，
+  // 谁先扫到谁赢 —— 拿到 Caves 那份（players=0）就变成「现在还没有玩家进入世界」。
+  const master = tempDir('whale-master-')
+  const caves = tempDir('whale-caves-')
+  const write = (dir, payload) => writeFileSync(join(dir, 'whale_state.json'), JSON.stringify(payload))
+  write(master, { v: 1, mod: '0.9.2', ready: true, text: '你：威尔逊 位置：(1,2)', data: { ready: true, players: 1, x: 1, z: 2 } })
+  write(caves, { v: 1, mod: '0.9.2', ready: false, text: '现在还没有玩家进入世界', data: { ready: false, players: 0 } })
+
+  const bridge = new GameBridge({ bridgeDir: master, lockDir: true })
+  // 故意把洞穴那份排在前面，逼实现去比较内容而不是比较先后
+  bridge.locate = () => [{ dir: caves, channel: 'persist' }, { dir: master, channel: 'persist' }]
+
+  const state = bridge.readState()
+  assert.ok(state)
+  assert.equal(state.dir, master, '应该挑 Master 那份（里面有人）')
+  assert.match(state.json.text, /威尔逊/)
+  assert.equal(bridge.status().connected, true)
+})
+
+test('指令只发给有玩家的那个分片（不然没人的洞穴会抢答「现在没有玩家」）', async () => {
+  const master = tempDir('whale-m-')
+  const caves = tempDir('whale-c-')
+  const masterGame = new FakeGame(master)
+  const cavesGame = new FakeGame(caves)
+  cavesGame.ready = false
+  cavesGame.stateText = '现在还没有玩家进入世界（游戏可能还在读档）。'
+  cavesGame.handler = () => ({ ok: false, text: '现在没有玩家（游戏可能还在读档）' })
+  masterGame.handler = () => ({ ok: true, text: '停下了' })
+  masterGame.start()
+  cavesGame.start()
+
+  const bridge = new GameBridge({ bridgeDir: master, lockDir: true, pollMs: 20 })
+  // 两个分片都在轮询指令文件；故意把洞穴排在前面
+  bridge.locate = () => [{ dir: caves, channel: 'persist' }, { dir: master, channel: 'persist' }]
+
+  const result = await bridge.call('stop', {}, { timeoutMs: 4000 })
+  assert.equal(result.ok, true, '应该拿到 Master 的回复，实际：' + result.text)
+  assert.equal(result.text, '停下了')
+  assert.equal(cavesGame.commands.length, 0, '没人的分片不该收到指令')
+  assert.equal(masterGame.commands.length, 1, '有人的分片应该收到指令')
+
+  masterGame.stop()
+  cavesGame.stop()
 })
 
 test('发指令会等游戏回结果', async () => {

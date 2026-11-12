@@ -27,17 +27,23 @@ export const COMMAND_TYPES = [
   'eat_item', 'craft_item', 'build_structure', 'build_campfire',
   // Phase 5 M6：任务链
   'start_task', 'stop_task', 'get_task_status',
+  // Phase 6 M4：战斗 / 撤退 / 规避 / 中止 + 战斗状态查询 + 战后治疗
+  'start_combat', 'retreat_from_combat', 'evade_threat', 'abort_combat',
+  'get_combat_status', 'probe_combat_api', 'heal_self',
 ] as const
 /** 会修改游戏状态的命令类型（Lua 端必须二次校验控制权） */
 export const ACTION_COMMAND_TYPES = ['move_to', 'stop_movement', 'gather_resource', 'move_to_target',
   'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item',
   'eat_item', 'craft_item', 'build_structure', 'build_campfire',
-  'start_task', 'stop_task'] as const
+  'start_task', 'stop_task',
+  'start_combat', 'retreat_from_combat', 'evade_threat', 'abort_combat', 'heal_self'] as const
 /** 只读动作命令（不需要控制权） */
-export const READ_ONLY_COMMAND_TYPES = ['get_movement_status', 'probe_game_actions', 'get_task_status'] as const
+export const READ_ONLY_COMMAND_TYPES = ['get_movement_status', 'probe_game_actions', 'get_task_status',
+  'get_combat_status', 'probe_combat_api'] as const
 /** 需要绑定 master 分片的命令（写动作 + 依赖 master 执行器状态的只读查询） */
 export const MASTER_SHARD_COMMANDS: ReadonlySet<string> = new Set([
   ...ACTION_COMMAND_TYPES, 'get_movement_status', 'probe_game_actions',
+  'get_combat_status', 'probe_combat_api',
 ])
 export type CommandType = (typeof COMMAND_TYPES)[number]
 

@@ -104,40 +104,14 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
     h.notify('notifications/initialized')
     const list = await h.request(2, 'tools/list')
     assert.ok(Array.isArray(list.result.tools))
-    assert.equal(list.result.tools.length, 27, '应注册 27 个工具，实际 ' + list.result.tools.length)
+    assert.equal(list.result.tools.length, 43, '应注册 43 个工具，实际 ' + list.result.tools.length)
 
     const names = list.result.tools.map((t: { name: string }) => t.name).sort()
     assert.deepEqual(names, [
-      'build_campfire',
-      'build_structure',
-      'chop_tree',
-      'craft_item',
-      'eat_item',
-      'equip_item',
-      'gather_resource',
-      'get_base_status',
-      'get_bridge_status',
-      'get_command_result',
-      'get_control_status',
-      'get_game_status',
-      'get_inventory',
-      'get_nearby_entities',
-      'get_nearby_resources',
-      'get_nearby_threats',
-      'get_player_status',
-      'get_recent_events',
-      'get_task_status',
-      'get_world_status',
-      'mine_rock',
-      'move_to_target',
-      'pick_up_item',
-      'probe_game_actions',
-      'refresh_game_state',
-      'start_task',
-      'stop_task',
+      'abort_combat',       'build_campfire',       'build_structure',       'chop_tree',       'craft_item',       'eat_item',       'equip_item',       'evade_threat',       'evaluate_combat_target',       'gather_resource',       'get_base_status',       'get_boss_readiness',       'get_bridge_status',       'get_combat_readiness',       'get_combat_recommendation',       'get_combat_status',       'get_command_result',       'get_control_status',       'get_environment_hazards',       'get_escape_options',       'get_game_status',       'get_inventory',       'get_nearby_entities',       'get_nearby_resources',       'get_nearby_threats',       'get_player_status',       'get_recent_events',       'get_seasonal_readiness',       'get_survival_priority',       'get_task_status',       'get_threat_assessment',       'get_world_status',       'mine_rock',       'move_to_target',       'pick_up_item',       'prepare_for_season',       'probe_game_actions',       'recover_after_combat',       'refresh_game_state',       'retreat_from_combat',       'start_combat',       'start_task',       'stop_task',
     ])
     // Phase 5 M3：2 个写动作工具显式标 readOnlyHint=false，其余仍为 true
-    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire', 'start_task', 'stop_task'])
+    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire', 'start_task', 'stop_task', 'start_combat', 'retreat_from_combat', 'evade_threat', 'abort_combat', 'prepare_for_season', 'recover_after_combat'])
     for (const tool of list.result.tools) {
       assert.ok(tool.description && tool.description.length > 4, `${tool.name} 缺描述`)
       assert.ok(tool.inputSchema, `${tool.name} 缺 inputSchema`)

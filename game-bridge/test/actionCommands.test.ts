@@ -45,7 +45,7 @@ test('M2/M3：COMMAND_TYPES 含移动 + 采集动作，测试命令仍在', () =
   assert.ok(COMMAND_TYPES.includes('stop_movement'))
   assert.ok(COMMAND_TYPES.includes('get_movement_status'))
   assert.ok(COMMAND_TYPES.includes('ping'))
-  assert.equal(COMMAND_TYPES.length, 21, '4 测试 + 3 移动 + 3 采集 + 4 工具 + 4 生存 + 3 任务')
+  assert.equal(COMMAND_TYPES.length, 28, '4 测试 + 3 移动 + 3 采集 + 4 工具 + 4 生存 + 3 任务 + Phase 6 的 7 个战斗/治疗命令')
 })
 
 test('M2：动作命令缺 controller_id/session_id → 400', async () => {
@@ -172,7 +172,7 @@ test('M3：COMMAND_TYPES 含 3 个采集相关命令', () => {
   assert.ok(COMMAND_TYPES.includes('gather_resource'))
   assert.ok(COMMAND_TYPES.includes('move_to_target'))
   assert.ok(COMMAND_TYPES.includes('probe_game_actions'))
-  assert.equal(COMMAND_TYPES.length, 21, '4 测试 + 3 移动 + 3 采集 + 4 工具 + 4 生存 + 3 任务')
+  assert.equal(COMMAND_TYPES.length, 28, '4 测试 + 3 移动 + 3 采集 + 4 工具 + 4 生存 + 3 任务 + Phase 6 的 7 个战斗/治疗命令')
 })
 
 test('M3：gather_resource 需要控制权 + 自动绑定 master，probe_game_actions 只读且绑 master', async () => {
