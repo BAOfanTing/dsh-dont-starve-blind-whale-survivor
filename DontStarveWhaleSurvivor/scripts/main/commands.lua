@@ -26,10 +26,12 @@ local C = {}
 local ALLOWED = { ping = true, echo = true, get_state = true, refresh_state = true,
     move_to = true, stop_movement = true, get_movement_status = true,
     gather_resource = true, move_to_target = true, probe_game_actions = true,
-    equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true }
+    equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
 local ACTION_COMMANDS = { move_to = true, stop_movement = true,
     gather_resource = true, move_to_target = true,
-    equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true }
+    equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
 
 local polling = false
 local nextPollAt = 0
@@ -323,7 +325,8 @@ function C.status()
         last_error = lastError,
         allowed = { 'ping', 'echo', 'get_state', 'refresh_state', 'move_to', 'stop_movement',
             'get_movement_status', 'gather_resource', 'move_to_target', 'probe_game_actions',
-            'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item' },
+            'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item',
+            'eat_item', 'craft_item', 'build_structure', 'build_campfire' },
         action_executor = BWS2.actionExecutor ~= nil and BWS2.actionExecutor.status() or nil,
     }
 end

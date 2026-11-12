@@ -168,11 +168,11 @@ async function harness(options: { stale?: boolean; snapshot?: Record<string, unk
 }
 
 test('工具清单：16 个工具，2 个写动作明确标注，无重复', () => {
-  assert.equal(TOOLS.length, 20)
+  assert.equal(TOOLS.length, 24)
   const names = TOOLS.map((tool) => tool.name)
-  assert.equal(new Set(names).size, 20)
+  assert.equal(new Set(names).size, 24)
   // Phase 5 M3：只允许这 2 个写动作工具，且必须显式标 readOnly=false
-  const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item'])
+  const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire'])
   let writeCount = 0
   for (const tool of TOOLS) {
     assert.ok(tool.description.length > 8, `${tool.name} 描述太短`)
@@ -184,7 +184,7 @@ test('工具清单：16 个工具，2 个写动作明确标注，无重复', () 
       assert.equal(tool.readOnly, true, `${tool.name} 必须只读`)
     }
   }
-  assert.equal(writeCount, 6, '写动作工具 6 个（M3 2 + M4 4）')
+  assert.equal(writeCount, 10, '写动作工具 10 个（M3 2 + M4 4 + M5 4）')
   // 只读工具里不允许出现任何写操作命名（写动作工具走固定白名单，不在此约束内）
   // 按词边界匹配，避免 threats 里的 "eat" 这类误伤
   const forbidden = ['move', 'attack', 'chop', 'mine', 'eat', 'craft', 'build', 'drop', 'kill', 'teleport']

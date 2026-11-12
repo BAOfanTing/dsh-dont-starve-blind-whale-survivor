@@ -227,7 +227,7 @@ test('M3/M4：status() 暴露 8 个写动作', async () => {
   const { run } = load(fengari)
   run(`
     local s = BWS2.actionExecutor.status()
-    assert(#s.known_actions == 8, "写动作 8 个（M2 2 + M3 2 + M4 4）")
+    assert(#s.known_actions == 12, "写动作 12 个（M2 2 + M3 2 + M4 4 + M5 4）")
     assert(s.write_actions.gather_resource == true)
     assert(s.write_actions.move_to_target == true)
   `)

@@ -9,7 +9,7 @@ const byName = () => new Map(createToolUseTools().map((t) => [t.name, t]))
 test('M4：新增 4 个工具使用工具，MCP 总工具数 20', () => {
   assert.deepEqual(createToolUseTools().map((t) => t.name).sort(),
     ['chop_tree', 'equip_item', 'mine_rock', 'pick_up_item'])
-  assert.equal(createToolDefinitions().length, 20)
+  assert.equal(createToolDefinitions().length, 24)
 })
 
 test('M4：4 个工具都标 readOnly=false', () => {

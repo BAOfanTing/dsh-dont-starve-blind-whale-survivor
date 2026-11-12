@@ -146,7 +146,7 @@ test('HTTP：完整握手 + tools/list（与 stdio 同一套工具）', async ()
 
     const list = await rpc(h.base, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, { sessionId: init.sessionId! })
     const tools = list.json?.result?.tools as Array<{ name: string }>
-    assert.equal(tools.length, 20, 'HTTP 与 stdio 必须同一套工具：' + JSON.stringify(list.json).slice(0, 300))
+    assert.equal(tools.length, 24, 'HTTP 与 stdio 必须同一套工具：' + JSON.stringify(list.json).slice(0, 300))
 
     const prompts = await rpc(h.base, { jsonrpc: '2.0', id: 3, method: 'prompts/list' }, { sessionId: init.sessionId! })
     assert.equal((prompts.json?.result?.prompts as unknown[]).length, 4)

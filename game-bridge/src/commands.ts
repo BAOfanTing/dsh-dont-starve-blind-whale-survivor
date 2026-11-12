@@ -23,10 +23,13 @@ export const COMMAND_TYPES = [
   'gather_resource', 'move_to_target', 'probe_game_actions',
   // Phase 5 M4：工具使用
   'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item',
+  // Phase 5 M5：进食 / 制作 / 建造
+  'eat_item', 'craft_item', 'build_structure', 'build_campfire',
 ] as const
 /** 会修改游戏状态的命令类型（Lua 端必须二次校验控制权） */
 export const ACTION_COMMAND_TYPES = ['move_to', 'stop_movement', 'gather_resource', 'move_to_target',
-  'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item'] as const
+  'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item',
+  'eat_item', 'craft_item', 'build_structure', 'build_campfire'] as const
 /** 只读动作命令（不需要控制权） */
 export const READ_ONLY_COMMAND_TYPES = ['get_movement_status', 'probe_game_actions'] as const
 /** 需要绑定 master 分片的命令（写动作 + 依赖 master 执行器状态的只读查询） */

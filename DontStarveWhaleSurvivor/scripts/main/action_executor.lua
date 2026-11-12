@@ -35,16 +35,23 @@ local ACTION_MAP = {
     chop_tree = 'chop',
     mine_rock = 'mine',
     pick_up_item = 'pickup',
+    -- Phase 5 M5：进食、制作、建造（复用已有 eat / craft / build / make_fire）
+    eat_item = 'eat',
+    craft_item = 'craft',
+    build_structure = 'build',
+    build_campfire = 'make_fire',
 }
 
 -- 需要控制权写权限的动作（get_movement_status / probe_game_actions 是只读）
 local WRITE_ACTIONS = { move_to = true, stop_movement = true,
     gather_resource = true, move_to_target = true,
-    equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true }
+    equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
 
--- Phase 5 M4：需人工确认的动作（任务书 §11：砍伐/采矿初期建议人工确认）。
+-- Phase 5 M4：需人工确认的动作（任务书 §11：砍伐/采矿/进食/制作/建造初期建议人工确认）。
 -- **程序层强制**：params 必须显式带 confirmed=true，不靠提示词。
-local CONFIRM_REQUIRED = { chop_tree = true, mine_rock = true }
+local CONFIRM_REQUIRED = { chop_tree = true, mine_rock = true,
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
 
 -- Phase 5 M3：资源类型 → 游戏内实体名白名单。
 -- 只映射到「可采摘实体」（pickable / harvestable），走 ACTIONS.PICK / HARVEST。
@@ -79,9 +86,36 @@ local LOOT_PREFABS = {
     chop_tree = { 'log', 'twigs' },
     mine_rock = { 'rocks', 'flint', 'nitre', 'goldnugget' },
     pick_up_item = { 'flint', 'rocks', 'log', 'twigs', 'cutgrass', 'berries' },
+    -- Phase 5 M5：制作完成后清点成品（验证"东西真的出现在背包里"）
+    craft_item = { 'axe', 'pickaxe', 'torch', 'campfire' },
 }
 local WORK_MAX_COUNT = 5      -- 砍/矿一次最多几个（比采集更重，上限更低）
 local WORK_MAX_RADIUS = 20
+
+-- ─────────────── Phase 5 M5：进食 / 制作 / 建造白名单（任务书 §7.4）───────────────
+-- 制作：第一批只开 斧头 / 镐 / 火把 / 营火（营火同时覆盖 build_campfire）
+-- 键是外部传的名字，值是游戏里的配方名（recipe_of 按 AllRecipes 大小写不敏感匹配）
+local CRAFT_RECIPES = {
+    axe = 'axe',
+    pickaxe = 'pickaxe',
+    torch = 'torch',
+    campfire = 'campfire',
+}
+-- 建造：只允许要摆到地上的东西，且必须是白名单里的
+local BUILD_RECIPES = {
+    campfire = 'campfire',
+}
+-- 进食：食物白名单（第一批只开常见可食用物；空 = 让游戏自动挑最好的食物）
+local EAT_ITEMS = {
+    berries = 'berries',
+    carrot = 'carrot',
+    corn = 'corn',
+    mushroom = 'red_cap',
+    meat = 'meat',
+    cookedmeat = 'cookedmeat',
+    seeds = 'seeds',
+}
+local CRAFT_MAX_COUNT = 3     -- 一次最多做几个
 
 -- 记录最近的移动状态（get_movement_status 用，纯读，不碰游戏实体）
 local lastMove = {
@@ -265,6 +299,58 @@ local function buildJobArgs(command)
         if radius < 2 then radius = 2 end
         if radius > GATHER_MAX_RADIUS then radius = GATHER_MAX_RADIUS end
         return { item = item, count = count, radius = radius }, nil
+    elseif command.type == 'eat_item' then
+        -- 进食：item 可选（不传 = 让游戏自动挑最好的食物），传了必须在白名单
+        local args = {}
+        if p.item ~= nil and p.item ~= '' then
+            local item = EAT_ITEMS[p.item]
+            if item == nil then
+                local list = {}
+                for k in pairs(EAT_ITEMS) do list[#list + 1] = k end
+                table.sort(list)
+                return nil, 'invalid_item: eat 只支持 ' .. table.concat(list, '/') .. '（固定白名单）'
+            end
+            args.item = item
+        end
+        return args, nil
+    elseif command.type == 'craft_item' then
+        local recipe = CRAFT_RECIPES[p.recipe]
+        if recipe == nil then
+            local list = {}
+            for k in pairs(CRAFT_RECIPES) do list[#list + 1] = k end
+            table.sort(list)
+            return nil, 'invalid_recipe: craft 只支持 ' .. table.concat(list, '/') .. '（固定白名单）'
+        end
+        local count = tonumber(p.count) or 1
+        if count < 1 then count = 1 end
+        if count > CRAFT_MAX_COUNT then count = CRAFT_MAX_COUNT end
+        return { recipe = recipe, count = count }, nil
+    elseif command.type == 'build_structure' or command.type == 'build_campfire' then
+        -- 建造：配方必须在白名单；坐标可选（不传 = 自动找空地）
+        local want = p.recipe
+        if command.type == 'build_campfire' and (want == nil or want == '') then
+            want = 'campfire'   -- build_campfire 默认就是营火
+        end
+        local recipe = BUILD_RECIPES[want]
+        if recipe == nil then
+            local list = {}
+            for k in pairs(BUILD_RECIPES) do list[#list + 1] = k end
+            table.sort(list)
+            return nil, 'invalid_recipe: build 只支持 ' .. table.concat(list, '/') .. '（固定白名单）'
+        end
+        local args = { recipe = recipe }
+        if p.x ~= nil and p.z ~= nil then
+            local x = tonumber(p.x)
+            local z = tonumber(p.z)
+            if x == nil or z == nil then
+                return nil, 'invalid_argument: x/z 必须是数字'
+            end
+            if x < -10000 or x > 10000 or z < -10000 or z > 10000 then
+                return nil, 'invalid_argument: 坐标超出允许范围'
+            end
+            args.x, args.z = x, z
+        end
+        return args, nil
     end
     return nil, 'unknown_action'
 end
@@ -313,6 +399,15 @@ local function startAction(command, report, startedMs)
     -- 回 EXECUTING（中间态），不是终态。Bridge 的 CommandQueue.settle 已支持 EXECUTING，
     -- 之后会用同一个 command_id 补发 SUCCEEDED / FAILED。
     -- 记录 pending，供 pollCompletion 在动作结束时补发终态。
+    -- Phase 5 M5：进食要记动作前的饥饿值，完成后做差核验"真的吃到了"。
+    local hungerBefore = nil
+    if command.type == 'eat_item' then
+        local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+        if player ~= nil and player.components ~= nil and player.components.hunger ~= nil then
+            local ok, v = pcall(function() return player.components.hunger.current end)
+            if ok then hungerBefore = tonumber(v) end
+        end
+    end
     pending = {
         command_id = command.id,
         report = report,
@@ -321,6 +416,7 @@ local function startAction(command, report, startedMs)
         job = jobName,
         args = jobArgs,
         loot_before = lootBefore,
+        hunger_before = hungerBefore,
     }
     lastReportFn = report
     if report ~= nil then
@@ -429,6 +525,30 @@ function E.pollCompletion()
                 local got = equipped_hands_prefab()
                 verify = { equipped = got, requested = args.item,
                     confirmed_gain = got == args.item }
+            elseif pending.action == 'eat_item' then
+                -- Phase 5 M5：进食核验 —— 看饥饿值是否真的涨了（不靠动作自报）
+                local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+                local hungerNow = nil
+                if player ~= nil and player.components ~= nil and player.components.hunger ~= nil then
+                    local ok, v = pcall(function() return player.components.hunger.current end)
+                    if ok then hungerNow = tonumber(v) end
+                end
+                local before = pending.hunger_before
+                local delta = (hungerNow ~= nil and before ~= nil) and (hungerNow - before) or nil
+                verify = { hunger_before = before, hunger_after = hungerNow,
+                    hunger_delta = delta, confirmed_gain = delta ~= nil and delta > 0.5 }
+            elseif pending.action == 'build_campfire' or pending.action == 'build_structure' then
+                -- Phase 5 M5：营火核验 —— 附近是否真的出现了带 fire 标签的实体
+                local hasFire = false
+                local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+                if player ~= nil and Whale.util.find_nearest ~= nil then
+                    local ok, fire = pcall(Whale.util.find_nearest, player, 6, nil, nil, function(e)
+                        local okTag, isFire = pcall(function() return e:HasTag('fire') end)
+                        return okTag and isFire
+                    end)
+                    hasFire = ok and fire ~= nil
+                end
+                verify = { fire_found = hasFire, confirmed_gain = hasFire }
             end
             settle('SUCCEEDED', { action = pending.action, job = pending.job, args = args,
                 text = text, completed = true, verify = verify }, nil)
