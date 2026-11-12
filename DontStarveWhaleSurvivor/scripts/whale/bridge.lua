@@ -171,7 +171,7 @@ end
 
 -- ─────────────────── 结果 ───────────────────
 
-function B.Report(ok, text, cmd_id)
+function B.Report(ok, text, cmd_id, reason)
     local id = cmd_id or last_cmd_id
     -- M1.0：A 栈（scripts/main）已归档，这里原来有两个转发钩子
     -- （动作执行器的 onActionReport、任务链的 OnActionResult，都挂在 A 栈的全局表上）。
@@ -180,6 +180,7 @@ function B.Report(ok, text, cmd_id)
         v = 1,
         id = id,
         ok = ok and true or false,
+        reason = reason,
         text = tostring(text or ""),
         t = os.time(),
     })
@@ -200,17 +201,32 @@ local function handle_command(json_text)
         return
     end
     local id = cmd.id ~= nil and tostring(cmd.id) or nil
-    if id == nil or id == last_cmd_id then return end
+    if id == nil then return end
     last_cmd_id = id
     local action = tostring(cmd.action or "")
     log("收到指令 " .. id .. "：" .. action)
     if action == "" then
-        B.Report(false, "指令里没有 action", id)
+        B.Report(false, "指令里没有 action", id, "missing_action")
         return
     end
+
+    -- M2.0：Lua 是最终授权者。协议/过期/白名单/租约世代/角色/参数/组件 全在这里校验。
+    local guard = Whale.guard
+    if guard == nil or guard.validate == nil then
+        B.Report(false, "安全校验层缺失，拒绝执行", id, "guard_missing")
+        return
+    end
+    local ok_cmd, reason = guard.validate(cmd)
+    if not ok_cmd then
+        log("拒绝指令 " .. id .. "：" .. tostring(reason))
+        B.Report(false, "拒绝：" .. tostring(reason), id, tostring(reason))
+        return
+    end
+    guard.accept(cmd)
+
     local started, err = Whale.actions.Start(action, type(cmd.args) == "table" and cmd.args or {}, id)
     if not started then
-        B.Report(false, err or "动作没能开始", id)
+        B.Report(false, err or "动作没能开始", id, "action_start_failed")
     end
 end
 

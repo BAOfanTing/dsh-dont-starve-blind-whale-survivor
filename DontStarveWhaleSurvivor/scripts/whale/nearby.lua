@@ -707,6 +707,30 @@ function N.Resolve(snapshot_id, ref)
     return ent, nil
 end
 
+--- 按 (snapshot_id, ref) 反查这个目标的分类/距离/预制体名（给动作前置校验用）
+--- 只读当前快照；找不到就返回 nil（调用方按 target_not_compatible 处理）
+function N.DescribeRef(snapshot_id, ref)
+    if type(snapshot_id) ~= "string" or type(ref) ~= "string" then return nil end
+    if cache.result == nil or cache.result.snapshot_id ~= snapshot_id then return nil end
+    local buckets = cache.result.buckets
+    if buckets == nil then return nil end
+    for _, def in ipairs(N.BUCKETS) do
+        for _, item in ipairs(buckets[def.key] or {}) do
+            if item.ref == ref then
+                return {
+                    ref = ref,
+                    prefab = item.prefab,
+                    label = item.label,
+                    category = item.category,
+                    distance = item.distance,
+                    snapshot_id = snapshot_id,
+                }
+            end
+        end
+    end
+    return nil
+end
+
 --- 当前还留着哪些扫描快照（诊断用；只保留最近几份，避免越积越多）
 function N.Snapshots()
     local list = {}

@@ -17,7 +17,7 @@ Whale = {
     -- 版本号跟 modinfo.lua 走：状态文件里的 mod 字段要和模组列表里显示的一致，
     -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
     -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
-    version = (type(version) == "string" and version) or "0.13.4",
+    version = (type(version) == "string" and version) or "0.14.0",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -76,6 +76,8 @@ if Whale.config ~= nil and Whale.config.build ~= nil then
 end
 
 modimport("scripts/whale/nearby.lua")
+-- M2.0：动作安全底座（Lua 侧最终授权者）
+modimport("scripts/whale/guard.lua")
 modimport("scripts/whale/observe.lua")
 modimport("scripts/whale/actions.lua")
 -- 宏（任务级接口）：采集到够数 / 砍到够木头 / 锅做饭 / 守夜（依赖动作模块，放它之后）
