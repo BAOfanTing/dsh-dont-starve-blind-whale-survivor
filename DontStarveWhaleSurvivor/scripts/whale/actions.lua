@@ -58,11 +58,17 @@ local function tile_away(p, tx, tz)
     return math.sqrt(dx * dx + dz * dz) / U.TILE
 end
 
-local function walk_to(p, tx, tz)
+--- 走到某格中心。
+--- 真机反馈（2026-11-12）：人物是"平移"没有跑步动画 —— 因为第 3 个参数 run 传了 false。
+--- 解包 locomotor.lua 确认签名：GoToPoint(pt, bufferedaction, run, overridedest)，
+--- run 会写进 self.wantstorun，并决定 RunForward() 还是 WalkForward()。
+--- 正常玩按方向键是跑，所以这里默认跑（run=true），距离很近时再走，避免冲过头。
+local function walk_to(p, tx, tz, run)
     local x, z = U.tile_center(tx, tz)
     local loco = p.components.locomotor
     if loco == nil then return false end
-    loco:GoToPoint(Vector3(x, 0, z), nil, false)
+    if run == nil then run = true end
+    loco:GoToPoint(Vector3(x, 0, z), nil, run)
     return true
 end
 A.walk_to = walk_to
@@ -107,21 +113,69 @@ local function best_weapon(p)
     return best
 end
 
+--- Phase 5 M5 修复：模拟"按住动作键"（空格 / F）。
+---
+--- 解包 SGwilson.lua 的 chop 状态（第 5110~5128 行）发现官方连砍机制：
+---   TimeEvent(14 * FRAMES, function(inst)
+---       if playercontroller:IsAnyOfControlsPressed(CONTROL_ACTION) then
+---           inst:ClearBufferedAction()
+---           inst:PushBufferedAction(inst.sg.statemem.action)   -- 引擎自己重推同一个动作
+---       end
+---   end)
+--- 而 playercontroller.lua 的 IsAnyOfControlsPressed 在**专用服务器上（handler == nil）**
+--- 读的是 self.remote_controls[control] —— 这正是远程客户端"按键状态"的同步通道。
+--- 所以只要往 remote_controls 里塞一个 CONTROL_ACTION，引擎就会自己在状态机里连砍，
+--- 不需要我们在外部每 0.2 秒轮询重推（那才是"砍两下顿一下"的根源）。
+local function hold_control(p, want)
+    local pc = p ~= nil and p.components ~= nil and p.components.playercontroller or nil
+    if pc == nil then return false end
+    local control = GLOBAL.CONTROL_ACTION
+    if control == nil then return false end
+    local ok = pcall(function()
+        pc.remote_controls = pc.remote_controls or {}
+        if want then
+            pc.remote_controls[control] = true
+        else
+            pc.remote_controls[control] = nil
+        end
+    end)
+    return ok
+end
+A.hold_control = hold_control
+
 --- 背包里最该吃的：先看能补多少饥饿，再看新鲜度
+--- 真机 bug（2026-11-12 两次）：原来 score 允许负分物品胜出，把「树枝」当食物吃了。
+--- 第一次修只加了 hunger > 0，但真机仍选了树枝 → 说明 twigs 的 hungervalue 是 0 或正数，
+--- 光看数值不够。现在加**绝对不吃的黑名单**（树枝/草/石头这类材料），
+--- 并把阈值提高到"至少能补 3 点饥饿"才算食物。
+local NOT_FOOD = {
+    twigs = true, cutgrass = true, grass = true, log = true, rocks = true,
+    flint = true, nitre = true, goldnugget = true, charcoal = true,
+    silk = true, pigskin = true, honeycomb = true, beefalowool = true,
+}
+local MIN_FOOD_HUNGER = 3   -- 补饥饿低于这个值的不算"值得吃"
+
 local function best_food(p)
     local inv = p.components.inventory
     if inv == nil then return nil end
-    local best, best_score = nil, -1
+    local best, best_score = nil, 0   -- 必须 > 0 才算"能吃"
     inv:ForEachItem(function(item)
         local edible = item.components.edible
         if edible ~= nil then
-            local hunger = edible.hungervalue or 0
-            local health = edible.healthvalue or 0
-            local perish = item.components.perishable
-            local freshness = perish ~= nil and perish:GetPercent() or 1
-            local score = (hunger + health * 0.5) * (0.3 + 0.7 * freshness)
-            if score > best_score then
-                best, best_score = item, score
+            local prefab = item.prefab
+            if NOT_FOOD[prefab] then
+                -- 明确不是食物（材料类），跳过
+            else
+                local hunger = tonumber(edible.hungervalue) or 0
+                local health = tonumber(edible.healthvalue) or 0
+                if hunger >= MIN_FOOD_HUNGER then
+                    local perish = item.components.perishable
+                    local freshness = perish ~= nil and perish:GetPercent() or 1
+                    local score = (hunger + health * 0.5) * (0.3 + 0.7 * freshness)
+                    if score > best_score then
+                        best, best_score = item, score
+                    end
+                end
             end
         end
     end)
@@ -150,7 +204,7 @@ local function find_by_name(p, radius, want)
     return U.find_all(p, radius, nil, nil, filter)
 end
 
-local function find_workable(p, radius, action_id, want)
+local function find_workable(p, radius, action_id, want, skip)
     if want ~= nil and want ~= "" then
         local list = find_by_name(p, radius, want)
         for _, entry in ipairs(list) do
@@ -160,6 +214,35 @@ local function find_workable(p, radius, action_id, want)
             end
         end
     end
+    -- 真机反馈（2026-11-12）：砍 evergreen_sparse 要 20 下、30 秒，手动砍普通树只要 10 秒。
+    -- 差别在**目标选得不对**，不是挥斧速度。所以这里按「性价比」挑目标：
+    --   分数 = 距离 + workleft 权重，优先「近且好砍」的（普通 evergreen 只要 5~6 下）。
+    -- 同时给"同 prefab 里 workleft 更低"的加分，避免老是挑到稀疏变种。
+    local best, best_score = nil, math.huge
+    local list = U.find_all(p, radius, nil, nil, function(e)
+        local w = e.components ~= nil and e.components.workable or nil
+        return w ~= nil and w.action ~= nil and w.action.id == action_id
+    end)
+    for _, entry in ipairs(list) do
+        -- skip：推不动过的目标（普通斧头砍不动臃肿常青树），别再挑它
+        local skipped = false
+        if skip ~= nil and skip[entry.ent] == true then skipped = true end
+        if not skipped then
+            local w = entry.ent.components.workable
+            local left = 0
+            local ok_l, l = pcall(function() return w.workleft end)
+            if ok_l and tonumber(l) ~= nil then left = tonumber(l) end
+            if left > 0 then
+                -- 距离每格算 1 分；每 10 点 workleft 折 1 分（砍得快的优先）
+                local score = entry.d + left / 10
+                if score < best_score then
+                    best, best_score = entry.ent, score
+                end
+            end
+        end
+    end
+    if best ~= nil then return best end
+    -- 兜底：连 workleft 都读不到时，退回"最近的"
     local ent = U.find_nearest(p, radius, nil, nil, function(e)
         local w = e.components ~= nil and e.components.workable or nil
         return w ~= nil and w.action ~= nil and w.action.id == action_id
@@ -183,6 +266,15 @@ JOBS.move_to = function(j, p)
     if tx == nil or tz == nil then
         return "fail", "move_to 要传格子坐标 x 和 z，比如 {\"x\":12,\"z\":45}"
     end
+    -- 真机踩到（2026-11-12）：上层传了**世界坐标**（比如 210），被当成格子坐标 210 →
+    -- 目标跑到世界坐标 842，距离 319 格，永远走不到。
+    -- 这里加一层兜底：如果 |x| 或 |z| 明显超出世界格子范围（DST 世界最大约 ±400 格），
+    -- 就当成世界坐标，折算回格子坐标（世界 / 4）。
+    if math.abs(tx) > 400 or math.abs(tz) > 400 then
+        tx = math.floor(tx / U.TILE)
+        tz = math.floor(tz / U.TILE)
+        j.args.x, j.args.z = tx, tz
+    end
     if j.step == "start" then
         walk_to(p, tx, tz)
         j.step = "walk"
@@ -200,7 +292,14 @@ JOBS.move_to = function(j, p)
     if U.now() - j.data.lastcheck > 2 then
         j.data.lastcheck = U.now()
         local loco = p.components.locomotor
-        if loco == nil or not loco:IsMoving() then
+        -- 真机 bug（2026-11-12）：loco:IsMoving() 不存在（locomotor.lua 里没有这个方法），
+        -- 直接调用抛错把整个动作打成 FAILED。正确 API 是 WantsToMoveForward()。
+        local moving = false
+        if loco ~= nil then
+            local ok_m, mv = pcall(function() return loco:WantsToMoveForward() end)
+            if ok_m then moving = mv == true end
+        end
+        if loco == nil or not moving then
             j.data.retry = j.data.retry + 1
             if j.data.retry > 8 then
                 return "fail", string.format("被挡死了，站在 %.1f 格外过不去", away)
@@ -241,7 +340,13 @@ JOBS.go_to = function(j, p)
     if U.now() - j.data.lastcheck > 2 then
         j.data.lastcheck = U.now()
         local loco = p.components.locomotor
-        if loco == nil or not loco:IsMoving() then
+        -- 同上：IsMoving 不存在，用 WantsToMoveForward（pcall 保护）
+        local moving = false
+        if loco ~= nil then
+            local ok_m, mv = pcall(function() return loco:WantsToMoveForward() end)
+            if ok_m then moving = mv == true end
+        end
+        if loco == nil or not moving then
             walk_to(p, j.data.tx, j.data.tz)
         end
     end
@@ -251,19 +356,57 @@ end
 local function job_work(j, p, action_id)
     if j.step == "start" then
         j.data.count = tonumber(j.args.count) or 1
-        j.data.done_count = 0
+        j.data.done_count = 0        -- 干了多少下
+        j.data.done_targets = 0      -- 干倒/干空了几个目标
         j.data.radius = tonumber(j.args.radius) or 20
+        -- Phase 5 M5：until_gone = 一直干到当前目标消失（砍倒一棵树要 4~5 下，
+        -- 只砍 1 下树不倒、不掉东西 —— 真机踩到过：chop count=1 返回"干了 1 次"但没拿到木头）
+        -- 语义：count = 要干倒几个目标；until_gone=false 时 count 才表示"干几下"。
+        j.data.until_gone = j.args.until_gone == true
+        j.data.max_hits = tonumber(j.args.max_hits) or 30
+        j.data.cur_hits = 0          -- 当前目标已经干了几下
         j.step = "next"
     end
     if j.step == "next" then
-        if j.data.done_count >= j.data.count then
+        if not j.data.until_gone and j.data.done_count >= j.data.count then
+            hold_control(p, false)
             return "done", string.format("连着干了 %d 次", j.data.done_count)
         end
-        local target = find_workable(p, j.data.radius, action_id, j.args.target)
+        if j.data.until_gone and j.data.done_targets >= j.data.count then
+            hold_control(p, false)
+            return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, j.data.done_count)
+        end
+        if j.data.done_count >= j.data.max_hits then
+            hold_control(p, false)
+            return "done", string.format("干了 %d 下就停了（可能工具不对或目标太硬）", j.data.done_count)
+        end
+        -- until_gone 模式：优先继续砍同一个目标，避免每次都重新找"最近的"导致来回换树
+        -- （真机踩到：60 秒砍 30 下没砍倒一棵 —— 每下都在换树）
+        local target = nil
+        if j.data.until_gone and j.data.target ~= nil and j.data.target:IsValid() then
+            local w = j.data.target.components ~= nil and j.data.target.components.workable or nil
+            local ok_w, left = pcall(function() return w ~= nil and w.workleft or 0 end)
+            if ok_w and left ~= nil and left > 0 then
+                target = j.data.target
+            end
+        end
+        if target == nil then
+            target = find_workable(p, j.data.radius, action_id, j.args.target, j.data.skip)
+        end
         if target == nil then
             if j.data.done_count > 0 then
+                -- until_gone 模式：目标消失 = 上一个目标被干倒了
+                if j.data.until_gone then
+                    j.data.done_targets = j.data.done_targets + 1
+                    if j.data.done_targets >= j.data.count then
+                        hold_control(p, false)
+                        return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, j.data.done_count)
+                    end
+                end
+                hold_control(p, false)
                 return "done", string.format("干了 %d 次，附近没有能再%s的了", j.data.done_count, WORK_NAMES[action_id])
             end
+            hold_control(p, false)
             return "fail", string.format("附近 %d 格里没有能%s的东西", j.data.radius, WORK_NAMES[action_id])
         end
         local action = ACTIONS[action_id]
@@ -272,9 +415,14 @@ local function job_work(j, p, action_id)
         if item ~= nil then equip_if_needed(p, item) end
         local ba = BufferedAction(p, target, action, item)
         j.data.target = target
+        j.data.ba = ba                      -- 保存，连砍时复用（不重建，避免打断状态机）
+        j.data.last_name = U.pretty(target)
         j.data.phase_start = U.now()
         j.data.phase_wait = false
         push(p, ba)
+        -- 关键：把"按住动作键"置上，引擎的 chop 状态机会在动画第 14 帧
+        -- 自己 PushBufferedAction 同一个动作 → 真正连续的连砍（官方机制）
+        if j.data.until_gone then hold_control(p, true) end
         j.step = "acting"
         return "run"
     end
@@ -283,22 +431,121 @@ local function job_work(j, p, action_id)
         if not j.data.phase_wait then
             if busy(p) then j.data.phase_wait = true end
             if U.now() - j.data.phase_start > 3 and not j.data.phase_wait then
-                -- 3 秒还没动起来，多半是没工具/够不着
+                -- 3 秒还没动起来：可能是工具不对（比如普通斧头砍不动"臃肿常青树"），
+                -- 或者够不着。真机反馈（2026-11-12）：这种情况直接 FAILED 太脆，
+                -- 应该把这棵树拉黑、换下一棵重试（最多换 3 次）。
                 local target = j.data.target
                 local w = target ~= nil and target:IsValid() and target.components.workable or nil
                 if w ~= nil and w.workleft ~= nil and w.workleft > 0 then
-                    return "fail", string.format("推不动 %s：可能需要工具，或者离得太远", U.pretty(target))
+                    j.data.skip = j.data.skip or {}
+                    if target ~= nil then j.data.skip[target] = true end
+                    j.data.skip_count = (j.data.skip_count or 0) + 1
+                    if j.data.skip_count >= 3 then
+                        hold_control(p, false)
+                        return "fail", string.format("推不动 %s：可能需要更好的工具", U.pretty(target))
+                    end
+                    -- 换目标重试：回到 next 重新挑（跳过已拉黑的）
+                    j.data.target = nil
+                    j.data.ba = nil
+                    j.step = "next"
+                    j.data.phase_wait = false
+                    return "run"
                 end
             end
             return "run"
         end
         if busy(p) then
             if U.now() - j.data.phase_start > 120 then
+                hold_control(p, false)
                 return "fail", "这个活儿做不完（可能工具不对或者够不着）"
+            end
+            -- 真机验证（2026-11-12）：hold_control 一开，引擎就在状态机内部自己连砍，
+            -- 效果是"按住空格"——实测 push 1 次就砍倒了 6 棵树（完全连续、无顿挫）。
+            -- 但**必须及时松手**，否则会一路砍下去。这里每次 tick 检查当前目标是否已被砍倒：
+            -- 砍倒的树会变树桩（workable.action 从 CHOP 变成 DIG/MINE）。
+            if j.data.until_gone and j.data.target ~= nil then
+                local t = j.data.target
+                local w = t:IsValid() and t.components ~= nil and t.components.workable or nil
+                local done_this = false
+                if w == nil or not t:IsValid() then
+                    done_this = true
+                else
+                    local ok_a, act = pcall(function() return w.action end)
+                    local ok_l, left = pcall(function() return w.workleft end)
+                    if ok_a and act ~= nil and act.id ~= action_id then done_this = true end
+                    if ok_l and tonumber(left) ~= nil and tonumber(left) <= 0 then done_this = true end
+                end
+                if done_this then
+                    -- 目标倒了：立刻松手，避免继续砍下一棵
+                    hold_control(p, false)
+                    j.data.done_targets = (j.data.done_targets or 0) + 1
+                    j.data.done_count = math.max(j.data.done_count, 1)
+                    if j.data.done_targets >= j.data.count then
+                        return "done", string.format("干倒了 %d 个目标（连续砍，共 %d 下）",
+                            j.data.done_targets, j.data.done_count)
+                    end
+                    -- 还要继续砍下一棵：清掉目标回 next 重新挑
+                    j.data.target = nil
+                    j.data.ba = nil
+                    j.data.phase_wait = false
+                    j.step = "next"
+                    return "run"
+                end
             end
             return "run"
         end
         j.data.done_count = j.data.done_count + 1
+        j.data.cur_hits = (j.data.cur_hits or 0) + 1
+        -- 兜底出口：这个循环必须能停（真机踩到：一直在 acting 里连砍，永远不结束，
+        -- 直到 action_executor 120 秒超时）
+        if j.data.done_count >= j.data.max_hits then
+            hold_control(p, false)
+            return "done", string.format("干了 %d 下就停了（目标可能太硬）", j.data.done_count)
+        end
+        if j.data.until_gone and j.data.target ~= nil and j.data.target:IsValid() then
+            local w = j.data.target.components ~= nil and j.data.target.components.workable or nil
+            -- 目标还算"能继续砍"的条件：有 workable、动作还是同一个、还有剩余工作量
+            -- （砍倒的树会变成树桩，workable.action 变成 DIG/MINE，据此判定已砍倒）
+            local same_action = false
+            local left = 0
+            if w ~= nil then
+                local ok_a, act = pcall(function() return w.action end)
+                local ok_l, l = pcall(function() return w.workleft end)
+                if ok_a and act ~= nil and act.id == action_id then same_action = true end
+                if ok_l and tonumber(l) ~= nil then left = tonumber(l) end
+            end
+            if same_action and left > 0 then
+                -- 还有剩余工作量：**复用同一个 BufferedAction** 再砍一下。
+                -- 解包 playercontroller.lua 确认：官方"按住 F 连砍"是
+                --   lastheldaction.options.no_predict_fastforward = true
+                --   playercontroller:DoAction(lastheldaction)   ← 复用，不重建
+                -- 重建 BufferedAction 会打断 sg 状态机，表现就是"砍一下顿一下"。
+                local action = ACTIONS[action_id]
+                if action ~= nil then
+                    local item = best_tool(p, action)
+                    if item ~= nil then equip_if_needed(p, item) end
+                    local ba = j.data.ba
+                    if ba == nil then
+                        ba = BufferedAction(p, j.data.target, action, item)
+                        j.data.ba = ba
+                    else
+                        ba.doable = nil      -- 允许重放（上一次已 done）
+                    end
+                    pcall(function() ba.options.no_predict_fastforward = true end)
+                    push(p, ba)
+                    j.data.phase_start = U.now()
+                    j.data.phase_wait = false
+                    return "run"
+                end
+            end
+            -- 目标砍倒了（或变成树桩）
+            j.data.done_targets = (j.data.done_targets or 0) + 1
+            j.data.cur_hits = 0
+            if j.data.done_targets >= j.data.count then
+                hold_control(p, false)
+                return "done", string.format("干倒了 %d 个目标（共 %d 下）", j.data.done_targets, j.data.done_count)
+            end
+        end
         j.step = "next"
         return "run"
     end

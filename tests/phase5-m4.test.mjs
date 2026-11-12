@@ -31,7 +31,7 @@ function make_inventory()
   return {
     ForEachItem = function(self, fn)
       for _, it in ipairs(ITEMS) do
-        fn({ prefab = it.prefab, components = { stackable = { GetStackCount = function() return it.n end } } })
+        fn({ prefab = it.prefab, components = { stackable = { StackSize = function() return it.n end } } })
       end
     end,
     GetEquippedItem = function(self, slot) return EQUIPPED end,

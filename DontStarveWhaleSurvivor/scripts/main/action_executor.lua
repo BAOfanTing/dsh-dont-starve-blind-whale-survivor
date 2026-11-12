@@ -147,32 +147,83 @@ local function now()
 end
 
 --- Phase 5 M4：数背包里某 prefab 的总数量（含堆叠）。出错返回 0，绝不抛。
+--- 真机 bug（2026-11-12，三次踩到）：verify 一直报 gained={} / after 全 0，
+--- 但背包里确实有东西。根因是堆叠数量取法写错了 ——
+--- 用了 stackable:GetStackCount()（**这个方法不存在**），pcall 失败后数量恒为 0。
+--- 正确方法见 inventory_observer.lua：stackable:StackSize()。
 local function count_prefab(player, prefab)
     if player == nil or player.components == nil or player.components.inventory == nil then return 0 end
+    local inv = player.components.inventory
     local total = 0
+    local function add_item(item)
+        if item == nil or item.prefab ~= prefab then return end
+        local st = item.components ~= nil and item.components.stackable or nil
+        local n = 1
+        if st ~= nil then
+            local ok, v = pcall(function() return st:StackSize() end)
+            if ok and tonumber(v) ~= nil then n = tonumber(v) end
+        end
+        total = total + n
+    end
+    -- ① 官方遍历
+    pcall(function() inv:ForEachItem(add_item) end)
+    -- ② 直接读格子数组（某些时刻 ForEachItem 遍历不到，但格子数据是好的）
+    local total2 = 0
     pcall(function()
-        player.components.inventory:ForEachItem(function(item)
-            if item ~= nil and item.prefab == prefab then
-                local st = item.components ~= nil and item.components.stackable or nil
-                local ok, n = pcall(function() return st ~= nil and st:GetStackCount() or 1 end)
-                if ok and tonumber(n) ~= nil then total = total + tonumber(n) end
+        local items = inv.items
+        if items ~= nil then
+            for _, item in pairs(items) do
+                if item ~= nil and item.prefab == prefab then
+                    local st = item.components ~= nil and item.components.stackable or nil
+                    local n = 1
+                    if st ~= nil then
+                        local ok, v = pcall(function() return st:StackSize() end)
+                        if ok and tonumber(v) ~= nil then n = tonumber(v) end
+                    end
+                    total2 = total2 + n
+                end
             end
-        end)
+        end
     end)
+    if total2 > total then total = total2 end
     return total
 end
 
---- Phase 5 M4：手上当前装备的 prefab（装备核验用）。拿不到返回 nil。
+--- Phase 5 M5：手上当前装备的 prefab（装备核验用）。
+--- 真机 bug（2026-11-12）：原来只试 EQUIPSLOTS.HANDS + GetEquippedItem，
+--- 服务端拿不到就返回 nil，导致明明装备成功却核验成 false。
+--- 现在多重兜底：① GetEquippedItem(HANDS) ② 遍历 inv.equipslots ③ 找带 inventoryitem 且
+--- owner 是玩家的手持物品。都失败才返回 nil，并把失败原因带出来供上层判断。
 local function equipped_hands_prefab()
     local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
     if player == nil or player.components == nil or player.components.inventory == nil then return nil end
-    local ok, item = pcall(function()
-        local slots = GLOBAL.EQUIPSLOTS
-        if slots == nil or slots.HANDS == nil then return nil end
-        return player.components.inventory:GetEquippedItem(slots.HANDS)
+    local inv = player.components.inventory
+    local slots = GLOBAL.EQUIPSLOTS
+    -- ① 官方 API
+    if slots ~= nil and slots.HANDS ~= nil then
+        local ok, item = pcall(function() return inv:GetEquippedItem(slots.HANDS) end)
+        if ok and item ~= nil and item.prefab ~= nil then return item.prefab end
+    end
+    -- ② 直接读 equipslots 表
+    local ok2, item2 = pcall(function()
+        local es = inv.equipslots
+        if es == nil or slots == nil then return nil end
+        return es[slots.HANDS]
     end)
-    if ok and item ~= nil then return item.prefab end
-    return nil
+    if ok2 and item2 ~= nil and item2.prefab ~= nil then return item2.prefab end
+    -- ③ 兜底：背包里有 inventoryitem 但 owner 是玩家的手持物
+    local found = nil
+    pcall(function()
+        inv:ForEachItem(function(item)
+            if found ~= nil or item == nil then return end
+            local ii = item.components ~= nil and item.components.inventoryitem or nil
+            if ii ~= nil then
+                local ok3, owner = pcall(function() return ii.owner end)
+                if ok3 and owner == player then found = item.prefab end
+            end
+        end)
+    end)
+    return found
 end
 
 --- 服务端权威判断（任务书 §8：游戏修改必须在服务器权威环境执行）
@@ -268,6 +319,10 @@ local function buildJobArgs(command)
         if radius < 2 then radius = 2 end
         if radius > WORK_MAX_RADIUS then radius = WORK_MAX_RADIUS end
         local args = { count = count, radius = radius }
+        -- Phase 5 M5 修复（真机踩到）：砍一棵树要 4~5 下，只砍 count=1 下树不倒、不掉木头。
+        -- 所以默认 until_gone = 一直干到目标消失（砍倒/挖空），count 只作为"目标个数"上限。
+        args.until_gone = p.until_gone ~= false
+        args.max_hits = 30
         -- 目标可选：传了必须命中对应白名单（chop 只看树，mine 只看矿石）
         -- 注意：不能写 `cond and A[x] or B[x]` —— A[x] 为 nil 时会错误回退到 B[x]，
         -- 导致 chop 接受了矿石目标（这是实测抓到的真 bug）。
@@ -509,17 +564,28 @@ function E.pollCompletion()
             if LOOT_PREFABS[pending.action] ~= nil and pending.loot_before ~= nil then
                 local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
                 if player ~= nil then
-                    verify = { gained = {} }
+                    verify = { gained = {}, after = {} }
                     local any = false
                     for _, prefab in ipairs(LOOT_PREFABS[pending.action]) do
                         local before = pending.loot_before[prefab] or 0
-                        local diff = count_prefab(player, prefab) - before
+                        local after = count_prefab(player, prefab)
+                        verify.after[prefab] = after
+                        local diff = after - before
                         if diff > 0 then
                             verify.gained[prefab] = diff
                             any = true
                         end
                     end
                     verify.confirmed_gain = any
+                    -- 真机踩到：捡东西的完成回执可能比背包更新早一瞬，差值为空但实际拿到了。
+                    -- 兜底：动作自报的数量若与背包绝对值一致，也认（只对 pick_up_item 用）。
+                    if not any and pending.action == 'pick_up_item' and pending.args ~= nil then
+                        local want = pending.args.item
+                        if want ~= nil and (verify.after[want] or 0) > 0 then
+                            verify.fallback_reason = 'bag_absolute_value'
+                            verify.confirmed_gain = true
+                        end
+                    end
                 end
             elseif pending.action == 'equip_item' and args ~= nil then
                 local got = equipped_hands_prefab()

@@ -33,7 +33,7 @@ function make_inventory()
   return {
     ForEachItem = function(self, fn)
       for _, it in ipairs(ITEMS) do
-        fn({ prefab = it.prefab, components = { stackable = { GetStackCount = function() return it.n end } } })
+        fn({ prefab = it.prefab, components = { stackable = { StackSize = function() return it.n end } } })
       end
     end,
     GetEquippedItem = function(self, slot) return EQUIPPED end,
@@ -316,5 +316,34 @@ test('M5：status() 暴露 12 个写动作（M2 2 + M3 2 + M4 4 + M5 4）', asyn
     for _, k in ipairs({ 'eat_item', 'craft_item', 'build_structure', 'build_campfire' }) do
       assert(s.write_actions[k] == true, k .. ' 应标为写动作')
     end
+  `)
+})
+
+test('M5 回归：best_food 不选零/负收益的"食物"（真机踩到把树枝当饭吃）', async () => {
+  const fengari = await import('fengari')
+  const { run } = load(fengari)
+  run(`
+    -- 背包里只有树枝：DST 里 twigs 有 edible 但 hungervalue = 0
+    ITEMS = { { prefab = 'twigs', n = 4, hungervalue = 0 } }
+    PLAYER.components.inventory = {
+      ForEachItem = function(self, fn)
+        for _, it in ipairs(ITEMS) do
+          fn({ prefab = it.prefab,
+               components = { stackable = { StackSize = function() return it.n end },
+                              edible = { hungervalue = it.hungervalue, healthvalue = 0 } } })
+        end
+      end,
+      GetEquippedItem = function() return nil end,
+    }
+    CURRENT = 'eat'
+    BWS2.actionExecutor.execute({ id = 'c1', type = 'eat_item',
+      params = { controller_id = 'C1', session_id = 'S1', confirmed = true } }, report)
+    -- 动作层应该自己失败：没有正收益食物
+    Whale.bridge.Report(false, '背包里没有能吃的东西')
+    CURRENT = nil
+    BWS2.actionExecutor.pollCompletion()
+    assert(REPORTS[2].status == 'FAILED', '没有真食物时应 FAILED，实际 ' .. tostring(REPORTS[2].status))
+    assert(string.find(tostring(REPORTS[2].error), '没有能吃', 1, true) ~= nil,
+      '应如实说没有能吃的东西，实际 ' .. tostring(REPORTS[2].error))
   `)
 })

@@ -16,10 +16,19 @@ function U.world()
     return GLOBAL.TheWorld
 end
 
---- 游戏内时间（秒）。服务器暂停时不会走，用来做超时判断刚好。
+--- 游戏内时间（秒，浮点，带毫秒精度）。
+--- 真机 bug（2026-11-12）：原来用 TheSim:GetTime() —— 这个 API 在当前构建里**不存在**，
+--- pcall 失败后恒返回 0。后果：所有超时判断（>120 秒）永不触发、所有冷却判断（>=0.2 秒）
+--- 永不为真，导致「砍一下顿一下」的重放逻辑根本不生效，动作只能靠外层 120 秒兜底。
+--- 现在按优先级取：TheSim:GetTime()（存在则用）→ TheSim:GetRealTime()/1000 → os.time()。
 function U.now()
     local ok, t = pcall(function() return GLOBAL.TheSim:GetTime() end)
-    return ok and t or 0
+    if ok and type(t) == "number" and t > 0 then return t end
+    local ok2, ms = pcall(function() return GLOBAL.TheSim:GetRealTime() end)
+    if ok2 and type(ms) == "number" and ms > 0 then return ms / 1000 end
+    local ok3, s = pcall(function() return GLOBAL.os.time() end)
+    if ok3 and type(s) == "number" then return s end
+    return 0
 end
 
 function U.pos(ent)
