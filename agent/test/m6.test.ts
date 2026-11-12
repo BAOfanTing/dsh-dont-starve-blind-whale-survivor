@@ -1,3 +1,4 @@
+// Phase 5 M2 新增只读工具 get_control_status，工具总数 12 → 13。
 // M6 测试：Agent HTTP API（认证 / 参数校验 / 各接口 / SSE 事件）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -123,7 +124,7 @@ test('GET /health：免认证，返回服务与就绪状态', async () => {
     assert.equal(result.json?.service, 'blind-whale-survivor-agent')
     assert.match(String(result.json?.version), /^0\.4\.0-m\d+$/)
     assert.equal(typeof result.json?.ready, 'boolean')
-    assert.equal(result.json?.tools, 12)
+    assert.equal(result.json?.tools, 13)
   } finally {
     await h.close()
   }
@@ -150,8 +151,8 @@ test('GET /api/agent/status：返回 MCP/工具/上下文/限制/Provider', asyn
     assert.equal(result.json?.ok, true)
     assert.equal(result.json?.ready, true)
     assert.equal(result.json?.mcp?.state, 'connected')
-    assert.equal(result.json?.tools?.adapted, 12)
-    assert.equal(result.json?.tools?.names?.length, 12)
+    assert.equal(result.json?.tools?.adapted, 13)
+    assert.equal(result.json?.tools?.names?.length, 13)
     assert.ok(result.json?.limits?.maxRounds > 0)
     assert.equal(result.json?.provider?.model, 'echo')
   } finally {

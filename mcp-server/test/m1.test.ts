@@ -1,3 +1,4 @@
+// Phase 5 M2 新增 get_control_status（只读），工具总数 12 → 13。
 // M1 验收测试：真实 stdio 子进程 + 真实 JSON-RPC 握手
 //
 // 覆盖：
@@ -103,13 +104,14 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
     h.notify('notifications/initialized')
     const list = await h.request(2, 'tools/list')
     assert.ok(Array.isArray(list.result.tools))
-    assert.equal(list.result.tools.length, 12, '应注册 12 个工具，实际 ' + list.result.tools.length)
+    assert.equal(list.result.tools.length, 13, '应注册 12 个工具，实际 ' + list.result.tools.length)
 
     const names = list.result.tools.map((t: { name: string }) => t.name).sort()
     assert.deepEqual(names, [
       'get_base_status',
       'get_bridge_status',
       'get_command_result',
+      'get_control_status',
       'get_game_status',
       'get_inventory',
       'get_nearby_entities',

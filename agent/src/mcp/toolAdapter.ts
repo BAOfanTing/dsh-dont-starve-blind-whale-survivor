@@ -23,7 +23,7 @@ import type { McpClient, McpToolInfo } from '../mcp/client.js'
 import type { LLMToolDefinition } from '../llm/types.js'
 import type { Logger } from '../utils/logger.js'
 
-/** 只读白名单（任务书 §13 列出的 12 个；以 Phase 3 实际注册的工具为准） */
+/** 只读白名单（Phase 3 的 12 个 + Phase 5 M2 的控制权查询工具；以 MCP Server 实际注册为准） */
 export const READ_ONLY_ALLOWLIST = [
   'get_game_status',
   'get_bridge_status',
@@ -37,6 +37,8 @@ export const READ_ONLY_ALLOWLIST = [
   'refresh_game_state',
   'get_recent_events',
   'get_command_result',
+  // Phase 5 M2：只读，Agent 执行动作前应能查控制权状态
+  'get_control_status',
 ] as const
 
 export type AllowedToolName = (typeof READ_ONLY_ALLOWLIST)[number]

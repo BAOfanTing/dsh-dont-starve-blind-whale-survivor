@@ -1,24 +1,47 @@
-// Phase 5 M1 · Survival Controller HTTP 门面（dry-run only）
+// Phase 5 · Survival Controller HTTP 门面
 //
-// 这是**控制面**接口，供后续 M2~M7 挂载真实动作；M1 只暴露 dry-run / 控制权 / 执行记录。
-// 不下发任何游戏动作、不连 Lua、不连 Bridge（M1 的约束）。
+// M1：dry-run / 控制权 / 执行记录。
+// M2：接 Bridge 控制权同步（跨层一致性）+ 移动动作。
+// 不下发任何游戏动作到 Lua —— Lua 通过 Phase 2 HTTP 命令通道自己来取。
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { ActionRegistry } from './actionRegistry.js'
 import { ControlManager } from './controlManager.js'
+import { BridgeControlSync } from './bridgeSync.js'
 import { parseActionCommand } from './protocol.js'
 
 export interface ControllerHandle {
   server: Server
   control: ControlManager
   registry: ActionRegistry
+  sync: BridgeControlSync | null
   listen(): Promise<number>
   close(): Promise<void>
 }
 
-export function createController(options: { host?: string; port?: number } = {}): ControllerHandle {
+export interface ControllerOptions {
+  host?: string
+  port?: number
+  /** 配了就启用 Controller → Bridge 控制权同步 */
+  bridge?: { url: string; token: string }
+  /** 测试用：注入假 fetch */
+  fetchImpl?: typeof fetch
+}
+
+export function createController(options: ControllerOptions = {}): ControllerHandle {
   const control = new ControlManager()
   const registry = new ActionRegistry(control, { forceDryRun: true })
+  const sync = options.bridge === undefined
+    ? null
+    : new BridgeControlSync({ bridgeUrl: options.bridge.url, token: options.bridge.token, ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }) })
+  // 每次控制权变更推给 Bridge；失败只记在 sync.status() 里，不阻塞控制逻辑
+  if (sync !== null) {
+    control.setOnStatusChange((status) => {
+      void sync.push(status, status.last_change?.reason ?? '状态变更')
+    })
+    // 启动时把初始 SUPERVISED 状态也推一次
+    void sync.push(control.getControlStatus(), 'Controller 启动同步')
+  }
   let requests = 0
   let rejected = 0
 
@@ -49,8 +72,9 @@ export function createController(options: { host?: string; port?: number } = {})
 
       if (path === '/health' && method === 'GET') {
         send(res, 200, {
-          ok: true, service: 'blind-whale-survivor-controller', version: '0.5.0-m1',
+          ok: true, service: 'blind-whale-survivor-controller', version: '0.5.0-m2',
           mode: control.getControlStatus().mode, dry_run_only: true,
+          bridge_sync: sync === null ? null : sync.status(),
           actions: registry.stats(), requests, rejected,
         })
         return
@@ -187,6 +211,7 @@ export function createController(options: { host?: string; port?: number } = {})
     server,
     control,
     registry,
+    sync,
     listen: () => new Promise<number>((resolve, reject) => {
       const onError = (e: Error) => { server.removeListener('listening', onListening); reject(e) }
       const onListening = () => {

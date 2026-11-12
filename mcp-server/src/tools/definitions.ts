@@ -15,6 +15,7 @@ import type { BridgeClient } from '../bridge/client.js'
 import { ToolError, type ToolErrorPayload } from '../schemas/errors.js'
 import type { Logger } from '../utils/logger.js'
 import { createReadTools } from './readTools.js'
+import { createControlTools } from './controlTools.js'
 import type { EventDetector } from './events.js'
 
 export interface ToolResult {
@@ -140,7 +141,8 @@ function createBridgeStatusTool(): ToolDefinition {
 
 /** 全部工具（顺序即 tools/list 的顺序） */
 export function createToolDefinitions(): ToolDefinition[] {
-  const tools = [createBridgeStatusTool(), ...createReadTools()]
+  // Phase 5 M2 追加 1 个只读控制权工具；其余 12 个只读工具保持不变
+  const tools = [createBridgeStatusTool(), ...createReadTools(), ...createControlTools()]
   const seen = new Set<string>()
   for (const tool of tools) {
     if (seen.has(tool.name)) throw new Error(`工具重名：${tool.name}`)

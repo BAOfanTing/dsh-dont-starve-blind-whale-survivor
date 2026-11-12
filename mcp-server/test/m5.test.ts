@@ -1,3 +1,4 @@
+// Phase 5 M2 新增 get_control_status（只读），工具总数 12 → 13。
 // M5 测试：Streamable HTTP 传输
 //
 // 用**真实 HTTP 请求**打真实服务器（端口 0 由系统分配），验证：
@@ -145,7 +146,7 @@ test('HTTP：完整握手 + tools/list（与 stdio 同一套工具）', async ()
 
     const list = await rpc(h.base, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, { sessionId: init.sessionId! })
     const tools = list.json?.result?.tools as Array<{ name: string }>
-    assert.equal(tools.length, 12, 'HTTP 与 stdio 必须同一套工具：' + JSON.stringify(list.json).slice(0, 300))
+    assert.equal(tools.length, 13, 'HTTP 与 stdio 必须同一套工具：' + JSON.stringify(list.json).slice(0, 300))
 
     const prompts = await rpc(h.base, { jsonrpc: '2.0', id: 3, method: 'prompts/list' }, { sessionId: init.sessionId! })
     assert.equal((prompts.json?.result?.prompts as unknown[]).length, 4)

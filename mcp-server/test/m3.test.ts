@@ -1,3 +1,4 @@
+// Phase 5 M2 新增 get_control_status（只读），工具总数 12 → 13。
 // M3 测试：10 个只读工具的真实解析逻辑
 //
 // 用真实 HTTP 假 Bridge 返回**仿真快照**（字段与游戏端 state_serializer 输出一致），
@@ -167,9 +168,9 @@ async function harness(options: { stale?: boolean; snapshot?: Record<string, unk
 }
 
 test('工具清单：12 个工具，全部只读，无重复', () => {
-  assert.equal(TOOLS.length, 12)
+  assert.equal(TOOLS.length, 13)
   const names = TOOLS.map((tool) => tool.name)
-  assert.equal(new Set(names).size, 12)
+  assert.equal(new Set(names).size, 13)
   for (const tool of TOOLS) {
     assert.equal(tool.readOnly, true, `${tool.name} 必须只读`)
     assert.ok(tool.description.length > 8, `${tool.name} 描述太短`)

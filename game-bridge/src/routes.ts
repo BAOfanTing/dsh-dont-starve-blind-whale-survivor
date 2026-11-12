@@ -17,6 +17,7 @@ import type { SessionManager } from './session.js'
 import { HttpError } from './http.js'
 import { parseHeartbeat, parsePoll, parseResultReport, parseTelemetry, PROTOCOL_VERSION } from './validate.js'
 import { COMMAND_TYPES, type CommandQueue, type CommandRecord } from './commands.js'
+import type { ControlStateStore, ControlMode } from './control.js'
 
 export interface RequestContext {
   requestId: string
@@ -27,6 +28,7 @@ export interface RequestContext {
   state: BridgeState
   sessions: SessionManager
   commands: CommandQueue
+  control: ControlStateStore
   logger: Logger
   receivedAt: number
 }
@@ -46,6 +48,7 @@ export interface Route {
 export interface RouteDeps {
   sessions: SessionManager
   commands: CommandQueue
+  control: ControlStateStore
 }
 
 /** 对外暴露的命令形状（只给游戏端需要的字段，不泄露内部记账） */
@@ -377,21 +380,37 @@ export function createRoutes(deps: RouteDeps): Route[] {
       method: 'POST',
       path: '/api/v1/commands/enqueue',
       auth: true,
-      handler: ({ body, commands: queue, config, receivedAt }) => {
+      handler: ({ body, commands: queue, control, config, receivedAt }: RequestContext) => {
         const record = body !== null && typeof body === 'object' ? (body as Record<string, unknown>) : null
         if (!record) throw new HttpError(400, 'bad_request', 'enqueue 请求体必须是 JSON 对象')
         const type = record.type
         if (typeof type !== 'string' || !(COMMAND_TYPES as readonly string[]).includes(type)) {
-          throw new HttpError(400, 'bad_request', `type 必须是 ${COMMAND_TYPES.join('/')} 之一（本阶段不实现任何真实游戏动作）`)
+          throw new HttpError(400, 'bad_request', `type 必须是 ${COMMAND_TYPES.join('/')} 之一`)
         }
         const params = record.params === undefined ? {} : record.params
         if (params !== null && (typeof params !== 'object' || Array.isArray(params))) {
           throw new HttpError(400, 'bad_request', 'params 必须是对象')
         }
+        // Phase 5 M2：动作命令必须带控制字段，且入队前先过 Bridge 侧控制权校验
+        // （Lua 执行端还会再做一次二次校验，不能只信这一层）
+        const isAction = (['move_to', 'stop_movement'] as readonly string[]).includes(type)
+        let effectiveParams = (params ?? {}) as Record<string, unknown>
+        if (isAction) {
+          const controllerId = typeof record.controller_id === 'string' ? record.controller_id : ''
+          const sessionId = typeof record.session_id === 'string' ? record.session_id : ''
+          if (controllerId.length === 0 || sessionId.length === 0) {
+            throw new HttpError(400, 'bad_request', '动作命令必须带 controller_id / session_id')
+          }
+          const verdict = control.assertCanExecute(controllerId, sessionId, false)
+          if (!verdict.allowed) {
+            throw new HttpError(403, 'bad_request', `${verdict.code}: ${verdict.message}`)
+          }
+          effectiveParams = { ...effectiveParams, controller_id: controllerId, session_id: sessionId }
+        }
         const shard = typeof record.shard === 'string' ? record.shard : null
         let command: CommandRecord
         try {
-          command = queue.enqueue(type, (params ?? {}) as Record<string, unknown>, { shard })
+          command = queue.enqueue(type, effectiveParams, { shard })
         } catch (error) {
           throw new HttpError(error instanceof Error && error.message.startsWith('queue_full') ? 429 : 400, 'bad_request', String((error as Error).message))
         }
@@ -403,6 +422,73 @@ export function createRoutes(deps: RouteDeps): Route[] {
             server_time: receivedAt,
             command: publicCommand(command),
             pending_count: queue.pendingCount(),
+          },
+        }
+      },
+    },
+    // ─────────── Phase 5 M2：控制权（Bridge 持久化权威副本）───────────
+    {
+      // Lua 执行端 / MCP / Controller 查询当前控制权状态
+      method: 'GET',
+      path: '/api/v1/control/status',
+      auth: true,
+      handler: ({ control, config, receivedAt }: RequestContext) => ({
+        status: 200,
+        body: { success: true, protocol_version: config.protocolVersion, server_time: receivedAt, control: control.status() },
+      }),
+    },
+    {
+      // Controller 同步权威状态（只有它写，Lua 只读）
+      method: 'POST',
+      path: '/api/v1/control/sync',
+      auth: true,
+      handler: ({ body, control, config, receivedAt }: RequestContext) => {
+        const r = body !== null && typeof body === 'object' ? (body as Record<string, unknown>) : null
+        if (r === null) throw new HttpError(400, 'bad_request', '请求体必须是 JSON 对象')
+        const modes = ['MANUAL', 'SUPERVISED', 'AUTONOMOUS', 'PAUSED', 'EMERGENCY_STOP']
+        const mode = String(r.mode ?? 'SUPERVISED') as ControlMode
+        if (!modes.includes(mode)) throw new HttpError(400, 'bad_request', `mode 必须是 ${modes.join('/')} 之一`)
+        const holder = typeof r.holder === 'string' && r.holder.length > 0 ? r.holder : null
+        const sessionId = typeof r.session_id === 'string' && r.session_id.length > 0 ? r.session_id : null
+        const expires = typeof r.lease_expires_at === 'number' && Number.isFinite(r.lease_expires_at) ? r.lease_expires_at : null
+        const state = control.update({
+          mode,
+          holder,
+          session_id: sessionId,
+          lease_expires_at: expires,
+          emergency_stop: r.emergency_stop === true || mode === 'EMERGENCY_STOP',
+          reason: typeof r.reason === 'string' ? r.reason.slice(0, 200) : 'Controller 同步',
+        })
+        return {
+          status: 200,
+          body: { success: true, protocol_version: config.protocolVersion, server_time: receivedAt, control: state },
+        }
+      },
+    },
+    {
+      // Lua 执行端二次校验：动作执行前必须问一次（不自己存状态）
+      method: 'POST',
+      path: '/api/v1/control/assert',
+      auth: true,
+      handler: ({ body, control, config, receivedAt }: RequestContext) => {
+        const r = body !== null && typeof body === 'object' ? (body as Record<string, unknown>) : null
+        if (r === null) throw new HttpError(400, 'bad_request', '请求体必须是 JSON 对象')
+        const controllerId = typeof r.controller_id === 'string' ? r.controller_id : ''
+        const sessionId = typeof r.session_id === 'string' ? r.session_id : ''
+        if (controllerId.length === 0 || sessionId.length === 0) {
+          throw new HttpError(400, 'bad_request', 'controller_id / session_id 必填')
+        }
+        const verdict = control.assertCanExecute(controllerId, sessionId, r.read_only === true)
+        return {
+          status: 200,
+          body: {
+            success: verdict.allowed,
+            protocol_version: config.protocolVersion,
+            server_time: receivedAt,
+            allowed: verdict.allowed,
+            code: verdict.code,
+            message: verdict.message,
+            control: control.get(),
           },
         }
       },

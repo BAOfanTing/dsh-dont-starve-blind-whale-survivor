@@ -41,10 +41,10 @@ async function startHarness() {
   return { base: `http://127.0.0.1:${port}`, sessions, commands, close: () => handle.close() }
 }
 
-test('CommandQueue：只允许白名单里的四个测试命令', () => {
+test('CommandQueue：只允许白名单里的命令（Phase 5 M2 扩了 3 个移动动作）', () => {
   const queue = new CommandQueue()
   queue.enqueue('ping')
-  assert.throws(() => queue.enqueue('move_to'), /unsupported_command_type/)
+  assert.throws(() => queue.enqueue('fly_to_the_moon'), /unsupported_command_type/)
   assert.throws(() => queue.enqueue('chop'), /unsupported_command_type/)
 })
 

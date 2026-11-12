@@ -11,6 +11,7 @@ import { createRoutes, findRoute, methodNotAllowed, type RequestContext, type Ro
 import type { CommandQueue } from './commands.js'
 import type { SessionManager } from './session.js'
 import { BridgeState } from './state.js'
+import { ControlStateStore } from './control.js'
 
 export interface ServerDeps {
   config: BridgeConfig
@@ -19,6 +20,7 @@ export interface ServerDeps {
   sessions: SessionManager
   commands: CommandQueue
   routes?: Route[]
+  control?: ControlStateStore
   now?: () => number
 }
 
@@ -30,7 +32,9 @@ export interface BridgeServerHandle {
 
 export function createBridgeServer(deps: ServerDeps): BridgeServerHandle {
   const now = deps.now ?? Date.now
-  const routes = deps.routes ?? createRoutes({ sessions: deps.sessions, commands: deps.commands })
+  // 控制权持久化：默认与 Phase 2 状态文件同目录，单独一个文件（不改 PersistedState 结构）
+  const control = deps.control ?? new ControlStateStore({ path: deps.config.stateFile.replace(/\.json$/, '-control.json'), now })
+  const routes = deps.routes ?? createRoutes({ sessions: deps.sessions, commands: deps.commands, control })
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void handle(req, res)
@@ -88,6 +92,7 @@ export function createBridgeServer(deps: ServerDeps): BridgeServerHandle {
         state: deps.state,
         sessions: deps.sessions,
         commands: deps.commands,
+        control,
         logger: deps.logger,
         receivedAt: startedAt,
       }

@@ -1,3 +1,4 @@
+// Phase 5 M2 新增只读工具 get_control_status，工具总数 12 → 13。
 // M1 测试：MCP Client 连接、能力发现、错误处理
 //
 // 用**真实 MCP Server**（在测试内启动，端口 0）验证 HTTP；
@@ -78,11 +79,12 @@ test('HTTP：连接真实 MCP Server，自动发现工具/资源/提示词', asy
 
     // 工具清单不写死：断言与 MCP Server 实际返回一致
     const tools = client.listTools()
-    assert.equal(tools.length, 12, `实际 ${tools.length} 个：` + tools.map((tool) => tool.name).join(','))
+    assert.equal(tools.length, 13, `实际 ${tools.length} 个：` + tools.map((tool) => tool.name).join(','))
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
       'get_base_status',
       'get_bridge_status',
       'get_command_result',
+      'get_control_status',
       'get_game_status',
       'get_inventory',
       'get_nearby_entities',
@@ -181,7 +183,7 @@ test('stdio：拉起真实子进程，能力与 HTTP 一致', async () => {
     assert.equal(status.state, 'connected')
     assert.equal(status.transport, 'stdio')
     assert.equal(status.server?.name, 'blind-whale-survivor')
-    assert.equal(client.listTools().length, 12)
+    assert.equal(client.listTools().length, 13)
     assert.equal(client.listResources().length, 6)
     assert.equal(client.listPrompts().length, 4)
   } finally {
@@ -225,7 +227,7 @@ test('调用不存在的工具 → MCP_TOOL_NOT_FOUND，并列出可用工具', 
         assert.ok(error instanceof McpToolError)
         assert.equal(error.code, 'MCP_TOOL_NOT_FOUND')
         const detail = error.detail as { available?: string[] }
-        assert.ok(Array.isArray(detail.available) && detail.available.length === 12, '应列出 12 个可用工具')
+        assert.ok(Array.isArray(detail.available) && detail.available.length === 13, '应列出 13 个可用工具')
         return true
       },
     )
@@ -260,7 +262,7 @@ test('reconnect：断开后能重新连上并计数', async () => {
     const status = await client.reconnect()
     assert.equal(status.state, 'connected')
     assert.equal(status.reconnects, 1)
-    assert.equal(client.listTools().length, 12, '重连后工具清单仍完整')
+    assert.equal(client.listTools().length, 13, '重连后工具清单仍完整')
   } finally {
     await client.disconnect()
     await server.close()

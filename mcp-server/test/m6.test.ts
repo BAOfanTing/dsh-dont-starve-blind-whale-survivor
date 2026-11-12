@@ -1,3 +1,4 @@
+// Phase 5 M2 新增 get_control_status（只读），工具总数 12 → 13。
 // M6 集成测试：用**官方 MCP Client**（不是手写 JSON-RPC）连真实服务器
 //
 // 覆盖：
@@ -39,6 +40,7 @@ const EXPECTED_TOOLS = [
   'get_base_status',
   'get_bridge_status',
   'get_command_result',
+  'get_control_status',   // Phase 5 M2 新增（只读）
   'get_game_status',
   'get_inventory',
   'get_nearby_entities',
@@ -106,7 +108,7 @@ test('stdio：官方 Client 握手 + 能力发现', async () => {
     assert.ok(client.getServerCapabilities()?.tools, '应声明 tools 能力')
 
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 12)
+    assert.equal(tools.length, 13)
     assert.deepEqual(tools.map((tool) => tool.name).sort(), EXPECTED_TOOLS)
     for (const tool of tools) {
       assert.ok(tool.description && tool.description.length > 4, `${tool.name} 缺描述`)
@@ -301,7 +303,7 @@ test('HTTP：官方 Client 走 Streamable HTTP，能力与 stdio 一致', async 
   const client = await connectHttp(h.base)
   try {
     const { tools } = await client.listTools()
-    assert.equal(tools.length, 12)
+    assert.equal(tools.length, 13)
     assert.deepEqual(tools.map((tool) => tool.name).sort(), EXPECTED_TOOLS)
 
     const { resources } = await client.listResources()
@@ -361,8 +363,8 @@ test('HTTP：多会话并发（两个客户端各自独立）', async () => {
     }
     // 两个客户端都能独立发现工具
     const [la, lb] = await Promise.all([a.listTools(), b.listTools()])
-    assert.equal(la.tools.length, 12)
-    assert.equal(lb.tools.length, 12)
+    assert.equal(la.tools.length, 13)
+    assert.equal(lb.tools.length, 13)
   } finally {
     await a.close()
     await b.close()

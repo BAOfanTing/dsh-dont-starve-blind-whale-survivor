@@ -83,6 +83,28 @@ export class ControlManager {
   }
   private pendingCounter: () => number = () => 0
 
+  /**
+   * 状态变更订阅（M2 跨层一致性）：每次 change() 后把当前状态推给外部（Bridge）。
+   * 回调抛错不影响控制逻辑本身，只记在 lastSyncError 里。
+   */
+  private onStatusChange: ((status: ControlStatus) => void) | null = null
+  private lastSyncError: string | null = null
+  setOnStatusChange(fn: ((status: ControlStatus) => void) | null): void {
+    this.onStatusChange = fn
+  }
+  syncError(): string | null {
+    return this.lastSyncError
+  }
+  /** 主动触发一次同步（启动时把初始状态推给 Bridge） */
+  syncNow(): void {
+    if (this.onStatusChange === null) return
+    try {
+      this.onStatusChange(this.getControlStatus())
+    } catch (error) {
+      this.lastSyncError = String((error as Error)?.message ?? error)
+    }
+  }
+
   /** 记录一次控制权变更 */
   private change(to: ControlMode, reason: string): void {
     const at = this.now()
@@ -94,6 +116,15 @@ export class ControlManager {
       controller_id: this.lease?.controller_id ?? null,
     })
     this.lastChange = { at, from: this.history.length > 1 ? this.history[this.history.length - 2]!.to : null, to, reason }
+    // 跨层同步：Control Manager 是权威源，每次变更推给 Bridge（失败的账号记录，不阻塞）
+    if (this.onStatusChange !== null) {
+      try {
+        this.onStatusChange(this.getControlStatus())
+        this.lastSyncError = null
+      } catch (error) {
+        this.lastSyncError = String((error as Error)?.message ?? error)
+      }
+    }
   }
   private lastChange: ControlStatus['last_change'] = null
 
@@ -187,6 +218,8 @@ export class ControlManager {
     this.lease.expires_at = this.now() + duration
     // acquired_at 跟着前移，后续每次 renew 都基于当前周期
     this.lease.acquired_at = this.lease.renewed_at
+    // 续约改变了 expires_at，必须同步给 Bridge（否则 Lua 端按旧 lease 判定会提前拒绝）
+    this.syncNow()
     return { ...this.lease }
   }
 

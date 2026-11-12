@@ -22,7 +22,10 @@ local tonumber = GLOBAL.tonumber
 
 local C = {}
 
-local ALLOWED = { ping = true, echo = true, get_state = true, refresh_state = true }
+-- Phase 5 M2：会修改游戏状态的动作命令（固定白名单，绝不执行任意外部字符串）
+local ALLOWED = { ping = true, echo = true, get_state = true, refresh_state = true,
+    move_to = true, stop_movement = true, get_movement_status = true }
+local ACTION_COMMANDS = { move_to = true, stop_movement = true }
 
 local polling = false
 local nextPollAt = 0
@@ -147,6 +150,14 @@ local function execute(command)
             player_tile = record.player ~= nil and record.player.position or nil,
             nearby_returned = record.nearby ~= nil and record.nearby.returned or 0,
         }, nil
+    elseif kind == 'get_movement_status' then
+        -- Phase 5 M2：只读，直接读执行器状态
+        if BWS2.actionExecutor == nil then
+            return 'FAILED', nil, 'action_executor_not_loaded'
+        end
+        local ok, status = pcall(BWS2.actionExecutor.movementStatus)
+        if not ok then return 'FAILED', nil, 'movement_status_error: ' .. tostring(status) end
+        return 'SUCCEEDED', status, nil
     end
     return 'FAILED', nil, 'unsupported_command: ' .. tostring(kind)
 end
@@ -197,6 +208,21 @@ local function handle(command)
     end
 
     local startedMs = now_ms()
+
+    -- Phase 5 M2：会改游戏状态的动作走独立执行器（异步：控制权二次校验 → 启动原生动作）。
+    -- 回执由执行器独占（它要等 assert 回调），这里不再自己 report，避免重复回执。
+    if ACTION_COMMANDS[command.type] then
+        if BWS2.actionExecutor == nil then
+            report(command.id, 'FAILED', nil, 'action_executor_not_loaded', startedMs)
+            return
+        end
+        local ok, outcome = pcall(BWS2.actionExecutor.execute, command, report)
+        if not ok then
+            report(command.id, 'FAILED', nil, 'action_executor_error: ' .. tostring(outcome), startedMs)
+        end
+        return
+    end
+
     local ok, status, result, error = pcall(execute, command)
     if not ok then
         report(command.id, 'FAILED', nil, 'executor_error: ' .. tostring(status), startedMs)
@@ -268,7 +294,8 @@ function C.status()
         last_acknowledged_id = lastAcknowledgedId,
         last_command = lastCommand,
         last_error = lastError,
-        allowed = { 'ping', 'echo', 'get_state', 'refresh_state' },
+        allowed = { 'ping', 'echo', 'get_state', 'refresh_state', 'move_to', 'stop_movement', 'get_movement_status' },
+        action_executor = BWS2.actionExecutor ~= nil and BWS2.actionExecutor.status() or nil,
     }
 end
 

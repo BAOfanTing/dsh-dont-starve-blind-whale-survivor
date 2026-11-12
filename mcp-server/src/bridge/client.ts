@@ -198,6 +198,23 @@ export class BridgeClient {
     return this.getJson<Record<string, unknown>>('/api/v1/bridge/status')
   }
 
+  /** Phase 5 M2：读 Bridge 持久化的控制权状态（只读） */
+  async controlStatus(): Promise<BridgeResponse<Record<string, unknown>>> {
+    try {
+      return await this.getJson<Record<string, unknown>>('/api/v1/control/status')
+    } catch (error) {
+      // 旧版 Bridge（M1 时代）没有这个接口会返回 404 → request() 报 INTERNAL_ERROR。
+      // 这里转成明确的 BRIDGE_UNAVAILABLE，让调用方知道该升级 Bridge，而不是"内部错误"。
+      if (error instanceof ToolError && error.payload.code === 'INTERNAL_ERROR') {
+        throw new ToolError('BRIDGE_UNAVAILABLE', 'Bridge 不支持控制权接口（需升级到 Phase 5 M2）', {
+          hint: '重启 Game Bridge，或确认 /api/v1/control/status 可访问',
+          detail: error.payload.detail,
+        })
+      }
+      throw error
+    }
+  }
+
   // ───────────────────────── 快照（带缓存 + 并发合并）─────────────────────────
 
   /**

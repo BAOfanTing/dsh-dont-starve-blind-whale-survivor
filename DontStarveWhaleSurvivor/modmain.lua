@@ -74,6 +74,8 @@ modimport("scripts/main/connection.lua")
 modimport("scripts/main/heartbeat.lua")
 modimport("scripts/main/telemetry.lua")
 modimport("scripts/main/commands.lua")
+-- Phase 5 M2：Lua Action Executor（固定白名单 + 服务端权威 + 控制权二次校验）
+modimport("scripts/main/action_executor.lua")
 modimport("scripts/main/net.lua")
 modimport("scripts/main/probe.lua")
 
