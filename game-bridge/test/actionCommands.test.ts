@@ -151,3 +151,19 @@ test('M2 回归：动作命令自动绑定 master 分片（真实踩到 caves �
     assert.equal(master.json.command?.type, 'move_to', 'master 分片应该取到 move_to')
   } finally { await h.close() }
 })
+
+test('M2 回归：get_movement_status 也绑定 master 分片（真机踩到 caves 取走查到空实例）', async () => {
+  const h = await start()
+  try {
+    const enq = await post(h.base, '/api/v1/commands/enqueue', { type: 'get_movement_status', params: {} })
+    assert.equal(enq.status, 200)
+    const caves = await post(h.base, '/api/v1/commands/poll', {
+      protocol_version: '1.0', token: TOKEN, session_id: 'CAVES2', shard: 'caves', last_acknowledged_id: null,
+    })
+    assert.equal(caves.json.command?.type !== 'get_movement_status', true, 'caves 不该取走只读状态查询')
+    const master = await post(h.base, '/api/v1/commands/poll', {
+      protocol_version: '1.0', token: TOKEN, session_id: 'MASTER2', shard: 'master', last_acknowledged_id: null,
+    })
+    assert.equal(master.json.command?.type, 'get_movement_status', 'master 应取到只读状态查询')
+  } finally { await h.close() }
+})

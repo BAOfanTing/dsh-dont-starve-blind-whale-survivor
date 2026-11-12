@@ -394,6 +394,9 @@ export function createRoutes(deps: RouteDeps): Route[] {
         // Phase 5 M2：动作命令必须带控制字段，且入队前先过 Bridge 侧控制权校验
         // （Lua 执行端还会再做一次二次校验，不能只信这一层）
         const isAction = (['move_to', 'stop_movement'] as readonly string[]).includes(type)
+        // 只读的移动状态查询也要绑 master：真机实测没绑时 caves 会取走，
+        // 查到 caves 上空的执行器实例（counts 全 0），而不是 master 上的真实动作记录。
+        const isMovementStatus = type === 'get_movement_status'
         let effectiveParams = (params ?? {}) as Record<string, unknown>
         let actionShard: string | null = typeof record.shard === 'string' ? record.shard : null
         if (isAction) {
@@ -411,6 +414,7 @@ export function createRoutes(deps: RouteDeps): Route[] {
           // player_not_ready: no_player。动作必须只在玩家所在的 master 分片执行。
           if (actionShard === null) actionShard = 'master'
         }
+        if (isMovementStatus && actionShard === null) actionShard = 'master'
         const shard = actionShard
         let command: CommandRecord
         try {
