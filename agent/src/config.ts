@@ -33,6 +33,22 @@ export interface AgentConfig {
   /** Agent HTTP API（M6 才用，M1 先读进来） */
   apiHost: string
   apiPort: number
+
+  // ───────────── LLM Provider（M2）─────────────
+  /** deepseek：官方 API 约定（thinking 走 extra_body、必须回传 reasoning_content）；openai-compatible：只发标准字段 */
+  llmPreset: 'deepseek' | 'openai-compatible'
+  llmBaseUrl: string
+  llmApiKey: string
+  llmModel: string
+  /** 默认是否开思考（仅 deepseek preset 生效） */
+  llmThinking: boolean
+  llmReasoningEffort: 'low' | 'high' | 'max'
+  llmMaxTokens: number
+  llmTemperature: number | null
+  llmTimeoutMs: number
+  llmMaxRetries: number
+  llmContextLength: number | null
+  llmMaxOutputTokens: number | null
 }
 
 export function resolveToken(env: NodeJS.ProcessEnv = process.env): { token: string; source: AgentConfig['tokenSource'] } {
@@ -71,5 +87,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       : 'info',
     apiHost: env.BWS_AGENT_HOST ?? '127.0.0.1',
     apiPort: Number(env.BWS_AGENT_PORT ?? 8791),
+
+    // ── LLM ──
+    llmPreset: (env.BWS_LLM_PRESET ?? 'deepseek').toLowerCase() === 'openai-compatible' ? 'openai-compatible' : 'deepseek',
+    llmBaseUrl: (env.BWS_LLM_BASE_URL ?? env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com').replace(/\/+$/, ''),
+    llmApiKey: env.BWS_LLM_API_KEY ?? env.DEEPSEEK_API_KEY ?? env.OPENAI_API_KEY ?? '',
+    // 模型名不写死：默认值只是方便，任何值都能覆盖
+    llmModel: env.BWS_LLM_MODEL ?? env.DEEPSEEK_MODEL ?? 'deepseek-flash',
+    llmThinking: (env.BWS_LLM_THINKING ?? 'true').toLowerCase() !== 'false',
+    llmReasoningEffort: ((): 'low' | 'high' | 'max' => {
+      const raw = (env.BWS_LLM_REASONING_EFFORT ?? 'high').toLowerCase()
+      return raw === 'low' || raw === 'max' ? raw : 'high'
+    })(),
+    llmMaxTokens: Number(env.BWS_LLM_MAX_TOKENS ?? 2048),
+    llmTemperature: env.BWS_LLM_TEMPERATURE === undefined ? null : Number(env.BWS_LLM_TEMPERATURE),
+    llmTimeoutMs: Number(env.BWS_LLM_TIMEOUT_MS ?? 60000),
+    llmMaxRetries: Number(env.BWS_LLM_MAX_RETRIES ?? 2),
+    llmContextLength: env.BWS_LLM_CONTEXT_LENGTH === undefined ? null : Number(env.BWS_LLM_CONTEXT_LENGTH),
+    llmMaxOutputTokens: env.BWS_LLM_MAX_OUTPUT_TOKENS === undefined ? null : Number(env.BWS_LLM_MAX_OUTPUT_TOKENS),
   }
 }

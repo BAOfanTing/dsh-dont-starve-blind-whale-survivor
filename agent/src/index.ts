@@ -1,140 +1,125 @@
-// Agent 入口（M1）
-//
-// M1 只做一件事：连上 Phase 3 的 MCP Server，打印它到底提供了什么。
-// 不接 LLM、不跑 Agent Loop、不做决策 —— 那些是 M2/M4/M5。
+// M2 入口：探测 LLM Provider（不跑 Agent Loop，那是 M4）
 //
 // 用法：
-//   node dist/src/index.js                        # 默认走 Streamable HTTP（连已运行的 MCP Server）
-//   BWS_AGENT_MCP_TRANSPORT=stdio node dist/src/index.js   # 拉起子进程走 stdio
+//   node dist/src/index.js --llm          # 探测 LLM（健康检查 + function calling 实测）
+//   node dist/src/index.js                # 默认只做 MCP 连接（M1 行为）
 //
-// 环境变量：
-//   BWS_MCP_URL            MCP Server 地址（默认 http://127.0.0.1:8790）
-//   BWS_AGENT_MCP_TRANSPORT  http | stdio（默认 http）
-//   BWS_TOKEN / BWS_TOKEN_FILE  共享 token（默认读 .runtime/token.txt）
-//   BWS_AGENT_TOOL_TIMEOUT_MS    工具调用超时（默认 15000）
-//   BWS_AGENT_LOG          debug|info|warn|error
+// 环境变量见 config.ts（BWS_LLM_* / DEEPSEEK_*）。
 
-import { loadConfig } from './config.js'
+import { loadConfig, type AgentConfig } from './config.js'
+import { createProvider } from './llm/factory.js'
+import type { LLMProvider, ModelInfo, ProviderHealth } from './llm/types.js'
 import { McpClient } from './mcp/client.js'
-import { createLogger } from './utils/logger.js'
+import { createLogger, type Logger } from './utils/logger.js'
 
-export interface ProbeResult {
-  ok: boolean
-  status: ReturnType<McpClient['status']>
-  tools: Array<{ name: string; readOnly: boolean; required: string[]; description: string }>
-  resources: Array<{ uri: string; name: string }>
-  prompts: Array<{ name: string; arguments: number }>
-  error?: string
+export interface LlmProbeResult {
+  health: ProviderHealth
+  modelInfo: ModelInfo
+  toolProbe: { supported: boolean; detail: string }
+  simpleChat: { ok: boolean; content: string | null; reasoningChars: number; usage: Record<string, unknown> | null; error?: string }
 }
 
-/** 连接 + 发现，返回结构化结果（给 CLI 和测试共用） */
-export async function probeMcpServer(options: { config?: ReturnType<typeof loadConfig>; logger?: ReturnType<typeof createLogger> } = {}): Promise<ProbeResult> {
-  const config = options.config ?? loadConfig()
-  const logger = options.logger ?? createLogger({ level: config.logLevel, secrets: [config.token] })
+/** 探测 LLM：健康检查 + 模型信息 + function calling 实测 + 一次普通对话 */
+export async function probeLlm(config: AgentConfig, logger: Logger, provider?: LLMProvider): Promise<LlmProbeResult> {
+  const llm = provider ?? createProvider(config, logger)
+  const health = await llm.healthCheck()
+  const modelInfo = await llm.getModelInfo()
+
+  // function calling 实测（只有 OpenAICompatibleProvider 有 probeToolCalls）
+  let toolProbe: { supported: boolean; detail: string }
+  const probe = (llm as unknown as { probeToolCalls?: () => Promise<{ supported: boolean; detail: string }> }).probeToolCalls
+  if (typeof probe === 'function') {
+    toolProbe = await probe.call(llm)
+  } else {
+    toolProbe = { supported: modelInfo.supportsToolCalls, detail: 'Provider 未提供探测方法' }
+  }
+
+  // 一次普通对话（验证 content 与 reasoning_content 都能取到）
+  let simpleChat: LlmProbeResult['simpleChat']
+  try {
+    const response = await llm.chat([{ role: 'user', content: '用一句中文回答：你好' }], { maxTokens: 64 })
+    simpleChat = {
+      ok: true,
+      content: response.content,
+      reasoningChars: response.reasoningContent?.length ?? 0,
+      usage: response.usage as unknown as Record<string, unknown>,
+    }
+  } catch (error) {
+    simpleChat = { ok: false, content: null, reasoningChars: 0, usage: null, error: String((error as Error)?.message ?? error) }
+  }
+
+  return { health, modelInfo, toolProbe, simpleChat }
+}
+
+async function main(): Promise<void> {
+  const config = loadConfig()
+  const logger = createLogger({ level: config.logLevel, secrets: [config.token, config.llmApiKey] })
+  const wantLlm = process.argv.includes('--llm')
+
+  logger.info('Blind Whale Survivor Agent 启动', {
+    version: '0.4.0-m2',
+    mode: wantLlm ? 'M2 LLM 探测' : 'M1 MCP 连接',
+    mcp_transport: config.mcpTransport,
+    mcp_target: config.mcpTransport === 'http' ? config.mcpHttpUrl : config.mcpStdioArgs.join(' '),
+    llm_preset: config.llmPreset,
+    llm_base_url: config.llmBaseUrl,
+    llm_model: config.llmModel,
+    has_llm_key: config.llmApiKey.length > 0,
+  })
+
+  if (wantLlm) {
+    const result = await probeLlm(config, logger)
+    logger.info('=== Provider 健康 ===', {
+      state: result.health.state,
+      message: result.health.message,
+      latency_ms: result.health.latencyMs,
+    })
+    logger.info('=== 模型信息 ===', {
+      provider: result.modelInfo.provider,
+      model: result.modelInfo.model,
+      supports_tool_calls: result.modelInfo.supportsToolCalls,
+      supports_thinking: result.modelInfo.supportsThinking,
+    })
+    logger.info('=== Function Calling 实测 ===', {
+      supported: result.toolProbe.supported,
+      detail: result.toolProbe.detail.slice(0, 160),
+    })
+    logger.info('=== 普通对话 ===', {
+      ok: result.simpleChat.ok,
+      content: (result.simpleChat.content ?? '').slice(0, 80),
+      reasoning_chars: result.simpleChat.reasoningChars,
+      usage: result.simpleChat.usage,
+      error: result.simpleChat.error,
+    })
+
+    if (result.health.state !== 'ok') {
+      logger.error('Provider 不可用，M2 未通过', { state: result.health.state, message: result.health.message })
+      logger.error('排查建议', {
+        key: config.llmApiKey.length === 0 ? '没有 API Key：设置 DEEPSEEK_API_KEY' : 'Key 已加载',
+        local: '本地模型：BWS_LLM_PRESET=openai-compatible BWS_LLM_BASE_URL=http://127.0.0.1:8000/v1',
+        model: `当前模型 ${config.llmModel}，可用 BWS_LLM_MODEL 覆盖`,
+      })
+      process.exit(1)
+    }
+    logger.info('M2 完成：Provider 可用')
+    return
+  }
+
+  // M1 行为：连 MCP Server 打印能力
   const client = new McpClient(config, logger)
   try {
     await client.connect()
-    return {
-      ok: true,
-      status: client.status(),
-      tools: client.listTools().map((tool) => ({
-        name: tool.name,
-        readOnly: tool.readOnly,
-        required: tool.required,
-        description: tool.description,
-      })),
-      resources: client.listResources().map((resource) => ({ uri: resource.uri, name: resource.name })),
-      prompts: client.listPrompts().map((prompt) => ({ name: prompt.name, arguments: prompt.arguments.length })),
-    }
+    const tools = client.listTools()
+    logger.info('MCP 能力', { tools: tools.length, resources: client.listResources().length, prompts: client.listPrompts().length })
+    for (const tool of tools) logger.info(`  👁 ${tool.name}`, { required: tool.required })
   } catch (error) {
-    return {
-      ok: false,
-      status: client.status(),
-      tools: [],
-      resources: [],
-      prompts: [],
-      error: String((error as Error)?.message ?? error),
-    }
+    logger.error('MCP 连接失败', { error: String((error as Error)?.message ?? error) })
+    process.exit(1)
   } finally {
     await client.disconnect()
   }
 }
 
-async function main(): Promise<void> {
-  const config = loadConfig()
-  const logger = createLogger({ level: config.logLevel, secrets: [config.token] })
-
-  logger.info('Blind Whale Survivor Agent 启动（M1：只做 MCP 连接与能力发现）', {
-    version: '0.4.0-m1',
-    transport: config.mcpTransport,
-    target: config.mcpTransport === 'http' ? config.mcpHttpUrl : `${config.mcpStdioCommand} ${config.mcpStdioArgs.join(' ')}`,
-    token_source: config.tokenSource,
-    tool_timeout_ms: config.toolTimeoutMs,
-  })
-
-  const client = new McpClient(config, logger)
-  try {
-    await client.connect()
-  } catch (error) {
-    logger.error('连接失败，M1 无法继续', { error: String((error as Error)?.message ?? error) })
-    logger.error('排查建议', {
-      http: `确认 MCP Server 在跑：$env:BWS_MCP_TRANSPORT='http'; node mcp-server/dist/src/index.js（端口 8790）`,
-      stdio: '或改用 stdio：$env:BWS_AGENT_MCP_TRANSPORT=\'stdio\'',
-      token: config.tokenSource === 'missing' ? '没找到 token：先跑 node tools/write-bws-config.mjs' : 'token 已加载',
-    })
-    process.exit(1)
-  }
-
-  const status = client.status()
-  const tools = client.listTools()
-  const resources = client.listResources()
-  const prompts = client.listPrompts()
-
-  logger.info('=== MCP Server 信息 ===', {
-    server: `${status.server?.name}@${status.server?.version}`,
-    protocol: status.server?.protocolVersion,
-    capabilities: Object.keys(status.server?.capabilities ?? {}),
-  })
-
-  logger.info(`=== 工具清单（${tools.length} 个，全部来自 listTools，未写死）===`)
-  for (const tool of tools) {
-    logger.info(`  ${tool.readOnly ? '👁 ' : '⚠️ '}${tool.name}`, {
-      title: tool.title,
-      required: tool.required,
-      desc: tool.description.slice(0, 60),
-    })
-  }
-
-  logger.info(`=== 资源（${resources.length} 个）===`)
-  for (const resource of resources) logger.info(`  ${resource.uri}`, { name: resource.name })
-
-  logger.info(`=== 提示词（${prompts.length} 个）===`)
-  for (const prompt of prompts) {
-    logger.info(`  ${prompt.name}`, { args: prompt.arguments.map((argument) => argument.name) })
-  }
-
-  // 冒烟测试：调一个只读工具，证明链路真的通（不是只连上）
-  if (tools.some((tool) => tool.name === 'get_bridge_status')) {
-    try {
-      const result = await client.callTool('get_bridge_status', {})
-      logger.info('冒烟测试 get_bridge_status', {
-        isError: result.isError,
-        text: result.text.split('\n')[0]?.slice(0, 100),
-      })
-    } catch (error) {
-      logger.warn('冒烟测试失败', { error: String((error as Error)?.message ?? error) })
-    }
-  }
-
-  await client.disconnect()
-  logger.info('M1 完成：连接与能力发现正常', {
-    tools: tools.length,
-    resources: resources.length,
-    prompts: prompts.length,
-  })
-}
-
-// 只有直接运行时才执行（被测试 import 时不要跑 main）
 const isDirectRun = process.argv[1] !== undefined && process.argv[1].endsWith('index.js')
 if (isDirectRun) {
   main().catch((error: unknown) => {
