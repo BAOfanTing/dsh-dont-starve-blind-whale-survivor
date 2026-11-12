@@ -25,12 +25,23 @@ import {
 } from './types.js'
 import type { Logger } from '../utils/logger.js'
 
+export type ReasoningField = 'reasoning_content' | 'reasoning' | 'none'
+
 export interface OpenAICompatibleConfig {
   /** deepseek：走官方 thinking/extra_body 约定；openai-compatible：只发标准字段 */
   preset: 'deepseek' | 'openai-compatible'
   baseUrl: string
   apiKey: string
   model: string
+  /**
+   * 思考内容在响应里的字段名，以及回传时使用的字段名。
+   * 实测差异：
+   *   · DeepSeek 官方 → `reasoning_content`
+   *   · sensenova-6.8-flash（token.sensenova.cn）→ `reasoning`
+   *   · 不返回思考内容的模型 → `none`
+   * 配置化，不写死。
+   */
+  reasoningField?: ReasoningField
   /** 默认是否开思考（仅 deepseek 生效） */
   thinking: boolean
   reasoningEffort: 'low' | 'high' | 'max'
@@ -49,6 +60,7 @@ interface RawChoice {
     role?: string
     content?: string | null
     reasoning_content?: string | null
+    reasoning?: string | null
     tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>
   }
   finish_reason?: string
@@ -64,12 +76,14 @@ interface RawCompletion {
     total_tokens?: number
     prompt_cache_hit_tokens?: number
     prompt_tokens_details?: { cached_tokens?: number }
+    /** 思考型模型（如 sensenova-6.8-flash）返回的思考 token 明细 */
+    completion_tokens_details?: { reasoning_tokens?: number }
   }
   error?: { message?: string; type?: string; code?: string }
 }
 
-/** 内部消息 → OpenAI 格式（保留 reasoning_content 与 tool_call_id） */
-export function toOpenAIMessages(messages: LLMMessage[]): Array<Record<string, unknown>> {
+/** 内部消息 → OpenAI 格式（按配置保留思考字段与 tool_call_id） */
+export function toOpenAIMessages(messages: LLMMessage[], reasoningField: ReasoningField = 'reasoning_content'): Array<Record<string, unknown>> {
   return messages.map((message) => {
     const base: Record<string, unknown> = { role: message.role }
     if (message.role === 'tool') {
@@ -80,9 +94,10 @@ export function toOpenAIMessages(messages: LLMMessage[]): Array<Record<string, u
     }
     if (message.role === 'assistant') {
       base.content = message.content ?? ''
-      // DeepSeek：带 tools 的请求必须回传历史 reasoning_content，否则 400
-      if (message.reasoningContent !== undefined && message.reasoningContent !== null) {
-        base.reasoning_content = message.reasoningContent
+      // 带 tools 的多轮请求，部分厂商要求把历史思考内容原样回传：
+      //   DeepSeek → reasoning_content；sensenova → reasoning；不返回思考内容的模型 → 不发
+      if (reasoningField !== 'none' && message.reasoningContent !== undefined && message.reasoningContent !== null) {
+        base[reasoningField] = message.reasoningContent
       }
       if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
         base.tool_calls = message.toolCalls.map((call) => ({
@@ -98,8 +113,13 @@ export function toOpenAIMessages(messages: LLMMessage[]): Array<Record<string, u
   })
 }
 
-/** OpenAI 响应 → 内部格式 */
-export function fromRawCompletion(raw: RawCompletion, elapsedMs: number, fallbackModel: string): LLMResponse {
+/** OpenAI 响应 → 内部格式（按配置读取思考字段） */
+export function fromRawCompletion(
+  raw: RawCompletion,
+  elapsedMs: number,
+  fallbackModel: string,
+  reasoningField: ReasoningField = 'reasoning_content',
+): LLMResponse {
   const choice = raw.choices?.[0]
   if (!choice) {
     throw new ProviderError('BAD_RESPONSE', '模型返回里没有 choices', { raw })
@@ -121,11 +141,19 @@ export function fromRawCompletion(raw: RawCompletion, elapsedMs: number, fallbac
     completionTokens: raw.usage?.completion_tokens ?? null,
     totalTokens: raw.usage?.total_tokens ?? null,
     cachedTokens: raw.usage?.prompt_cache_hit_tokens ?? raw.usage?.prompt_tokens_details?.cached_tokens ?? null,
+    reasoningTokens: raw.usage?.completion_tokens_details?.reasoning_tokens ?? null,
   }
+
+  const reasoning =
+    reasoningField === 'none'
+      ? null
+      : typeof message[reasoningField] === 'string'
+        ? (message[reasoningField] as string)
+        : null
 
   return {
     content: typeof message.content === 'string' ? message.content : null,
-    reasoningContent: typeof message.reasoning_content === 'string' ? message.reasoning_content : null,
+    reasoningContent: reasoning,
     toolCalls,
     finishReason: String(choice.finish_reason ?? (toolCalls.length > 0 ? 'tool_calls' : 'stop')),
     usage,
@@ -141,11 +169,15 @@ function sleep(ms: number): Promise<void> {
 export class OpenAICompatibleProvider implements LLMProvider {
   private toolCallsSupported: boolean | null = null
   private lastError: { at: number; code: string; message: string } | null = null
+  /** 实际使用的思考字段名（未配置时按 preset 推断） */
+  private readonly reasoningField: ReasoningField
 
   constructor(
     private readonly config: OpenAICompatibleConfig,
     private readonly logger: Logger,
-  ) {}
+  ) {
+    this.reasoningField = config.reasoningField ?? (config.preset === 'deepseek' ? 'reasoning_content' : 'none')
+  }
 
   get model(): string {
     return this.config.model
@@ -264,7 +296,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     const body: Record<string, unknown> = {
       model: this.config.model,
-      messages: toOpenAIMessages(messages),
+      messages: toOpenAIMessages(messages, this.reasoningField),
       max_tokens: options.maxTokens ?? this.config.maxTokens,
       stream: false,
     }
@@ -294,7 +326,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
 
     const { raw, elapsedMs } = await this.request(body, this.config.timeoutMs)
-    const response = fromRawCompletion(raw, elapsedMs, this.config.model)
+    const response = fromRawCompletion(raw, elapsedMs, this.config.model, this.reasoningField)
 
     // 记录"是否真的支持 tool calls"（实测结论，不是配置声明）
     if (body.tools !== undefined) this.toolCallsSupported = response.toolCalls.length > 0 || response.finishReason === 'tool_calls' || true

@@ -17,6 +17,7 @@ export function createProvider(config: AgentConfig, logger: Logger): LLMProvider
     apiKey: config.llmApiKey,
     model: config.llmModel,
     thinking: config.llmThinking,
+    reasoningField: config.llmReasoningField,
     reasoningEffort: config.llmReasoningEffort,
     maxTokens: config.llmMaxTokens,
     temperature: config.llmTemperature,

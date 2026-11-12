@@ -63,8 +63,10 @@ export interface LLMUsage {
   promptTokens: number | null
   completionTokens: number | null
   totalTokens: number | null
-  /** DeepSeek 的缓存命中 token（有就记，没有就 null） */
+  /** 缓存命中的 token（有就记，没有就 null） */
   cachedTokens: number | null
+  /** 思考型模型的推理 token（有就记，没有就 null） */
+  reasoningTokens: number | null
 }
 
 export interface LLMResponse {

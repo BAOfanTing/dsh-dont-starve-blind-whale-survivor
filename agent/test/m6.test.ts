@@ -40,7 +40,7 @@ class EchoProvider implements LLMProvider {
       reasoningContent: null,
       toolCalls: [],
       finishReason: 'stop',
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: null },
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, cachedTokens: null, reasoningTokens: null },
       model: 'echo',
       elapsedMs: 1,
     }

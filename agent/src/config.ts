@@ -42,6 +42,8 @@ export interface AgentConfig {
   llmModel: string
   /** 默认是否开思考（仅 deepseek preset 生效） */
   llmThinking: boolean
+  /** 思考字段名：reasoning_content（DeepSeek）/ reasoning（sensenova 等）/ none */
+  llmReasoningField: 'reasoning_content' | 'reasoning' | 'none'
   llmReasoningEffort: 'low' | 'high' | 'max'
   llmMaxTokens: number
   llmTemperature: number | null
@@ -95,6 +97,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     // 模型名不写死：默认值只是方便，任何值都能覆盖
     llmModel: env.BWS_LLM_MODEL ?? env.DEEPSEEK_MODEL ?? 'deepseek-flash',
     llmThinking: (env.BWS_LLM_THINKING ?? 'true').toLowerCase() !== 'false',
+    llmReasoningField: ((): 'reasoning_content' | 'reasoning' | 'none' => {
+      const raw = (env.BWS_LLM_REASONING_FIELD ?? 'reasoning_content').toLowerCase()
+      return raw === 'reasoning' || raw === 'none' ? raw : 'reasoning_content'
+    })(),
     llmReasoningEffort: ((): 'low' | 'high' | 'max' => {
       const raw = (env.BWS_LLM_REASONING_EFFORT ?? 'high').toLowerCase()
       return raw === 'low' || raw === 'max' ? raw : 'high'
