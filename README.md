@@ -7,8 +7,8 @@
 | 设置 | 默认 | 说明 |
 |---|---|---|
 | 单个动作最长等多少分钟 | 5 | 睡觉、走远路这类动作要等很久；超时会告诉模型先 `get_state` 看看 |
-| 内置 AI 的 API Key | 空 | **游戏里按 F8** 让 AI 自己玩用的 Key（不经过 DSH 会话）。留空读环境变量 `DEEPSEEK_API_KEY` |
-| 模型接口地址 / 用哪个模型 | DeepSeek 官方 / `deepseek-v4-flash` | 任何 OpenAI 兼容的 `/chat/completions` 都行；要支持 function calling |
+| 内置 AI 的 API Key | 空 | **游戏里按 F8** 让 AI 自己玩用的 Key（不经过 DSH 会话）。留空读环境变量 `SENSENOVA_API_KEY` / `DEEPSEEK_API_KEY` |
+| 模型接口地址 / 用哪个模型 | `https://token.sensenova.cn/v1` / `sensenova-6.8-flash` | 任何 OpenAI 兼容的 `/chat/completions` 都行；要和 DSH 模型目录里那个一致，且支持 function calling |
 | 内置 AI 每次最多输出多少 token | 1024 | 只按实际输出计费 |
 | 思考时暂停世界 | **关** | 打开后 AI 思考时把世界暂停（只有自己开的世界、房主才行），不会一边想一边饿死。见下方说明 |
 | 多久没动作就暂停（秒） | 8 | 上面开关打开时，多久没有新动作就暂停 |
@@ -51,7 +51,7 @@ DSH 会话 ──MCP(HTTP)──> 插件里的 MCP 服务器 ──写/读 json 
 F8 开/停 · F7 停手
 ```
 
-- **F8**：让 AI 开始 / 停止自己玩。**不需要 DSH 会话**——插件自己在后台调模型、自己调工具（就是星露谷那版的“内置 AI”）。第一次用之前，在插件设置里填「内置 AI 的 API Key」（或者设环境变量 `DEEPSEEK_API_KEY`）。
+- **F8**：让 AI 开始 / 停止自己玩。**不需要 DSH 会话**——插件自己在后台调模型、自己调工具（就是星露谷那版的“内置 AI”）。第一次用之前，在插件设置里填「内置 AI 的 API Key」（或者设环境变量 `SENSENOVA_API_KEY`）。
 - **F7**：让它立刻停手（正在走的动作、正在砍的树都停），然后你可以自己接管玩。
 - 小窗内容由插件每秒写一次；DSH 没开着的时候它会写“插件没连上”。
 
