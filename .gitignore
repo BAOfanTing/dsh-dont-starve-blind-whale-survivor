@@ -22,3 +22,5 @@ mcp-server/node_modules/
 mcp-server/dist/
 agent/node_modules/
 agent/dist/
+survival/node_modules/
+survival/dist/
