@@ -71,7 +71,8 @@ test('模组报出来的版本号和 modinfo.lua 一致（兜底值也不能漂�
   assert.equal(fallback, declared, '模组状态里报的版本和 modinfo 对不上，排查问题时会看错版本')
 })
 
-test('干活类动作默认带上 until_gone=true（不然砍一下就走，木头拿不到）', async () => {
+test('M2.0：未开放的动作一律拒绝，而且一条命令都不会发到游戏', async () => {
+  // 白名单只在 dispatcher 里（lib/dispatcher.js）；这里验证"关着的时候绝不下发"
   const calls = []
   const ctx = {
     bridge: {
@@ -81,13 +82,9 @@ test('干活类动作默认带上 until_gone=true（不然砍一下就走，木�
       },
     },
   }
-  await executeTool('chop', { count: 1 }, ctx)
-  await executeTool('mine', {}, ctx)
-  await executeTool('chop', { count: 1, until_gone: false }, ctx)
-  await executeTool('pick', { count: 1 }, ctx)
-
-  assert.deepEqual(calls[0].args, { count: 1, until_gone: true }, 'chop 应该自动补上 until_gone')
-  assert.deepEqual(calls[1].args, { until_gone: true }, 'mine 也一样')
-  assert.equal(calls[2].args.until_gone, false, '模型显式给 false 时要尊重')
-  assert.equal(calls[3].args.until_gone, undefined, 'pick 不该被塞 until_gone')
+  for (const name of ['chop', 'mine', 'pick', 'attack', 'craft', 'gather']) {
+    const text = await executeTool(name, { count: 1 }, ctx)
+    assert.match(text, /还没开放|失败：/, `${name} 应该被拒绝`)
+  }
+  assert.equal(calls.length, 0, '被拒的动作不该调用 bridge.call')
 })

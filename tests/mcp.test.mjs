@@ -5,6 +5,8 @@ import { GameBridge, stripKleiHeader } from '../lib/bridge.js'
 import { createMcpServer } from '../lib/mcp-server.js'
 import { executeTool, toolList, BUNDLED_GUIDES } from '../lib/tools.js'
 import { FakeGame, tempDir } from './helpers.mjs'
+import { LeaseManager } from '../lib/control.js'
+import { readSnapshot } from '../lib/tools.js'
 
 function settingsStub() {
   return {
@@ -17,8 +19,20 @@ function settingsStub() {
   }
 }
 
-async function makeServer(dir) {
+async function makeServer(dir, { owner = 'mcp_client' } = {}) {
   const bridge = new GameBridge({ bridgeDir: dir, lockDir: true, pollMs: 20 })
+  const control = new LeaseManager({ file: '', now: () => Date.now() })
+  // M2.0：动作必须有租约。先用当前快照的环境指纹拿一次。
+  const env = (() => {
+    const s = readSnapshot({ bridge })
+    return {
+      runtimeId: s?.nearby?.runtime_id ?? null,
+      sessionId: s?.identity?.sessionId ?? null,
+      shardId: s?.identity?.shardId ?? null,
+      actorId: s?.actor?.actorId ?? null,
+    }
+  })()
+  control.acquire(owner, env)
   let notes = ''
   const settings = settingsStub()
   const server = createMcpServer({
@@ -29,6 +43,8 @@ async function makeServer(dir) {
     instructions: () => '# 规则\n\n## 游戏常识\n\n攻略正文\n\n## 通过 MCP 玩的额外说明\n- 别的',
     executeTool: (name, args) => executeTool(name, args, {
       bridge,
+      control,
+      owner,
       notes: { read: () => notes, write: (text) => { notes = text } },
       guides: BUNDLED_GUIDES,
       extraInstructions: settings.extraInstructions,
@@ -36,7 +52,7 @@ async function makeServer(dir) {
     }),
   })
   await server.start(0)
-  return { server, bridge, url: server.url }
+  return { server, bridge, control, owner, url: server.url }
 }
 
 async function rpc(url, method, params) {
@@ -98,15 +114,24 @@ test('get_state 会带上笔记和额外要求', async () => {
   await server.stop()
 })
 
-test('动作会被转给游戏，结果原样返回（走 SSE）', async () => {
+test('动作会被转给游戏，结果原样返回（走 SSE）；未开放的动作一律拒绝', async () => {
   const dir = tempDir()
   const game = new FakeGame(dir).start()
-  game.handler = (cmd) => ({ ok: cmd.args.count === 3, text: `chop ${cmd.args.count}` })
+  game.modern = true
+  game.writeModernState()
+  game.handler = (cmd) => ({ ok: true, text: `停了（${cmd.action}）` })
   const { server, url } = await makeServer(dir)
-  const ok = await rpc(url, 'tools/call', { name: 'chop', arguments: { count: 3 } })
-  assert.equal(ok.result.content[0].text, 'chop 3')
-  const bad = await rpc(url, 'tools/call', { name: 'chop', arguments: { count: 1 } })
-  assert.match(bad.result.content[0].text, /^失败：/)
+
+  // M2.0 开放的 R1 动作：stop
+  const ok = await rpc(url, 'tools/call', { name: 'stop', arguments: {} })
+  assert.match(ok.result.content[0].text, /停了（stop）/)
+
+  // 未开放动作：不许进游戏
+  const before = game.commands.length
+  const closed = await rpc(url, 'tools/call', { name: 'chop', arguments: { count: 1 } })
+  assert.match(closed.result.content[0].text, /还没开放/)
+  assert.equal(game.commands.length, before, '被拒的动作不该写进游戏命令')
+
   game.stop()
   await server.stop()
 })

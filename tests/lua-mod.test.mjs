@@ -754,6 +754,8 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         "scripts/whale/config.lua", "scripts/whale/actor.lua",
         -- M1.4：附近实体结构化（独立模块）
         "scripts/whale/nearby.lua",
+        -- M2.0：动作安全底座（Lua 侧最终授权者）
+        "scripts/whale/guard.lua",
     }) do
         assert(idx(name) ~= nil, "少了 modimport：" .. name)
     end
@@ -763,11 +765,13 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
         assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
     end
-    assert(#MODIMPORTS == 11, "只该 modimport 11 个 B 栈模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 12, "只该 modimport 12 个 B 栈模块，实际 " .. #MODIMPORTS)
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
     assert(idx("scripts/whale/config.lua") < idx("scripts/whale/actor.lua"), "actor 要在 config 之后")
     assert(idx("scripts/whale/actor.lua") < idx("scripts/whale/observe.lua"), "观察器要在 Actor Provider 之后")
     assert(idx("scripts/whale/nearby.lua") < idx("scripts/whale/observe.lua"), "附近实体模块要在观察器之前")
+    assert(idx("scripts/whale/nearby.lua") < idx("scripts/whale/guard.lua"), "guard 要用 nearby")
+    assert(idx("scripts/whale/guard.lua") < idx("scripts/whale/bridge.lua"), "文件桥要用 guard")
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/observe.lua"), "util 要在观察之前")
     assert(idx("scripts/whale/observe.lua") < idx("scripts/whale/actions.lua"), "观察要在动作之前")
     assert(idx("scripts/whale/actions.lua") < idx("scripts/whale/macros.lua"), "宏要加载在动作之后")

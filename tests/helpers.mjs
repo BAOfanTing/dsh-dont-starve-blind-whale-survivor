@@ -26,6 +26,7 @@ export class FakeGame {
     this.stateText = '世界：第1天 · 白天\n你：威尔逊'
     this.ready = true
     this.extra = {}
+    this.modern = false // true = tick 时写新格式（带 actor/identity/nearby）
   }
 
   writeState(patch = {}) {
@@ -38,6 +39,43 @@ export class FakeGame {
       text: this.stateText,
       data: { ready: this.ready, x: 1, z: 2, day: 1, phase: 'day' },
       ...patch,
+    }
+    this.lastState = payload
+    writeAtomic(join(this.dir, 'whale_state.json'), JSON.stringify(payload))
+    return payload
+  }
+
+  /** 写一份 0.13.4+ 的新格式状态（带 actor/identity/nearby），M2 的动作校验需要它 */
+  writeModernState(overrides = {}) {
+    const payload = {
+      v: 1,
+      seq: 7,
+      t: Math.floor(Date.now() / 1000),
+      mod: '0.14.0',
+      ready: true,
+      text: '# 快照 s7 · 第1天 · 白天',
+      data: {
+        schema: 'bws.state/1',
+        identity: { session_id: 'sess-test', cluster_id: null, cluster_id_source: 'unavailable', shard_id: '1' },
+        actor: {
+          actor_id: 'player:KU_test', actor_id_kind: 'stable', actor_type: 'player', prefab: 'warly',
+          name: '沃利', valid: true, alive: true, is_ghost: false, missing_components: [],
+          tile_x: 1, tile_z: 2,
+        },
+        player: { inventory: { slots: 15, used: 0, items: [] } },
+        world: { day: 1, phase: 'day', season: 'autumn' },
+        warnings: [],
+        nearby: {
+          status: 'empty', schema: 'bws.nearby/1', runtime_id: 'r-test-0001', snapshot_id: 'r-test-0001-n1',
+          radius: 16, scan_seconds: 4, total_found: 0, total_returned: 0, truncated: false,
+          buckets: { threats: [], food: [], resources: [], containers: [], structures: [], creatures: [], other: [] },
+          delta: { status: 'baseline', added_count: 0, removed_count: 0, changed_count: 0, added: [], removed: [], changed: [] },
+          scan: { reused: false, timestamp: Math.floor(Date.now() / 1000), age_ms: 0, duration_ms: 0.5, duration_source: 'os.clock' },
+        },
+        observer: { snapshot_id: 's7', sequence: 7, timestamp: 1, sampled_at: 1, sample_age_ms: 0,
+                    reused: false, status: 'ok', errors: [], unavailable_fields: [] },
+      },
+      ...overrides,
     }
     this.lastState = payload
     writeAtomic(join(this.dir, 'whale_state.json'), JSON.stringify(payload))
@@ -62,7 +100,8 @@ export class FakeGame {
   tick() {
     // 状态偶尔刷新一下，模拟游戏在跑
     try {
-      this.writeState()
+      if (this.modern) this.writeModernState()
+      else this.writeState()
     } catch {}
     const cmdPath = join(this.dir, 'whale_cmd.json')
     if (!existsSync(cmdPath)) return
