@@ -47,10 +47,13 @@ export interface AgentLoopLimits {
 }
 
 export const DEFAULT_LIMITS: AgentLoopLimits = {
-  maxRounds: 4,
+  // 真机联合测试（M7）发现 4 轮不够：一次完整"观察→查控制权→行动→查结果→汇报"要 5~6 轮。
+  // 而且写动作是异步的（入队后还要 get_command_result 查终态），所以放宽到 8 轮。
+  maxRounds: 8,
   maxToolCallsPerRound: 4,
   toolTimeoutMs: 15000,
-  agentTimeoutMs: 60000,
+  // 8 轮 × 每轮可能几次工具调用，60 秒不够；放到 120 秒（API 层还有自己的上限）
+  agentTimeoutMs: 120000,
 }
 
 /** 一次工具调用的可观测记录（给 API/UI 展示，不含内部 reasoning） */

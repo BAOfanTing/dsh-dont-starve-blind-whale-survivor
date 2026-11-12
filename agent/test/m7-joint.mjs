@@ -75,12 +75,14 @@ try {
   const r = await fetch('http://127.0.0.1:8791/api/agent/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ sessionId: 'M7S', conversationId: 'm7-joint', message: prompt }),
+    body: JSON.stringify({ session_id: 'M7S', conversation_id: 'm7-joint', message: prompt, with_assessment: true }),
   })
   const j = await r.json()
   console.log(`\n  HTTP ${r.status}（耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s）`)
-  console.log(`\n=== DeepSeek 的回答 ===`)
-  console.log(String(j.reply ?? j.message ?? JSON.stringify(j)).slice(0, 2500))
+  console.log('\n=== 原始响应结构 ===')
+  console.log('  keys: ' + Object.keys(j).join(', '))
+  console.log('\n=== DeepSeek 的回答 ===')
+  console.log(String(j.reply ?? j.message ?? j.content ?? JSON.stringify(j)).slice(0, 3000))
 
   if (Array.isArray(j.toolCalls) && j.toolCalls.length > 0) {
     console.log(`\n=== 它调用的工具（${j.toolCalls.length} 次）===`)

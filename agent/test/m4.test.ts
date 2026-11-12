@@ -251,11 +251,11 @@ test('Loop：事件回调按顺序发出（round/tool/stop）', async () => {
   assert.deepEqual(events, ['round_start', 'llm_response', 'tool_start', 'tool_end', 'round_start', 'llm_response', 'stop'])
 })
 
-test('Loop：默认限制符合任务书（4 轮 / 4 调用 / 15s / 60s）', () => {
-  assert.equal(DEFAULT_LIMITS.maxRounds, 4)
+test('Loop：默认限制（8 轮 / 4 调用 / 15s / 120s —— M7 真机发现 4 轮不够）', () => {
+  assert.equal(DEFAULT_LIMITS.maxRounds, 8)
   assert.equal(DEFAULT_LIMITS.maxToolCallsPerRound, 4)
   assert.equal(DEFAULT_LIMITS.toolTimeoutMs, 15000)
-  assert.equal(DEFAULT_LIMITS.agentTimeoutMs, 60000)
+  assert.equal(DEFAULT_LIMITS.agentTimeoutMs, 120000)
 })
 
 // ───────────────────────── Risk Assessor ─────────────────────────

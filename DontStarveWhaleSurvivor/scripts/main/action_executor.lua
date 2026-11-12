@@ -83,6 +83,10 @@ local PICKUP_ITEMS = { flint = 'flint', rocks = 'rocks', log = 'log',
     twigs = 'twigs', cutgrass = 'cutgrass', berries = 'berries' }
 -- 完成后清点背包的物品（记录实际获得数量，任务书 §7.3「完成后检查掉落物」）
 local LOOT_PREFABS = {
+    -- M7 联合测试发现（DeepSeek 指出）：gather_resource 原来**没有** verify，
+    -- 上层只能看到 "采了 N 次" 而不知道净增几个，只能自己去数背包。
+    -- 采集的白名单资源都要清点（草/树枝/浆果）。
+    gather_resource = { 'cutgrass', 'twigs', 'berries' },
     chop_tree = { 'log', 'twigs' },
     mine_rock = { 'rocks', 'flint', 'nitre', 'goldnugget' },
     pick_up_item = { 'flint', 'rocks', 'log', 'twigs', 'cutgrass', 'berries' },

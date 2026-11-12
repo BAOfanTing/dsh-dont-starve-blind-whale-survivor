@@ -61,7 +61,9 @@ function tokenMatches(provided: string | null, expected: string): boolean {
 
 export function createAgentApi(agent: Agent, config: AgentConfig, logger: Logger, options: AgentApiOptions): AgentApiHandle {
   const maxBodyBytes = options.maxBodyBytes ?? 256 * 1024
-  const chatTimeoutMs = options.chatTimeoutMs ?? 90000
+  // 与 AgentLoop 的 agentTimeoutMs（120s）对齐并留 10s 余量：API 层不能比 Loop 先超时，
+  // 否则模型还在跑就被 abort，用户看到的是「处理超时」而不是真实结果（M7 真机踩到过）。
+  const chatTimeoutMs = options.chatTimeoutMs ?? 130000
   const maxMessageChars = options.maxMessageChars ?? 4000
   const jobs = new Map<string, ChatJob>()
   const eventClients = new Set<ServerResponse>()
@@ -376,7 +378,7 @@ export function createAgentApi(agent: Agent, config: AgentConfig, logger: Logger
       }
     })
   })
-  server.requestTimeout = 120000
+  server.requestTimeout = 140000
   server.headersTimeout = 20000
 
   return {
