@@ -25,6 +25,8 @@ export interface AgentConfig {
   token: string
   tokenSource: 'env' | 'file' | 'missing'
   /** MCP 工具调用超时 */
+  /** Phase 5 M7：工具权限档位。read=只读（默认）；supervised=只读+受控写入（需人授予控制权） */
+  toolPermission: 'read' | 'supervised'
   toolTimeoutMs: number
   /** 连接超时 */
   connectTimeoutMs: number
@@ -82,6 +84,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       : [mcpServerEntry],
     token,
     tokenSource: source,
+    toolPermission: ((): 'read' | 'supervised' => {
+      const v = String(env.BWS_TOOL_PERMISSION ?? 'read').toLowerCase()
+      // 只认两个值；拼错就退回只读（安全默认，绝不因为拼错就放开写权限）
+      return v === 'supervised' ? 'supervised' : 'read'
+    })(),
     toolTimeoutMs: Number(env.BWS_AGENT_TOOL_TIMEOUT_MS ?? 15000),
     connectTimeoutMs: Number(env.BWS_AGENT_CONNECT_TIMEOUT_MS ?? 10000),
     logLevel: (['debug', 'info', 'warn', 'error'] as const).includes(logLevel as never)

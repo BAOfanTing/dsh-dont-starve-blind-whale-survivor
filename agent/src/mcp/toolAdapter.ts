@@ -53,15 +53,63 @@ export const READ_ONLY_ALLOWLIST = [
 
 export type AllowedToolName = (typeof READ_ONLY_ALLOWLIST)[number]
 
-/** 显式禁止的动作类工具名（防止以后 MCP Server 加了写操作工具被悄悄放行） */
+/**
+ * Phase 5 M7：受控写入白名单。
+ *
+ * 这些是**会改游戏状态**的工具。它们**不**在只读白名单里，只有在
+ * `toolPermission === 'supervised'` 时才被适配给模型。
+ *
+ * 安全边界不在这一层（模型可以乱调），而在三处程序层：
+ *   1. MCP 工具内部的 `requireControl()` —— 必须有人持有控制权 lease；
+ *   2. Lua `action_executor` 的 `control/assert` 二次校验 —— 每写动作都问 Bridge；
+ *   3. `chop_tree`/`mine_rock`/`eat_item`/`craft_item`/`build_*` 的 `confirmed=true` 强制。
+ *
+ * Agent **不能自己申请控制权** —— 控制权只能由人通过 Survival Controller 授予。
+ */
+export const WRITE_ALLOWLIST = [
+  // M3 采集
+  'gather_resource',
+  'move_to_target',
+  // M4 工具使用
+  'equip_item',
+  'chop_tree',
+  'mine_rock',
+  'pick_up_item',
+  // M5 生存
+  'eat_item',
+  'craft_item',
+  'build_structure',
+  'build_campfire',
+  // M6 任务链
+  'start_task',
+  'stop_task',
+] as const
+
+export type WriteToolName = (typeof WRITE_ALLOWLIST)[number]
+
+/** 工具权限档位 */
+export type ToolPermission = 'read' | 'supervised'
+
+/** 按档位算出实际可用的工具名集合 */
+export function toolsForPermission(permission: ToolPermission): string[] {
+  if (permission === 'supervised') {
+    return [...READ_ONLY_ALLOWLIST, ...WRITE_ALLOWLIST]
+  }
+  return [...READ_ONLY_ALLOWLIST]
+}
+
+/** 判断某工具是否是写动作（用于审计与提示词） */
+export function isWriteTool(name: string): boolean {
+  return (WRITE_ALLOWLIST as readonly string[]).includes(name)
+}
+
+/** 显式禁止的动作类工具名（防止以后 MCP Server 加了写操作工具被悄悄放行）
+ *
+ * Phase 5 M7：`supervised` 档位下这些名字**如果在 WRITE_ALLOWLIST 里就放行**，
+ * 其余仍然拒绝（比如 exec/shell/lua 这类永远不该给模型的）。
+ */
 export const FORBIDDEN_TOOL_PATTERNS = [
-  /^move/i,
   /^attack/i,
-  /^chop/i,
-  /^mine/i,
-  /^eat/i,
-  /^craft/i,
-  /^build/i,
   /^drop/i,
   /^kill/i,
   /^teleport/i,
@@ -112,8 +160,10 @@ export interface ToolCallOutcome {
 }
 
 export interface ToolAdapterOptions {
-  /** 覆盖白名单（测试用）；不传用 READ_ONLY_ALLOWLIST */
+  /** 覆盖白名单（测试用）；不传按 permission 算 */
   allowlist?: readonly string[]
+  /** Phase 5 M7：权限档位。read=只读（默认，与 M1~M6 行为一致）；supervised=只读+受控写入 */
+  permission?: ToolPermission
   /** 工具结果最大字符数（超过截断，避免把上下文塞爆） */
   maxResultChars?: number
   /** 单个工具的额外超时（默认用 McpClient 的） */
@@ -124,6 +174,7 @@ export class ToolAdapter {
   private readonly ajv: AjvInstance
   private readonly adapted = new Map<string, AdaptedTool>()
   private readonly allowlist: Set<string>
+  private readonly permission: ToolPermission
   private readonly maxResultChars: number
   /** 调用统计（给 API 展示用） */
   private readonly stats = { calls: 0, blocked: 0, invalidArgs: 0, failures: 0 }
@@ -133,7 +184,8 @@ export class ToolAdapter {
     private readonly logger: Logger,
     options: ToolAdapterOptions = {},
   ) {
-    this.allowlist = new Set(options.allowlist ?? READ_ONLY_ALLOWLIST)
+    this.permission = options.permission ?? 'read'
+    this.allowlist = new Set(options.allowlist ?? toolsForPermission(this.permission))
     this.maxResultChars = options.maxResultChars ?? 4000
     // strict: false —— MCP Server 的 schema 里有 $schema/default 等字段，ajv 严格模式会报未知关键字。
     // validateSchema: false —— MCP Server 声明 $schema 为 draft 2020-12，而 ajv 默认实例只认 draft-07，

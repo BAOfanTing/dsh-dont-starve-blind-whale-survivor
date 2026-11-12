@@ -19,6 +19,22 @@ import type { ToolAdapter, ToolCallOutcome } from '../mcp/toolAdapter.js'
 import { toToolMessage } from '../mcp/toolAdapter.js'
 import type { Logger } from '../utils/logger.js'
 
+/**
+ * Phase 5 M7：写动作的程序层守卫。
+ *
+ * Agent 在 supervised 档位下能调写工具，但**每次调用前**都要过这一关：
+ * 控制权是否由人授予、lease 是否有效、是否紧急停止。
+ *
+ * 真正的安全边界在 MCP 工具内的 requireControl() + Lua 的 control/assert；
+ * 这一层只是更早、更明确地拒绝，避免白跑一次 Bridge。
+ */
+export interface WriteGuard {
+  /** 这个工具名是不是写动作 */
+  isWrite(name: string): boolean
+  /** 检查当前是否允许写；不允许时给出人话原因 */
+  check(): Promise<{ allowed: boolean; message: string }>
+}
+
 export interface AgentLoopLimits {
   /** 最多几轮"请求模型"（含工具调用往返） */
   maxRounds: number
@@ -102,13 +118,17 @@ function mergeLimits(partial?: Partial<AgentLoopLimits>): AgentLoopLimits {
 export class AgentLoop {
   private readonly limits: AgentLoopLimits
 
+  private readonly writeGuard: WriteGuard | null
+
   constructor(
     private readonly provider: LLMProvider,
     private readonly adapter: ToolAdapter,
     private readonly logger: Logger,
-    options: { limits?: Partial<AgentLoopLimits> } = {},
+    options: { limits?: Partial<AgentLoopLimits>; writeGuard?: WriteGuard } = {},
   ) {
     this.limits = mergeLimits(options.limits)
+    // 不传 writeGuard = 不做写动作预检（只读档就是这样，反正也没写工具可用）
+    this.writeGuard = options.writeGuard ?? null
   }
 
   getLimits(): AgentLoopLimits {
@@ -287,6 +307,34 @@ export class AgentLoop {
       parsedArgs = JSON.parse(call.arguments.length > 0 ? call.arguments : '{}') as Record<string, unknown>
     } catch {
       parsedArgs = null
+    }
+
+    // Phase 5 M7：写动作的程序层兜底 —— 即使模型绕过提示词，也不允许在"没控制权"时动手。
+    // 注意：这不是唯一防线（MCP 工具的 requireControl + Lua 的 control/assert 才是真边界），
+    // 这里只是**更早、更明确**地拒绝，省掉一次无效的 Bridge 往返。
+    if (this.writeGuard !== null && this.writeGuard.isWrite(call.name)) {
+      const verdict = await this.writeGuard.check()
+      if (!verdict.allowed) {
+        this.logger.warn('写动作被程序层拒绝（控制权检查）', { tool: call.name, reason: verdict.message })
+        return {
+          result: {
+            ok: false,
+            toolName: call.name,
+            errorCode: 'CONTROL_NOT_HELD',
+            error: verdict.message,
+            content: `【拒绝执行】${verdict.message}`,
+            elapsedMs: Date.now() - startedAt,
+          } as unknown as ToolCallOutcome,
+          trace: {
+            round,
+            toolCallId: call.id,
+            name: call.name,
+            arguments: parsedArgs,
+            ok: false,
+            elapsedMs: Date.now() - startedAt,
+          } as unknown as ToolTrace,
+        }
+      }
     }
 
     const result = await this.adapter.executeToolCall({ id: call.id, name: call.name, arguments: call.arguments })

@@ -15,6 +15,8 @@ import { buildPlan, renderPlan, type SurvivalPlan } from '../runtime/taskPlanner
 import { buildSystemPrompt } from '../prompts/systemPrompt.js'
 import { ContextManager, type ContextLimits, type Conversation } from '../context/contextManager.js'
 import { guardUserIntent, guardToolName, READ_ONLY_REMINDER } from '../safety/readOnlyGuard.js'
+import { isWriteTool } from '../mcp/toolAdapter.js'
+import type { WriteGuard } from '../runtime/agentLoop.js'
 import type { AgentConfig } from '../config.js'
 import type { Logger } from '../utils/logger.js'
 
@@ -70,10 +72,71 @@ export class Agent {
   ) {
     this.provider = options.provider ?? createProvider(config, logger)
     this.mcp = new McpClient(config, logger)
-    this.adapter = new ToolAdapter(this.mcp, logger)
+    this.adapter = new ToolAdapter(this.mcp, logger, { permission: config.toolPermission })
     this.context = new ContextManager({ limits: options.contextLimits })
-    this.loop = new AgentLoop(this.provider, this.adapter, logger, { limits: options.limits })
+    this.loop = new AgentLoop(this.provider, this.adapter, logger, {
+      limits: options.limits,
+      // Phase 5 M7：supervised 档才装写动作守卫（read 档没有写工具，装了也没用）
+      writeGuard: config.toolPermission === 'supervised' ? this.buildWriteGuard() : undefined,
+    })
     this.limits = this.loop.getLimits()
+  }
+
+  /**
+   * Phase 5 M7：构造写动作守卫。
+   *
+   * 每次模型要调写工具时，先用 MCP 的 get_control_status 查一遍：
+   *   - mode 必须是 SUPERVISED
+   *   - holder 必须非空（有人持有）
+   *   - lease 未过期
+   *   - emergency_stop 必须为 false
+   * 任一不满足就拒绝，并把原因写清楚（而不是让模型自己猜）。
+   *
+   * 注意：这不是唯一防线。MCP 工具内的 requireControl() 和 Lua 的 control/assert
+   * 都会再查一遍 —— 三层都在程序层，不靠提示词。
+   */
+  private buildWriteGuard(): WriteGuard {
+    return {
+      isWrite: (name: string) => isWriteTool(name),
+      check: async () => {
+        try {
+          const result = await this.adapter.executeToolCall({
+            id: 'write_guard_probe',
+            name: 'get_control_status',
+            arguments: '{}',
+          })
+          if (!result.ok) {
+            return { allowed: false, message: `读不到控制权状态（${result.errorCode ?? 'unknown'}），为安全起见拒绝执行写动作` }
+          }
+          const payload = result.content ?? ''
+          // get_control_status 返回 JSON 文本；解析失败就保守拒绝
+          const jsonStart = payload.indexOf('{')
+          const jsonEnd = payload.lastIndexOf('}')
+          if (jsonStart < 0 || jsonEnd <= jsonStart) {
+            return { allowed: false, message: '控制权状态格式异常，为安全起见拒绝执行写动作' }
+          }
+          const data = JSON.parse(payload.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>
+          const control = (data.control ?? data) as Record<string, unknown>
+          const mode = String(control.mode ?? 'UNKNOWN')
+          const holder = control.holder
+          const emergency = control.emergency_stop === true || mode === 'EMERGENCY_STOP'
+          const expiresAt = typeof control.lease_expires_at === 'number' ? control.lease_expires_at : null
+          const leaseValid = expiresAt !== null && Date.now() < expiresAt
+
+          if (emergency) return { allowed: false, message: '紧急停止中，不能执行写动作' }
+          if (mode === 'MANUAL') return { allowed: false, message: '当前是人工接管模式，AI 不能动手' }
+          if (mode === 'PAUSED') return { allowed: false, message: 'AI 已暂停，不能执行写动作' }
+          if (mode !== 'SUPERVISED') return { allowed: false, message: `当前模式是 ${mode}，只有 SUPERVISED 才能执行写动作` }
+          if (holder === null || holder === undefined || holder === '') {
+            return { allowed: false, message: '现在没有控制器持有写权限 —— 需要主人先在 Survival Controller 里授予控制权' }
+          }
+          if (!leaseValid) return { allowed: false, message: '控制权 lease 已过期 —— 需要主人重新授予' }
+          return { allowed: true, message: `ok（holder=${String(holder)}）` }
+        } catch (error) {
+          return { allowed: false, message: `控制权检查出错：${String((error as Error)?.message ?? error)}，为安全起见拒绝` }
+        }
+      },
+    }
   }
 
   /** 连接 MCP 并适配工具（幂等） */
