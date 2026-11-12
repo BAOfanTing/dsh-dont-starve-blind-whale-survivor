@@ -7,10 +7,13 @@ import { McpServer, type StandardSchemaWithJSON } from '@modelcontextprotocol/se
 import type { McpServerConfig } from '../config.js'
 import { BridgeClient } from '../bridge/client.js'
 import { errorResult, createToolDefinitions, runTool, type ToolContext, type ToolDefinition } from '../tools/definitions.js'
+import { EventDetector } from '../tools/events.js'
+import { registerResources } from '../resources/gameResources.js'
+import { registerPrompts } from '../prompts/gamePrompts.js'
 import type { Logger } from '../utils/logger.js'
 
 export const SERVER_NAME = 'blind-whale-survivor'
-export const SERVER_VERSION = '0.3.0-m1'
+export const SERVER_VERSION = '0.3.0-m4'
 
 export interface GameToolService {
   context: ToolContext
@@ -21,10 +24,11 @@ export interface GameToolService {
 /** 业务层：工具 + Bridge 客户端（HTTP 传输与 stdio 共用，未来 Agent 也共用） */
 export function createGameToolService(config: McpServerConfig, logger: Logger): GameToolService {
   const client = new BridgeClient(config, logger)
+  const events = new EventDetector({ staleAfterMs: config.toolTimeoutMs })
   const tools = createToolDefinitions()
   const byName = new Map(tools.map((tool) => [tool.name, tool]))
   return {
-    context: { client, config, logger },
+    context: { client, config, logger, events },
     tools,
     get: (name: string) => byName.get(name),
   }
@@ -65,7 +69,14 @@ export function createMcpServer(service: GameToolService, logger: Logger): McpSe
     )
   }
 
-  logger.info('工具已注册', { count: service.tools.length, tools: service.tools.map((t) => t.name) })
+  registerResources(server, service)
+  registerPrompts(server, service)
+
+  logger.info('工具/资源/提示词已注册', {
+    tools: service.tools.length,
+    resources: 6,
+    prompts: 4,
+  })
   return server
 }
 

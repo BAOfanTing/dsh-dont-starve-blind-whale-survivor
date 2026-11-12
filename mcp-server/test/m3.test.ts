@@ -8,6 +8,7 @@ import { createServer } from 'node:http'
 import { BridgeClient } from '../src/bridge/client.js'
 import { loadConfig } from '../src/config.js'
 import { createToolDefinitions, runTool, type ToolContext } from '../src/tools/definitions.js'
+import { EventDetector } from '../src/tools/events.js'
 import { createLogger } from '../src/utils/logger.js'
 
 const textOf = (result: { content: Array<{ text: string }> }): string => String(result.content[0]?.text ?? '')
@@ -152,7 +153,7 @@ async function harness(options: { stale?: boolean; snapshot?: Record<string, unk
   const base = `http://127.0.0.1:${port}`
   const config = { ...loadConfig({ BWS_TOKEN: 'test-token' }), bridgeUrl: base, token: 'test-token', toolTimeoutMs: 3000 }
   const logger = createLogger({ sink: () => {} })
-  const ctx: ToolContext = { client: new BridgeClient(config, logger, { cacheTtlMs: 0 }), config, logger }
+  const ctx: ToolContext = { client: new BridgeClient(config, logger, { cacheTtlMs: 0 }), config, logger, events: new EventDetector() }
   return {
     ctx,
     hits,
@@ -361,14 +362,16 @@ test('没有玩家时：get_player_status 报 GAME_DISCONNECTED 并给分片提�
   }
 })
 
-test('get_recent_events：还没实现，老实返回 NOT_IMPLEMENTED', async () => {
+test('get_recent_events：首次无基线时返回空列表（不编造事件）', async () => {
   const h = await harness()
   try {
     const result = await h.call('get_recent_events', {})
-    assert.equal(result.isError, true)
+    assert.equal(result.isError, undefined)
     const data = result.structuredContent as Record<string, any>
-    assert.equal(data.error.code, 'NOT_IMPLEMENTED')
-    assert.match(String(data.error.hint), /get_player_status/)
+    assert.equal(data.ok, true)
+    assert.deepEqual(data.events, [], '还没有两次快照对比，不该有事件')
+    assert.equal(data.stats.total, 0)
+    assert.match(textOf(result), /还没有事件/)
   } finally {
     await h.close()
   }

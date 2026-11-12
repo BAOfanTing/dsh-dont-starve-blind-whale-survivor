@@ -97,7 +97,7 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
     assert.ok(init.result, 'initialize 必须有 result：' + JSON.stringify(init))
     assert.ok(['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05', '2024-10-07'].includes(init.result.protocolVersion))
     assert.equal(init.result.serverInfo.name, 'blind-whale-survivor')
-    assert.equal(init.result.serverInfo.version, '0.3.0-m1')
+    assert.match(String(init.result.serverInfo.version), /^0\.3\.0-m\d+$/)
     assert.ok(init.result.capabilities.tools, '必须声明 tools 能力')
 
     h.notify('notifications/initialized')
@@ -130,7 +130,7 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
   }
 })
 
-test('tools/call：仍未实现的工具老实返回 NOT_IMPLEMENTED', async () => {
+test('tools/call：M1 阶段曾用 NOT_IMPLEMENTED 占位，现在 12 个工具全部已实现', async () => {
   const h = startServer()
   try {
     await h.request(1, 'initialize', {
@@ -140,14 +140,18 @@ test('tools/call：仍未实现的工具老实返回 NOT_IMPLEMENTED', async () 
     })
     h.notify('notifications/initialized')
 
-    // get_recent_events 是唯一还没实现的（M4 才做事件流）
+    // 12 个工具都实现了：随便挑一个真跑，不应再返回 NOT_IMPLEMENTED
     const call = await h.request(2, 'tools/call', { name: 'get_recent_events', arguments: {} })
-    assert.equal(call.result.isError, true)
-    assert.equal(call.result.structuredContent.ok, false)
-    assert.equal(call.result.structuredContent.error.code, 'NOT_IMPLEMENTED')
-    assert.match(String(call.result.structuredContent.error.message), /M4/)
-    // 文本内容也要给 AI 看
-    assert.match(call.result.content[0].text, /NOT_IMPLEMENTED/)
+    const structured = call.result.structuredContent as Record<string, any>
+    const code = structured.error?.code
+    assert.notEqual(code, 'NOT_IMPLEMENTED', '12 个工具已全部实现，不应再有 NOT_IMPLEMENTED')
+    // 允许成功，也允许因 Bridge/游戏不可用而失败 —— 但错误码必须是真实原因
+    if (call.result.isError) {
+      assert.ok(['GAME_DISCONNECTED', 'BRIDGE_UNAVAILABLE', 'STATE_STALE'].includes(String(code)), '错误码应是真实原因：' + String(code))
+    } else {
+      assert.equal(structured.ok, true)
+      assert.ok(Array.isArray(structured.events))
+    }
   } finally {
     await h.close()
   }
@@ -197,7 +201,7 @@ test('stdout 只有 JSON-RPC：日志全部在 stderr', async () => {
     for (const line of h.stdoutLines()) {
       assert.doesNotThrow(() => JSON.parse(line), 'stdout 出现非 JSON 行：' + line)
     }
-    assert.match(h.stderr(), /工具已注册/, 'stderr 应该有日志')
+    assert.match(h.stderr(), /已注册/, 'stderr 应该有日志')
     assert.match(h.stderr(), /stdio 传输已就绪/)
   } finally {
     await h.close()

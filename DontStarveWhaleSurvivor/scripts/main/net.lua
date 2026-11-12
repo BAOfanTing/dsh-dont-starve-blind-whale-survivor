@@ -81,7 +81,18 @@ local function tick()
 end
 
 function N.start()
-    if started then return false end
+    -- 换存档 / 世界重载会清掉旧的 DoPeriodicTask，但 started 守卫仍是 true，
+    -- 结果周期任务永久消失、心跳停摆（实测踩过：日志只有一条 offline → online 就再没动静）。
+    -- 所以用「任务对象是否还有效」判断，而不是只看 started。
+    if started and tickTask ~= nil then
+        local ok_alive, alive = pcall(function() return tickTask:IsValid() end)
+        if not ok_alive or alive ~= false then
+            return false -- 拿不到 IsValid 时保守认为还活着，避免重复建任务
+        end
+        print('[BWS2] WARN net 周期任务已失效（世界重载过？），重新创建')
+        tickTask = nil
+        started = false
+    end
     started = true
 
     local config = BWS2.config.get()

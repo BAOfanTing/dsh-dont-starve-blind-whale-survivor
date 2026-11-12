@@ -15,6 +15,7 @@ import type { BridgeClient } from '../bridge/client.js'
 import { ToolError, type ToolErrorPayload } from '../schemas/errors.js'
 import type { Logger } from '../utils/logger.js'
 import { createReadTools } from './readTools.js'
+import type { EventDetector } from './events.js'
 
 export interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -26,6 +27,8 @@ export interface ToolContext {
   client: BridgeClient
   config: McpServerConfig
   logger: Logger
+  /** 事件流：每次读快照都会喂给它，工具据此产出"发生了什么" */
+  events: EventDetector
 }
 
 export interface ToolDefinition {

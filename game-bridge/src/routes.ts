@@ -159,17 +159,29 @@ export function createRoutes(deps: RouteDeps): Route[] {
         const list = sessions.list()
         const alive = list.filter((item) => sessions.isAlive(item))
 
-        // 选会话：优先「活着的 + 有快照的」，其次「有快照的」，再其次「活着的」
+        // 「这个分片里有没有玩家」：主世界和洞穴都在推数据，但玩家只在其中一个。
+        // 默认必须选**有玩家的**那个，否则 MCP 工具会对着空洞穴说"没有玩家/没有威胁"。
+        const hasPlayer = (item: (typeof list)[number]): boolean => {
+          const snapshot = item.latest as Record<string, unknown> | null
+          if (snapshot === null || typeof snapshot !== 'object') return false
+          const player = (snapshot as { player?: unknown }).player
+          if (player === null || typeof player !== 'object') return false
+          return (player as { valid?: boolean }).valid !== false
+        }
+
         const withSnapshot = list.filter((item) => item.latest !== null)
         const prefer = (pool: typeof list) => {
           const filtered = wantedShard === null ? pool : pool.filter((item) => item.shard === wantedShard)
-          return (filtered.length > 0 ? filtered : pool)[0] ?? null
+          const candidates = filtered.length > 0 ? filtered : pool
+          // 优先级：有玩家 > 最近心跳（新会话要能顶掉旧会话，否则换存档后会一直看到旧数据）
+          const withPlayer = candidates.filter(hasPlayer)
+          const ordered = (withPlayer.length > 0 ? withPlayer : candidates).slice()
+          ordered.sort((a, b) => (b.lastHeartbeatAt ?? 0) - (a.lastHeartbeatAt ?? 0))
+          return ordered[0] ?? null
         }
-        const chosen =
-          prefer(alive.filter((item) => item.latest !== null)) ??
-          prefer(withSnapshot) ??
-          prefer(alive) ??
-          null
+        // 先只在"活着"的会话里选（换存档后旧会话心跳会停，自然被排除）；
+        // 全都死了才退回全量（那时 stale 会标出来，调用方知道数据不可信）
+        const chosen = prefer(alive.filter((item) => item.latest !== null)) ?? prefer(alive) ?? prefer(withSnapshot) ?? null
 
         if (chosen === null) {
           return {

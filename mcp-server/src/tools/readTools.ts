@@ -32,9 +32,16 @@ const radiusSchema = z.number().int().min(2).max(20).default(16)
 const limitSchema = z.number().int().min(1).max(50).default(20)
 
 /** 通用：取快照 + 新鲜度；游戏没连上时给明确错误 */
-async function readState(ctx: { client: import('../bridge/client.js').BridgeClient }, options: { shard?: string | null; force?: boolean } = {}) {
+async function readState(
+  ctx: { client: import('../bridge/client.js').BridgeClient; events?: import('./events.js').EventDetector },
+  options: { shard?: string | null; force?: boolean } = {},
+) {
   const read = await ctx.client.readSnapshot({ shard: options.shard ?? null, force: options.force ?? false })
   const snapshot = asDict(read.game.snapshot)
+  // 顺带喂事件流：只要有任何工具在读状态，事件就在积累（AI 之后问"发生了什么"才有东西）
+  if (ctx.events !== undefined) {
+    ctx.events.observe(snapshot, { stale: read.stale, staleReason: read.staleReason })
+  }
   if (snapshot === null) {
     throw new ToolError('GAME_DISCONNECTED', 'Bridge 里没有可用的游戏快照', {
       hint: '游戏没进世界 / 模组未启用；可以先看 get_bridge_status',
@@ -141,11 +148,30 @@ export function createReadTools(): ToolDefinition[] {
       milestone: 'M3',
       handler: async (rawArgs, ctx) => {
         const args = rawArgs as { shard?: string }
-        const { snapshot, freshness } = await readState(ctx, { shard: args.shard })
-        const player = playerView(snapshot)
+        let read = await readState(ctx, { shard: args.shard })
+        let player = playerView(read.snapshot)
+
+        // 没指定分片又没玩家时：自动换一个分片再试（主世界/洞穴各有一份快照，
+        // 玩家只会在其中一个；这样调用方不用自己猜 shard）
+        if (player === null && args.shard === undefined) {
+          for (const candidate of ['master', 'caves']) {
+            try {
+              const retry = await readState(ctx, { shard: candidate })
+              const retryPlayer = playerView(retry.snapshot)
+              if (retryPlayer !== null) {
+                read = retry
+                player = retryPlayer
+                break
+              }
+            } catch {
+              // 该分片没有快照，继续试下一个
+            }
+          }
+        }
+        const { snapshot, freshness } = read
         if (player === null) {
           throw new ToolError('GAME_DISCONNECTED', '这个分片里没有玩家', {
-            hint: '玩家可能在另一个分片（洞穴/主世界）；试试指定 shard',
+            hint: '玩家可能在另一个分片（洞穴/主世界）；试试指定 shard，或先用 get_bridge_status 看哪些分片有玩家',
             detail: { session: freshness.session_id, shard: freshness.shard },
           })
         }
@@ -566,15 +592,61 @@ export function createReadTools(): ToolDefinition[] {
       name: 'get_recent_events',
       title: '最近事件',
       description:
-        '最近发生的游戏事件（受伤、饥饿变化、昼夜切换、天气变化、发现威胁等）。本阶段尚未实现事件流缓存，会明确返回 NOT_IMPLEMENTED。',
+        '最近发生的游戏事件：受伤、饥饿/理智变化、死亡/幽灵、昼夜与季节切换、天气变化、敌对生物出现/消失、背包变化。事件由 MCP 层对比连续快照产生，只在本进程内缓存（默认 200 条）。',
       schema: z.object({
         limit: z.number().int().min(1).max(100).default(20),
+        kinds: z
+          .array(z.string().min(1).max(32))
+          .max(10)
+          .optional()
+          .describe('只返回这些事件类型，例如 ["health_dropped","threats_appeared"]'),
+        severity: z.array(z.enum(['info', 'warning', 'critical'])).max(3).optional().describe('只返回这些严重程度'),
+        since_seq: z.number().int().min(0).optional().describe('只返回序号大于它的新事件（增量拉取用）'),
+        refresh: z.boolean().default(false).describe('是否先读一次最新快照，让事件流更新到当下'),
       }),
       readOnly: true,
       milestone: 'M4',
-      handler: async () => {
-        throw new ToolError('NOT_IMPLEMENTED', '事件流还没实现（计划在 M4）', {
-          hint: '当前可以用 get_player_status / get_world_status 对比两次调用的差异来推断变化',
+      handler: async (rawArgs, ctx) => {
+        const args = rawArgs as {
+          limit?: number
+          kinds?: string[]
+          severity?: Array<'info' | 'warning' | 'critical'>
+          since_seq?: number
+          refresh?: boolean
+        }
+
+        // 先刷新一次快照，保证事件流跟得上当下（失败不影响读历史事件）
+        let freshnessBlock: Record<string, unknown> | null = null
+        if (args.refresh === true) {
+          try {
+            const read = await readState(ctx, { force: true })
+            freshnessBlock = freshnessOf(read.read) as unknown as Record<string, unknown>
+          } catch (error) {
+            ctx.logger.warn('get_recent_events 刷新快照失败，继续返回已缓存事件', {
+              code: error instanceof ToolError ? error.payload.code : 'INTERNAL_ERROR',
+            })
+          }
+        }
+
+        const events = ctx.events.recent({
+          limit: args.limit ?? 20,
+          kinds: args.kinds as never,
+          severity: args.severity,
+          sinceSeq: args.since_seq,
+        })
+        const stats = ctx.events.stats()
+        const icon = (severity: string) => (severity === 'critical' ? '🔴' : severity === 'warning' ? '🟠' : '·')
+        const header =
+          events.length === 0
+            ? '还没有事件（事件流需要至少两次快照对比才能产生；可用 refresh=true 或调用其它工具推动）'
+            : `最近 ${events.length} 条事件（累计 ${stats.total} 条，缓存 ${stats.buffered} 条）：`
+        const lines = [header, ...events.map((event) => `${icon(event.severity)} [#${event.seq}] ${event.message}`)]
+        return textResult(lines, {
+          ok: true,
+          events,
+          stats,
+          ...(freshnessBlock === null ? {} : { freshness: freshnessBlock }),
+          note: '事件在 MCP 进程内产生，进程重启后从零开始；Bridge 与游戏端不受影响',
         })
       },
     },
