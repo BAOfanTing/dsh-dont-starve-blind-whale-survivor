@@ -51,7 +51,7 @@
 ## 3. 快速开始
 
 ```powershell
-cd E:\Cache\XinLuguWuyu\dsh-dont-starve-whale
+cd E:\Cache\XinLuguWuyu\dsh-dont-starve-blind-whale-survivor
 
 # 1) 装/更新游戏模组（插件会自动装，这里手动跑也行）
 node tools/install-mod.mjs

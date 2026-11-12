@@ -1,4 +1,4 @@
-# dsh-dont-starve-whale（DSH 插件说明）
+# dsh-dont-starve-blind-whale-survivor（DSH 插件说明）
 
 让 AI 在 DSH 里玩《饥荒联机版》。插件里塞了四样东西：
 
@@ -72,12 +72,12 @@
 
 ## 安装到 DSH
 
-**从插件市场**：装 `dsh-dont-starve-whale`（插件就在仓库根目录）。
+**从插件市场**：装 `dsh-dont-starve-blind-whale-survivor`（插件就在仓库根目录）。
 
 **从本地文件夹（开发时）**，在 profile 目录（`<DSH_HOME>/profiles/desktop` 或 `web`）里：
 
-1. `package.json` 的 `dependencies` 加 `"dsh-dont-starve-whale": "link:E:/Cache/XinLuguWuyu/dsh-dont-starve-whale"`；
-2. `dsh.profile.bundles` 里加 `"dsh-dont-starve-whale"`；
+1. `package.json` 的 `dependencies` 加 `"dsh-dont-starve-blind-whale-survivor": "link:E:/Cache/XinLuguWuyu/dsh-dont-starve-blind-whale-survivor"`；
+2. `dsh.profile.bundles` 里加 `"dsh-dont-starve-blind-whale-survivor"`；
 3. 在 profile 目录跑 `pnpm install`，然后重启 DSH。
 
 注意用和这个 profile 一致的 pnpm（看 `node_modules/.modules.yaml` 里的 `packageManager`，桌面版是 DSH 自带的 pnpm 11）。

@@ -125,7 +125,7 @@ night_preparation: 686 字符，含取数步骤=true，含禁止写操作=true
 ## 6. 启动方式
 
 ```powershell
-cd E:\Cache\XinLuguWuyu\dsh-dont-starve-whale\mcp-server
+cd E:\Cache\XinLuguWuyu\dsh-dont-starve-blind-whale-survivor\mcp-server
 
 # stdio（默认，本地 MCP 客户端拉起子进程）
 node dist/src/index.js

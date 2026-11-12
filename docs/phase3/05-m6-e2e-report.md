@@ -104,7 +104,7 @@ Don't Starve Together（真实游戏）
 ## 7. 怎么跑（三种使用方式）
 
 ```powershell
-cd E:\Cache\XinLuguWuyu\dsh-dont-starve-whale\mcp-server
+cd E:\Cache\XinLuguWuyu\dsh-dont-starve-blind-whale-survivor\mcp-server
 npm install && npm run build
 
 # ① stdio（Claude Desktop / Cursor 等本地 MCP 客户端）
@@ -127,7 +127,7 @@ MCP 客户端配置（stdio 示例）：
   "mcpServers": {
     "blind-whale-survivor": {
       "command": "node",
-      "args": ["E:\\Cache\\XinLuguWuyu\\dsh-dont-starve-whale\\mcp-server\\dist\\src\\index.js"],
+      "args": ["E:\\Cache\\XinLuguWuyu\\dsh-dont-starve-blind-whale-survivor\\mcp-server\\dist\\src\\index.js"],
       "env": { "BWS_BRIDGE_URL": "http://127.0.0.1:18788" }
     }
   }

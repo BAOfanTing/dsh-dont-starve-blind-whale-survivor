@@ -89,7 +89,7 @@ E:\SteamLibrary\steamapps\common\Don't Starve Together\mods\DontStarveWhaleSurvi
 手动装/更新：
 
 ```powershell
-cd E:\Cache\XinLuguWuyu\dsh-dont-starve-whale
+cd E:\Cache\XinLuguWuyu\dsh-dont-starve-blind-whale-survivor
 node tools/install-mod.mjs
 ```
 
@@ -126,7 +126,7 @@ Get-Content "$k\master_server_log.txt" -Tail 200 -Encoding UTF8 | Where-Object {
 ## 7. 本地已做的验证（不用进游戏就能跑的）
 
 ```powershell
-cd E:\Cache\XinLuguWuyu\dsh-dont-starve-whale
+cd E:\Cache\XinLuguWuyu\dsh-dont-starve-blind-whale-survivor
 node --test tests/phase1-observer.test.mjs
 ```
 

@@ -1,8 +1,8 @@
-# dsh-dont-starve-whale
+# dsh-dont-starve-blind-whale-survivor
 
 在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）里让 AI 玩 **《饥荒联机版》**（Don't Starve Together）。
 
-**设置在哪**：DSH 左侧边栏「插件」→ dsh-dont-starve-whale → 点组件名旁边的「配置 ›」，打开后按「游玩 / 攻略 / 会话与连接 / 模组安装」分组，改完点「保存」。装好插件后要重启一次 DSH，配置入口才会出现。（DSH 不会照着插件的配置结构自动画表单，这张配置卡片是插件自带的 `lib/client.js`。）
+**设置在哪**：DSH 左侧边栏「插件」→ dsh-dont-starve-blind-whale-survivor → 点组件名旁边的「配置 ›」，打开后按「游玩 / 攻略 / 会话与连接 / 模组安装」分组，改完点「保存」。装好插件后要重启一次 DSH，配置入口才会出现。（DSH 不会照着插件的配置结构自动画表单，这张配置卡片是插件自带的 `lib/client.js`。）
 
 | 设置 | 默认 | 说明 |
 |---|---|---|
@@ -65,14 +65,14 @@ F8 开/停 · F7 停手
 
 1. 重启一次 DSH（插件是从 profile 的 `link:` 装的，重启后才会加载、配置页才会出现）。
 2. 打开《饥荒联机版》，读档进世界；第一次进会弹模组列表，勾上「大肥鱼饿不死」。
-3. 回 DSH：设置 → 插件 → dsh-dont-starve-whale → 「配置 ›」里打开「创建“大肥鱼饿不死”会话预设」→ 重启 DSH → 新建会话时选这个预设，然后说“先看看现在什么情况，再去采点浆果、生个火”。
+3. 回 DSH：设置 → 插件 → dsh-dont-starve-blind-whale-survivor → 「配置 ›」里打开「创建“大肥鱼饿不死”会话预设」→ 重启 DSH → 新建会话时选这个预设，然后说“先看看现在什么情况，再去采点浆果、生个火”。
 
 想确认连上了没有：浏览器打开 `http://127.0.0.1:18090/status`，它会告诉你现在有没有找到游戏的状态文件、在哪个目录。
 
 **详细一点**：
 
 1. **装好游戏**：《饥荒联机版》；这个模组是服务器端模组，**本地开世界**（自己当房主）才生效。
-2. **装插件**：DSH 插件页安装 `dsh-dont-starve-whale`（本地开发时用 `link:` 指向这个仓库）。装完重启 DSH。
+2. **装插件**：DSH 插件页安装 `dsh-dont-starve-blind-whale-survivor`（本地开发时用 `link:` 指向这个仓库）。装完重启 DSH。
 3. **装模组**：插件默认会自动把 `DontStarveWhaleSurvivor/` 复制到 `<游戏>/mods/` 并往 `mods/modsettings.lua` 里加一行 `ForceEnableMod("DontStarveWhaleSurvivor")`。不想让它自动装就关掉设置里的开关，手动复制也行（或者跑 `install.ps1`）。
 4. **打开游戏、读档进世界**（模组要同意启用：游戏里第一次会弹模组列表）。
 5. 回 DSH：新建一个会话，选「大肥鱼饿不死」预设（要先在设置里打开那个开关），或者打开 `dst` 入口工具后在任意会话说“玩会儿饥荒”。
@@ -118,7 +118,7 @@ F8 开/停 · F7 停手
 ## 目录结构
 
 ```
-dsh-dont-starve-whale/
+dsh-dont-starve-blind-whale-survivor/
 ├─ package.json / cordis.patch.yml / lib/   DSH 插件
 │  ├─ lib/index.js       插件本体：设置、会话预设、dst 入口工具、自动续玩、自动装模组
 │  ├─ lib/mcp-server.js  本机 MCP 服务器（Streamable HTTP + SSE 心跳）+ /settings + /status

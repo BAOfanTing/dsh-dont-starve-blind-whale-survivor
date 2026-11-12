@@ -157,7 +157,7 @@ MCP Server 如实反映"没连上"，没有把旧数据当成当前状态报出�
 ## 7. 启动命令
 
 ```powershell
-cd E:\Cache\XinLuguWuyu\dsh-dont-starve-whale\mcp-server
+cd E:\Cache\XinLuguWuyu\dsh-dont-starve-blind-whale-survivor\mcp-server
 npm install            # 只第一次
 npm run build
 node dist/src/index.js # stdio 模式（供 MCP 客户端拉起）
@@ -170,7 +170,7 @@ MCP 客户端配置（例如 Claude Desktop 风格）：
   "mcpServers": {
     "blind-whale-survivor": {
       "command": "node",
-      "args": ["E:\\Cache\\XinLuguWuyu\\dsh-dont-starve-whale\\mcp-server\\dist\\src\\index.js"],
+      "args": ["E:\\Cache\\XinLuguWuyu\\dsh-dont-starve-blind-whale-survivor\\mcp-server\\dist\\src\\index.js"],
       "env": { "BWS_BRIDGE_URL": "http://127.0.0.1:18788" }
     }
   }

@@ -38,9 +38,9 @@ async function waitFor(check, timeoutMs = 3000) {
   return false
 }
 
-test('插件叫 dsh-dont-starve-whale，预设 id 和入口工具名字对得上', () => {
-  assert.equal(name, 'dsh-dont-starve-whale')
-  assert.equal(PRESET_ID, 'dsh-dont-starve-whale')
+test('插件叫 dsh-dont-starve-blind-whale-survivor，预设 id 和入口工具名字对得上', () => {
+  assert.equal(name, 'dsh-dont-starve-blind-whale-survivor')
+  assert.equal(PRESET_ID, 'dsh-dont-starve-blind-whale-survivor')
 })
 
 test('apply() 会把 MCP 服务器开起来，并把设置推到游戏目录', async () => {
@@ -75,7 +75,7 @@ test('apply() 会把 MCP 服务器开起来，并把设置推到游戏目录', a
     assert.ok(pushed, '设置没推给游戏')
     const { stripKleiHeader } = await import('../lib/bridge.js')
     const settings = JSON.parse(stripKleiHeader(readFileSync(join(dir, 'whale_settings.json'), 'utf8')))
-    assert.equal(settings.generatedBy, 'dsh-dont-starve-whale')
+    assert.equal(settings.generatedBy, 'dsh-dont-starve-blind-whale-survivor')
   } finally {
     ctx.dispose()
     game.stop()
