@@ -223,7 +223,7 @@ test('refresh_state：立刻重新采集一次', async () => {
 test('白名单外命令：判 FAILED + unsupported_command（绝不执行）', async () => {
   const fengari = await import('fengari')
   const t = load(fengari)
-  t.run(pollWith(`{ id = "cmd_6", type = "chop_tree", params = {} }`))
+  t.run(pollWith(`{ id = "cmd_6", type = "eval_lua", params = {} }`))
   t.run('BWS2.commands.poll(true)')
   const report = t.json('BWS.json.decode(QUERIES[2].body)')
   assert.equal(report.status, 'FAILED')

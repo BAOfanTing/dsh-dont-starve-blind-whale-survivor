@@ -58,16 +58,17 @@ async function withAdapter(fn: (adapter: ToolAdapter, client: McpClient) => Prom
   }
 }
 
-test('白名单：只适配 14 个只读工具；MCP 共 16 个，2 个写动作被跳过', async () => {
+test('白名单：只适配 14 个只读工具；MCP 共 20 个，6 个写动作被跳过', async () => {
   await withAdapter(async (adapter, client) => {
     const names = adapter.names().sort()
     assert.equal(names.length, 14, `实际 ${names.length}：${names.join(',')}`)
     assert.deepEqual(names, [...READ_ONLY_ALLOWLIST].sort())
     // MCP Server 真实清单是 16 个；写动作工具故意不加入 Agent 白名单（任务书 §11 默认 SUPERVISED）
     const all = client.listTools().map((tool) => tool.name).sort()
-    assert.equal(all.length, 16)
+    assert.equal(all.length, 20)
     const nameSet = new Set<string>(names)
-    assert.deepEqual(all.filter((name) => !nameSet.has(name)).sort(), ['gather_resource', 'move_to_target'])
+    assert.deepEqual(all.filter((name) => !nameSet.has(name)).sort(),
+      ['chop_tree', 'equip_item', 'gather_resource', 'mine_rock', 'move_to_target', 'pick_up_item'])
   })
 })
 
@@ -276,7 +277,7 @@ test('refresh：MCP 工具清单变化后重建适配（不写死）', async () 
   await withAdapter(async (adapter) => {
     const first = adapter.refresh()
     assert.equal(first.adapted, 14)
-    assert.equal(first.skipped.length, 2, '2 个写动作工具应被跳过')
+    assert.equal(first.skipped.length, 6, '6 个写动作工具应被跳过')
     const second = adapter.refresh()
     assert.equal(second.adapted, 14, '重复刷新结果稳定')
   })

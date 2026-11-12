@@ -205,8 +205,24 @@ end
 
 -- ───────────────────────── 对外 ─────────────────────────
 
+--- Phase 5 M4：观察器自己的 tick 心跳时间戳（给「三路互守」判断用）
+O.last_tick_at = 0
+O.rebuilds = 0
+--- 观察器 tick 超过这么多秒没跑，就认为它停摆了
+local OBS_KEEPALIVE_GAP = 6
+
+local function obs_now()
+    local os_ = GLOBAL.os
+    if os_ ~= nil and os_.time ~= nil then
+        local ok, v = pcall(os_.time)
+        if ok and v ~= nil then return tonumber(v) or 0 end
+    end
+    return 0
+end
+
 function O.Tick()
     O.loop_count = O.loop_count + 1
+    O.last_tick_at = obs_now()
     local ok, err = pcall(function()
         local player_entity = nil
         if O.side == "server" then player_entity = first_player() end
@@ -233,10 +249,31 @@ function O.Tick()
         if BWS2 ~= nil and BWS2.actionExecutor ~= nil and BWS2.actionExecutor.pollCompletion ~= nil then
             pcall(BWS2.actionExecutor.pollCompletion)
         end
+        -- Phase 5 M4 三路互守：顺手把文件桥的 server_tick 也拉一把
+        if Whale ~= nil and Whale.bridge ~= nil and Whale.bridge.KeepAlive ~= nil then
+            pcall(Whale.bridge.KeepAlive)
+        end
     end)
     if not ok then
         O.error_count = O.error_count + 1
         O.last_error = "tick: " .. tostring(err)
+    end
+end
+
+--- Phase 5 M4：观察器自愈（由文件桥 server_tick 反向驱动）。
+--- 真机踩到：所有周期任务会一起停摆，单链路守护救不回来；三路互守至少覆盖部分失效。
+function O.KeepAlive()
+    if GLOBAL.TheWorld == nil then return end
+    local ok_m, master = pcall(function() return GLOBAL.TheWorld.ismastersim end)
+    if not ok_m or master ~= true then return end
+    local at = obs_now()
+    if O.last_tick_at > 0 and at - O.last_tick_at < OBS_KEEPALIVE_GAP then return end
+    O.started = false
+    local ok = pcall(O.Start)
+    if ok then
+        O.rebuilds = (O.rebuilds or 0) + 1
+        O.last_tick_at = at
+        print("[BWS] WARN 观察器 tick 停摆过，已重建（第 " .. O.rebuilds .. " 次）")
     end
 end
 

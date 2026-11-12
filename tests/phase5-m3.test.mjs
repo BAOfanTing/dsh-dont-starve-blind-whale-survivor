@@ -222,12 +222,12 @@ test('M3：附近没资源时补发 FAILED 并带真实原因', async () => {
   `)
 })
 
-test('M3：status() 暴露 4 个写动作与 3 个资源白名单', async () => {
+test('M3/M4：status() 暴露 8 个写动作', async () => {
   const fengari = await import('fengari')
   const { run } = load(fengari)
   run(`
     local s = BWS2.actionExecutor.status()
-    assert(#s.known_actions == 4, "写动作 4 个")
+    assert(#s.known_actions == 8, "写动作 8 个（M2 2 + M3 2 + M4 4）")
     assert(s.write_actions.gather_resource == true)
     assert(s.write_actions.move_to_target == true)
   `)

@@ -59,8 +59,8 @@ public class Unpause {
 }
 '@
 Add-Type -TypeDefinition $code
-$proc = Get-Process -Name 'dontstarve_steam_x64' -ErrorAction Stop | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if ($null -eq $proc) { Write-Output 'NO_WINDOW'; exit 2 }
+$proc = Get-Process -Name 'dontstarve_steam_x64' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+if ($null -eq $proc) { Write-Output 'NO_WINDOW'; exit 0 }
 $h = [IntPtr]$proc.MainWindowHandle
 Write-Output ("WINDOW_PID=" + $proc.Id + " HANDLE=" + $h)
 # 实测：窗口被最小化时 DST 会暂停，且发 Esc 无效 —— 必须先恢复
@@ -81,6 +81,10 @@ Write-Output 'ESC_SENT'
 try {
   const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8' })
   process.stdout.write(out)
+  if (out.includes('NO_WINDOW')) {
+    console.log('  没找到 DST 客户端窗口（dontstarve_steam_x64 未运行）—— 游戏客户端没开，无法解除暂停。')
+    process.exit(0)
+  }
 } catch (e) {
   console.error('解除暂停脚本执行失败:', String(e).slice(0, 300))
   process.exit(1)

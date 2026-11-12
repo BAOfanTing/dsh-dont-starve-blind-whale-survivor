@@ -224,6 +224,23 @@ end
 
 local last_error_at = 0
 
+-- Phase 5 M4：三路互守用（文件桥 server_tick ↔ 观察器 Tick ↔ net tick）
+local server_tick_task = nil
+local server_last_tick_at = 0
+local server_rebuilds = 0
+--- server_tick 超过这么多秒没跑，就认为它停摆了
+local SERVER_KEEPALIVE_GAP = 5
+
+--- 真实时钟（os.time）。不用 U.now()：它依赖 TheSim:GetTime，某些构建里拿不到会恒为 0。
+local function bridge_now()
+    local os_ = GLOBAL.os
+    if os_ ~= nil and os_.time ~= nil then
+        local ok, v = pcall(os_.time)
+        if ok and v ~= nil then return tonumber(v) or 0 end
+    end
+    return 0
+end
+
 --- 每一步单独保护：哪一步出错就打出来（10 秒最多一条），别让一个错误把整条桥搞哑
 local function step(what, fn)
     local ok, err = pcall(fn)
@@ -237,6 +254,15 @@ end
 
 local function server_tick()
     tick_count = tick_count + 1
+    server_last_tick_at = bridge_now()
+    -- Phase 5 M4 三路互守：文件桥是最细的周期任务（0.2s），顺手拉 net 与观察器一把。
+    -- pcall 隔离，任何一条挂了都不影响自己。
+    if BWS2 ~= nil and BWS2.net ~= nil and BWS2.net.keepAlive ~= nil then
+        pcall(BWS2.net.keepAlive)
+    end
+    if BWS ~= nil and BWS.observer ~= nil and BWS.observer.KeepAlive ~= nil then
+        pcall(BWS.observer.KeepAlive)
+    end
     step("读设置", poll_settings)
     step("读指令", poll_command)
     step("跑动作", function() Whale.actions.Tick() end)
@@ -245,8 +271,30 @@ end
 
 function B.start_server(world)
     B.WriteState(true)
-    world:DoPeriodicTask(TICK, server_tick)
+    server_tick_task = world:DoPeriodicTask(TICK, server_tick)
+    server_last_tick_at = bridge_now()
     print("[大肥鱼饿不死] 文件桥已启动（服务端）：写 " .. tostring(FILES.state))
+end
+
+--- Phase 5 M4：文件桥 server_tick 停摆自愈（由观察器 Tick 反向驱动）。
+--- 不信任任务对象"看着有效"，只看时间戳是否还在走。
+function B.KeepAlive()
+    local world = GLOBAL.TheWorld
+    if world == nil then return end
+    local ok_m, master = pcall(function() return world.ismastersim end)
+    if not ok_m or master ~= true then return end
+    local at = bridge_now()
+    if server_last_tick_at > 0 and at - server_last_tick_at < SERVER_KEEPALIVE_GAP then return end
+    if server_tick_task ~= nil then
+        pcall(function() server_tick_task:Cancel() end)
+        server_tick_task = nil
+    end
+    local ok = pcall(function() server_tick_task = world:DoPeriodicTask(TICK, server_tick) end)
+    if ok then
+        server_rebuilds = server_rebuilds + 1
+        server_last_tick_at = at
+        print("[大肥鱼饿不死] server_tick 停摆过，已重建（第 " .. server_rebuilds .. " 次）")
+    end
 end
 
 -- ─────────────────── 客户端：AI 思考时暂停世界 ───────────────────

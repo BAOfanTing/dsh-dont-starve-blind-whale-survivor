@@ -17,6 +17,7 @@ import type { Logger } from '../utils/logger.js'
 import { createReadTools } from './readTools.js'
 import { createControlTools } from './controlTools.js'
 import { createGatherTools } from './gatherTools.js'
+import { createToolUseTools } from './toolUseTools.js'
 import type { EventDetector } from './events.js'
 
 export interface ToolResult {
@@ -142,8 +143,8 @@ function createBridgeStatusTool(): ToolDefinition {
 
 /** 全部工具（顺序即 tools/list 的顺序） */
 export function createToolDefinitions(): ToolDefinition[] {
-  // Phase 5 M2 加 1 个只读控制权工具；M3 加 3 个采集工具（2 写 + 1 只读）
-  const tools = [createBridgeStatusTool(), ...createReadTools(), ...createControlTools(), ...createGatherTools()]
+  // Phase 5 M2 +1 只读控制权；M3 +3 采集；M4 +4 工具使用
+  const tools = [createBridgeStatusTool(), ...createReadTools(), ...createControlTools(), ...createGatherTools(), ...createToolUseTools()]
   const seen = new Set<string>()
   for (const tool of tools) {
     if (seen.has(tool.name)) throw new Error(`工具重名：${tool.name}`)

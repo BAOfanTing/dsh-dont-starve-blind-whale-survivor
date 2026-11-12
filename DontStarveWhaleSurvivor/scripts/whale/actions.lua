@@ -382,6 +382,65 @@ JOBS.pick = function(j, p)
     return "run"
 end
 
+-- 捡起地上的东西（Phase 5 M3 补遗 / M4 开放：真机确认 ACTIONS.PICKUP 存在后才加的）
+JOBS.pickup = function(j, p)
+    if j.step == "start" then
+        j.data.count = tonumber(j.args.count) or 1
+        j.data.done_count = 0
+        j.data.radius = tonumber(j.args.radius) or 12
+        j.data.want = string.lower(tostring(j.args.item or ""))
+        j.step = "next"
+    end
+    if j.step == "next" then
+        if j.data.done_count >= j.data.count then
+            return "done", string.format("捡了 %d 个", j.data.done_count)
+        end
+        -- 掉落物 = 有 inventoryitem 组件且 owner 为 nil（entity_observer 里同一判据）
+        local list = U.find_all(p, j.data.radius, nil, nil, function(e)
+            local c = e.components
+            if c == nil or c.inventoryitem == nil then return false end
+            local ok, held = pcall(function() return c.inventoryitem.owner ~= nil end)
+            if ok and held then return false end
+            if j.data.want == "" then return true end
+            local prefab = string.lower(e.prefab or "")
+            return string.find(prefab, j.data.want, 1, true) ~= nil
+        end)
+        local target = list[1] ~= nil and list[1].ent or nil
+        if target == nil then
+            if j.data.done_count > 0 then
+                return "done", string.format("捡了 %d 个，附近没有能捡的了", j.data.done_count)
+            end
+            return "fail", string.format("附近 %d 格里没有能捡的 %s", j.data.radius,
+                j.data.want ~= "" and j.data.want or "东西")
+        end
+        j.data.name = U.pretty(target)
+        push(p, BufferedAction(p, target, ACTIONS.PICKUP, nil))
+        j.data.phase_start = U.now()
+        j.data.phase_wait = false
+        j.step = "acting"
+        return "run"
+    end
+    if j.step == "acting" then
+        if not j.data.phase_wait then
+            if busy(p) then j.data.phase_wait = true end
+            if U.now() - j.data.phase_start > 30 then
+                return "fail", string.format("%s 捡不了（可能没了或者够不着）", j.data.name)
+            end
+            return "run"
+        end
+        if busy(p) then
+            if U.now() - j.data.phase_start > 60 then
+                return "fail", "捡不动了"
+            end
+            return "run"
+        end
+        j.data.done_count = j.data.done_count + 1
+        j.step = "next"
+        return "run"
+    end
+    return "run"
+end
+
 JOBS.attack = function(j, p)
     if j.step == "start" then
         local target = nil

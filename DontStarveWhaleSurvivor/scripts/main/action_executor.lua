@@ -30,11 +30,21 @@ local ACTION_MAP = {
     -- Phase 5 M3：基础资源采集（复用已有 pick / go_to，不重写动作状态机）
     gather_resource = 'pick',
     move_to_target = 'go_to',
+    -- Phase 5 M4：工具使用（复用已有 equip / chop / mine，新增 pickup）
+    equip_item = 'equip',
+    chop_tree = 'chop',
+    mine_rock = 'mine',
+    pick_up_item = 'pickup',
 }
 
 -- 需要控制权写权限的动作（get_movement_status / probe_game_actions 是只读）
 local WRITE_ACTIONS = { move_to = true, stop_movement = true,
-    gather_resource = true, move_to_target = true }
+    gather_resource = true, move_to_target = true,
+    equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true }
+
+-- Phase 5 M4：需人工确认的动作（任务书 §11：砍伐/采矿初期建议人工确认）。
+-- **程序层强制**：params 必须显式带 confirmed=true，不靠提示词。
+local CONFIRM_REQUIRED = { chop_tree = true, mine_rock = true }
 
 -- Phase 5 M3：资源类型 → 游戏内实体名白名单。
 -- 只映射到「可采摘实体」（pickable / harvestable），走 ACTIONS.PICK / HARVEST。
@@ -50,6 +60,28 @@ local GATHER_TARGETS = {
 }
 local GATHER_MAX_COUNT = 10
 local GATHER_MAX_RADIUS = 20
+
+-- ─────────────── Phase 5 M4：工具使用白名单（任务书 §7.3 / §7.2）───────────────
+-- 全部固定白名单：外部字符串只用来查表，绝不透传给游戏当函数名/prefab。
+-- 装备：第一批只开 axe / pickaxe / torch
+local EQUIP_ITEMS = { axe = 'axe', pickaxe = 'pickaxe', torch = 'torch' }
+-- 砍伐目标（可选；不传 = 附近最近的可砍目标，传了只认这些名字）
+local CHOP_TARGETS = { evergreen = 'evergreen', twiggytree = 'twiggytree',
+    mushtree = 'mushtree', tree = 'tree' }
+-- 采矿目标（同上）
+local MINE_TARGETS = { rock = 'rock', rock1 = 'rock1', rock2 = 'rock2',
+    rock_flintless = 'rock_flintless' }
+-- 捡地面物品（M3 补遗：真机已确认 ACTIONS.PICKUP 可用后才开放）
+local PICKUP_ITEMS = { flint = 'flint', rocks = 'rocks', log = 'log',
+    twigs = 'twigs', cutgrass = 'cutgrass', berries = 'berries' }
+-- 完成后清点背包的物品（记录实际获得数量，任务书 §7.3「完成后检查掉落物」）
+local LOOT_PREFABS = {
+    chop_tree = { 'log', 'twigs' },
+    mine_rock = { 'rocks', 'flint', 'nitre', 'goldnugget' },
+    pick_up_item = { 'flint', 'rocks', 'log', 'twigs', 'cutgrass', 'berries' },
+}
+local WORK_MAX_COUNT = 5      -- 砍/矿一次最多几个（比采集更重，上限更低）
+local WORK_MAX_RADIUS = 20
 
 -- 记录最近的移动状态（get_movement_status 用，纯读，不碰游戏实体）
 local lastMove = {
@@ -78,6 +110,35 @@ local function now()
         if ok and value ~= nil then return tonumber(value) or 0 end
     end
     return 0
+end
+
+--- Phase 5 M4：数背包里某 prefab 的总数量（含堆叠）。出错返回 0，绝不抛。
+local function count_prefab(player, prefab)
+    if player == nil or player.components == nil or player.components.inventory == nil then return 0 end
+    local total = 0
+    pcall(function()
+        player.components.inventory:ForEachItem(function(item)
+            if item ~= nil and item.prefab == prefab then
+                local st = item.components ~= nil and item.components.stackable or nil
+                local ok, n = pcall(function() return st ~= nil and st:GetStackCount() or 1 end)
+                if ok and tonumber(n) ~= nil then total = total + tonumber(n) end
+            end
+        end)
+    end)
+    return total
+end
+
+--- Phase 5 M4：手上当前装备的 prefab（装备核验用）。拿不到返回 nil。
+local function equipped_hands_prefab()
+    local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+    if player == nil or player.components == nil or player.components.inventory == nil then return nil end
+    local ok, item = pcall(function()
+        local slots = GLOBAL.EQUIPSLOTS
+        if slots == nil or slots.HANDS == nil then return nil end
+        return player.components.inventory:GetEquippedItem(slots.HANDS)
+    end)
+    if ok and item ~= nil then return item.prefab end
+    return nil
 end
 
 --- 服务端权威判断（任务书 §8：游戏修改必须在服务器权威环境执行）
@@ -157,6 +218,53 @@ local function buildJobArgs(command)
         if radius < 2 then radius = 2 end
         if radius > GATHER_MAX_RADIUS then radius = GATHER_MAX_RADIUS end
         return { target = name, count = count, radius = radius }, nil
+    elseif command.type == 'equip_item' then
+        -- 装备白名单：axe / pickaxe / torch（任务书 §7.3 第一批）
+        local item = EQUIP_ITEMS[p.item]
+        if item == nil then
+            return nil, 'invalid_item: equip 只支持 axe / pickaxe / torch（固定白名单）'
+        end
+        return { item = item }, nil
+    elseif command.type == 'chop_tree' or command.type == 'mine_rock' then
+        -- confirmed 检查在 E.execute 里提前做（CONFIRM_REQUIRED），这里只规范化
+        local count = tonumber(p.count) or 1
+        if count < 1 then count = 1 end
+        if count > WORK_MAX_COUNT then count = WORK_MAX_COUNT end
+        local radius = tonumber(p.radius) or 12
+        if radius < 2 then radius = 2 end
+        if radius > WORK_MAX_RADIUS then radius = WORK_MAX_RADIUS end
+        local args = { count = count, radius = radius }
+        -- 目标可选：传了必须命中对应白名单（chop 只看树，mine 只看矿石）
+        -- 注意：不能写 `cond and A[x] or B[x]` —— A[x] 为 nil 时会错误回退到 B[x]，
+        -- 导致 chop 接受了矿石目标（这是实测抓到的真 bug）。
+        if p.target ~= nil and p.target ~= '' then
+            local allowed
+            local list
+            if command.type == 'chop_tree' then
+                allowed = CHOP_TARGETS[p.target]
+                list = 'evergreen/twiggytree/mushtree/tree'
+            else
+                allowed = MINE_TARGETS[p.target]
+                list = 'rock/rock1/rock2/rock_flintless'
+            end
+            if allowed == nil then
+                return nil, 'invalid_target: 目标不在白名单（只支持 ' .. list .. '）'
+            end
+            args.target = allowed
+        end
+        return args, nil
+    elseif command.type == 'pick_up_item' then
+        local item = PICKUP_ITEMS[p.item]
+        if item == nil then
+            return nil, 'invalid_item: pick_up 只支持 flint/rocks/log/twigs/cutgrass/berries（固定白名单）'
+        end
+        local count = tonumber(p.count) or 1
+        if count < 1 then count = 1 end
+        if count > GATHER_MAX_COUNT then count = GATHER_MAX_COUNT end
+        local radius = tonumber(p.radius) or 12
+        if radius < 2 then radius = 2 end
+        if radius > GATHER_MAX_RADIUS then radius = GATHER_MAX_RADIUS end
+        return { item = item, count = count, radius = radius }, nil
     end
     return nil, 'unknown_action'
 end
@@ -191,6 +299,17 @@ local function startAction(command, report, startedMs)
     lastMove.text = nil
     lastMove.command_id = command.id
 
+    -- Phase 5 M4：动作前背包快照（完成后做差 → 记录实际获得数量，任务书 §7.3）
+    local lootBefore = nil
+    local lootSet = LOOT_PREFABS[command.type]
+    if lootSet ~= nil then
+        local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+        if player ~= nil then
+            lootBefore = {}
+            for _, prefab in ipairs(lootSet) do lootBefore[prefab] = count_prefab(player, prefab) end
+        end
+    end
+
     -- 回 EXECUTING（中间态），不是终态。Bridge 的 CommandQueue.settle 已支持 EXECUTING，
     -- 之后会用同一个 command_id 补发 SUCCEEDED / FAILED。
     -- 记录 pending，供 pollCompletion 在动作结束时补发终态。
@@ -201,6 +320,7 @@ local function startAction(command, report, startedMs)
         action = command.type,
         job = jobName,
         args = jobArgs,
+        loot_before = lootBefore,
     }
     lastReportFn = report
     if report ~= nil then
@@ -285,9 +405,33 @@ function E.pollCompletion()
         if interrupted then
             settle('FAILED', { action = pending.action, args = args, interrupted = true }, text)
         elseif outcome.ok then
-            -- 真实完成文本来自 Whale.actions（例如「采了 2 次」），原样带回，不编造数量
+            -- 真实完成文本来自 Whale.actions（例如「采了 2 次」），原样带回，不编造数量。
+            -- Phase 5 M4：附带程序层的独立核验 ——
+            --   · 砍/矿/捡：背包前后做差，记录实际获得数量（§7.3「完成后检查掉落物」）
+            --   · 装备：直接查手上装备的 prefab 是否与请求一致
+            local verify = nil
+            if LOOT_PREFABS[pending.action] ~= nil and pending.loot_before ~= nil then
+                local player = Whale ~= nil and Whale.util ~= nil and Whale.util.player() or nil
+                if player ~= nil then
+                    verify = { gained = {} }
+                    local any = false
+                    for _, prefab in ipairs(LOOT_PREFABS[pending.action]) do
+                        local before = pending.loot_before[prefab] or 0
+                        local diff = count_prefab(player, prefab) - before
+                        if diff > 0 then
+                            verify.gained[prefab] = diff
+                            any = true
+                        end
+                    end
+                    verify.confirmed_gain = any
+                end
+            elseif pending.action == 'equip_item' and args ~= nil then
+                local got = equipped_hands_prefab()
+                verify = { equipped = got, requested = args.item,
+                    confirmed_gain = got == args.item }
+            end
             settle('SUCCEEDED', { action = pending.action, job = pending.job, args = args,
-                text = text, completed = true }, nil)
+                text = text, completed = true, verify = verify }, nil)
         else
             settle('FAILED', { action = pending.action, job = pending.job, args = args, text = text }, text)
         end
@@ -341,12 +485,37 @@ function E.execute(command, report)
             return deny(report, command.id, startedMs, 'invalid_argument',
                 'resource 必须是 twigs/grass/berries 之一（只允许固定白名单，不接受任意 prefab 名）')
         end
+    elseif kind == 'equip_item' then
+        local item = (command.params or {}).item
+        if type(item) ~= 'string' or EQUIP_ITEMS[item] == nil then
+            return deny(report, command.id, startedMs, 'invalid_argument',
+                'item 必须是 axe/pickaxe/torch 之一（固定白名单）')
+        end
+    elseif kind == 'pick_up_item' then
+        local item = (command.params or {}).item
+        if type(item) ~= 'string' or PICKUP_ITEMS[item] == nil then
+            return deny(report, command.id, startedMs, 'invalid_argument',
+                'item 必须是 flint/rocks/log/twigs/cutgrass/berries 之一（固定白名单）')
+        end
+    end
+
+    -- 4.5) 人工确认（任务书 §11：砍伐/采矿初期建议人工确认）。
+    -- **程序层强制**：confirmed !== true 直接拒，绝不靠提示词。
+    if CONFIRM_REQUIRED[kind] == true and (command.params or {}).confirmed ~= true then
+        return deny(report, command.id, startedMs, 'confirmation_required',
+            kind .. ' 需要人工确认：参数必须显式带 confirmed=true')
     end
 
     -- 5) 提前用 buildJobArgs 校验一遍（避免等控制权 assert 回调后才报参数错）
+    --    错误码透传：invalid_target / invalid_item / unknown_resource 等，
+    --    让上层能区分"目标错"和"参数错"，而不是一律 invalid_argument。
     local earlyArgs, earlyErr = buildJobArgs(command)
     if earlyArgs == nil then
-        return deny(report, command.id, startedMs, 'invalid_argument', tostring(earlyErr))
+        local msg = tostring(earlyErr)
+        local code = 'invalid_argument'
+        local head = string.match(msg, '^(%w+):')
+        if head ~= nil then code = head end
+        return deny(report, command.id, startedMs, code, msg)
     end
 
     -- 6) 控制权二次校验（问 Bridge，不自己存状态）
