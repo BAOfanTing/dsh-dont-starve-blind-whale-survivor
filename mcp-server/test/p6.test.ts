@@ -54,6 +54,7 @@ function context(overrides: {
   head?: string | null
   items?: Array<{ prefab: string; count?: number }>
   isNight?: boolean
+  isDusk?: boolean
   inLight?: boolean | null
   season?: string
   remaining?: number | null
@@ -99,8 +100,8 @@ function context(overrides: {
       day: 12,
       elapsedDaysInSeason: 8,
       remainingDaysInSeason: overrides.remaining === undefined ? 12 : overrides.remaining,
-      isDay: !(overrides.isNight ?? false),
-      isDusk: false,
+      isDay: !(overrides.isNight ?? false) && !(overrides.isDusk ?? false),
+      isDusk: overrides.isDusk ?? false,
       isNight: overrides.isNight ?? false,
       temperature: 20,
       isRaining: overrides.isRaining ?? false,
@@ -355,6 +356,33 @@ test('P6-M2：低温/高温/潮湿/雷雨都会出现在环境选项里', () => 
   assert.ok(rainy.options.some((option) => option.kind === 'lightning_rain'))
 })
 
+test('P6-M2（真机回归）：黄昏没光也要报"该备灯"，并进 P2 优先级', () => {
+  // 真机踩到：只判 is_night，黄昏不给预警；等真黑了才 P0，那时已经在挨打
+  const dusk = context({ isDusk: true, inLight: false })
+  const plan = planEscape(dusk)
+  const option = plan.options.find((entry) => entry.kind === 'darkness_light')
+  assert.ok(option !== undefined, '黄昏没光要给出备灯选项')
+  assert.equal(option?.urgency, 'P2')
+
+  const decision = arbitrate({
+    ctx: dusk,
+    threat: assessThreat(dusk),
+    readiness: assessReadiness(dusk),
+    escape: plan,
+    season: assessSeason(dusk),
+  })
+  assert.equal(decision.priority, 'P2')
+  assert.equal(decision.action, 'LIGHT')
+  assert.equal(isToolAllowed(decision, 'gather_resource').allowed, true, '要允许采草（做火把）')
+  assert.equal(isToolAllowed(decision, 'start_combat').allowed, false, '黄昏不该开新战线')
+
+  // 背包里有火把就不算危险
+  const withTorch = context({ isDusk: true, inLight: false, items: [{ prefab: 'torch', count: 1 }] })
+  const torchPlan = planEscape(withTorch)
+  assert.ok(!torchPlan.options.some((entry) => entry.kind === 'darkness_light' && entry.urgency === 'P2' && entry.priority === 65),
+    '背包里有火把时不该再报"必须现在备灯"')
+})
+
 // ───────────────────────── 季节 ─────────────────────────
 
 test('P6-M5：季节来自世界状态；拿不到剩余天数必须报"不可靠"', () => {
@@ -458,7 +486,10 @@ test('P6-M7：黑夜无光 → P0 LIGHT；状态良好 → P5 全开', () => {
   })
   assert.equal(darkDecision.priority, 'P0')
   assert.equal(darkDecision.action, 'LIGHT')
-  assert.equal(isToolAllowed(darkDecision, 'chop_tree').allowed, false)
+  assert.equal(isToolAllowed(darkDecision, 'chop_tree').allowed, false, '夜里砍树太慢，照旧禁')
+  // 真机回归：没材料时还必须能采（否则"不能采 → 点不上灯"死锁）
+  assert.equal(isToolAllowed(darkDecision, 'gather_resource').allowed, true, '黑夜里采草/捡树枝是点灯前置，不能禁')
+  assert.equal(isToolAllowed(darkDecision, 'craft_item').allowed, true)
 
   const fine = context({ items: [{ prefab: 'healingsalve', count: 2 }, { prefab: 'cookedmeat', count: 3 }, { prefab: 'log', count: 8 }, { prefab: 'winter_hat', count: 1 }, { prefab: 'heatrock', count: 1 }, { prefab: 'torch', count: 1 }, { prefab: 'cutgrass', count: 8 }] })
   const fineDecision = arbitrate({

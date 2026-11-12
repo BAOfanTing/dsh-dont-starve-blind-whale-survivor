@@ -25,6 +25,8 @@ local R = {}
 local REFLEX_ID = "reflex"
 
 local last = {}          -- 上一次触发的时间（防抖）
+local recent = {}        -- 最近做过的事（给 get_state 看）
+local REFLEX_ID = "reflex"
 local COOLDOWN = {
     heal = 8,
     light = 6,
@@ -42,9 +44,23 @@ end
 
 local function say(p, text)
     if p == nil then return end
+    -- 透明化：反射层做过的事要能被 AI 看到（写进 get_state），
+    -- 不然模型会看到"状态自己变了"却不知道为什么，容易误判。
+    recent[#recent + 1] = { t = U.now(), text = text }
+    if #recent > 5 then table.remove(recent, 1) end
     pcall(function()
         if p.components.talker ~= nil then p.components.talker:Say(text, 3) end
     end)
+end
+
+--- 最近 60 秒内反射层自己做过的事（observe 会读）
+function R.Recent()
+    local out = {}
+    local now = U.now()
+    for _, item in ipairs(recent) do
+        if now - item.t <= 60 then out[#out + 1] = item.text end
+    end
+    return out
 end
 
 local function has_light(p)

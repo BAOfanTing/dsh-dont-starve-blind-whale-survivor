@@ -37,6 +37,7 @@ export interface StartCombatRequest {
   decision: CombatDecision | null
   params?: {
     radius?: number
+    max_enemies?: number
     max_duration_s?: number
     retreat_hp_percent?: number
     kite_distance?: number
@@ -144,6 +145,7 @@ export class CombatController {
       const submitted = await this.deps.enqueue('start_combat', {
         ...(targetPrefab === null ? {} : { target_prefab: targetPrefab }),
         ...(request.params?.radius === undefined ? {} : { radius: request.params.radius }),
+        ...(request.params?.max_enemies === undefined ? {} : { max_enemies: request.params.max_enemies }),
         ...(request.params?.max_duration_s === undefined ? {} : { max_duration_s: request.params.max_duration_s }),
         ...(request.params?.retreat_hp_percent === undefined ? {} : { retreat_hp_percent: request.params.retreat_hp_percent }),
         ...(request.params?.kite_distance === undefined ? {} : { kite_distance: request.params.kite_distance }),

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
+const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
 /** 假的 GLOBAL：只实现模组真的用到的那部分 API。 */
 const STUB = `
@@ -232,7 +233,7 @@ test('模组能在假游戏里加载，状态文字说得清楚', async () => {
     local text, data = Whale.observe.Build(player)
     assert(data.ready == true, "应该能读到玩家")
     assert(data.x == 12 and data.z == 45, "格子坐标不对：" .. tostring(data.x) .. "," .. tostring(data.z))
-    assert(data.day == 2, "天数不对")
+    assert(data.day == 3, "天数不对（cycles=2 时人看到的是第 3 天，和 A 栈观察器同一口径）")
     for _, want in ipairs({
         "第3天", "白天", "秋季", "威尔逊", "生命 45/150", "饥饿 120/150",
         "背包", "浆果 ×6", "斧头", "火把", "(13,44)", "常青树", "蜘蛛", "25/25血", "燃料 60%",
@@ -734,27 +735,40 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
   assert.equal(status, lua.LUA_OK, 'modmain.lua 加载失败（游戏里就是这句会让启动崩溃）：' + fail())
 
   lauxlib.luaL_loadstring(L, to_luastring(`
-    assert(#MODIMPORTS == 27, "应该 modimport 了 27 个模块（Phase 5 +reflex，Phase 6 +threat_observer/combat_executor），实际 " .. #MODIMPORTS)
+    -- M1.0：模块数从 28 降到 8（A 栈的 19 个 + bws_config 已归档，见 docs/M1_0_migration_report.md）
+    -- 用「相对顺序」断言：以后再加模块不用改一串下标
+    local function idx(name)
+        for i, v in ipairs(MODIMPORTS) do
+            if v == name then return i end
+        end
+        return nil
+    end
     assert(MODIMPORTS[1] == "scripts/whale/json.lua", "第一个应该是 json.lua")
-    assert(MODIMPORTS[4] == "scripts/whale/actions.lua", "动作模块的位置")
-    assert(MODIMPORTS[5] == "scripts/whale/reflex.lua", "M1 的保命反射层要跟上（在 actions 之后、bridge 之前）")
-    assert(MODIMPORTS[6] == "scripts/whale/bridge.lua", "文件桥的位置")
-    assert(MODIMPORTS[7] == "scripts/whale/hud.lua", "小窗的位置")
-    assert(MODIMPORTS[8] == "scripts/main/json_encoder.lua", "Phase 1 的编码器要跟上")
-    assert(MODIMPORTS[9] == "scripts/main/player_observer.lua", "Phase 1 的玩家观察器要跟上")
-    assert(MODIMPORTS[12] == "scripts/main/entity_observer.lua", "Phase 1 的实体扫描要跟上")
-    assert(MODIMPORTS[13] == "scripts/main/threat_observer.lua", "Phase 6 的威胁观察器要跟上（在 entity 之后）")
-    assert(MODIMPORTS[14] == "scripts/main/state_serializer.lua", "Phase 1 的序列化器要跟上")
-    assert(MODIMPORTS[15] == "scripts/main/observer_manager.lua", "Phase 1 的观察器管理器要跟上")
-    assert(MODIMPORTS[16] == "bws_config.lua", "Phase 2 的生成配置要跟上")
-    assert(MODIMPORTS[17] == "scripts/main/config.lua", "Phase 2 的 config 要跟上")
-    assert(MODIMPORTS[19] == "scripts/main/connection.lua", "Phase 2 的连接管理要跟上")
-    assert(MODIMPORTS[22] == "scripts/main/commands.lua", "Phase 2 的命令接收要跟上")
-    assert(MODIMPORTS[23] == "scripts/main/action_executor.lua", "Phase 5 M2 的动作执行器要跟上")
-    assert(MODIMPORTS[24] == "scripts/main/net.lua", "Phase 2 的网络调度要跟上")
-    assert(MODIMPORTS[25] == "scripts/main/probe.lua", "Phase 2 的探针要跟上")
-    assert(MODIMPORTS[26] == "scripts/main/task_runner.lua", "Phase 5 M6 的任务链要在战斗执行器之前")
-    assert(MODIMPORTS[27] == "scripts/main/combat_executor.lua", "Phase 6 的战斗执行器要最后加载")
+    -- M1.0 收敛：只允许 B 栈（scripts/whale）这一条链
+    for _, name in ipairs({
+        "scripts/whale/json.lua", "scripts/whale/util.lua", "scripts/whale/observe.lua", "scripts/whale/actions.lua",
+        "scripts/whale/macros.lua", "scripts/whale/reflex.lua", "scripts/whale/bridge.lua", "scripts/whale/hud.lua",
+        -- M1.1：配置出口 + 观察对象唯一入口
+        "scripts/whale/config.lua", "scripts/whale/actor.lua",
+    }) do
+        assert(idx(name) ~= nil, "少了 modimport：" .. name)
+    end
+    -- 防回归：A 栈（scripts/main）已归档到 archive/phase-a/，决不能再被 modimport 回来。
+    -- 要恢复某一段（比如 M4 的战斗 Kiting），必须单独评估、单独加载，不能整条链一起起。
+    for _, name in ipairs(MODIMPORTS) do
+        assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
+        assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
+    end
+    assert(#MODIMPORTS == 10, "只该 modimport 10 个 B 栈模块，实际 " .. #MODIMPORTS)
+    assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
+    assert(idx("scripts/whale/config.lua") < idx("scripts/whale/actor.lua"), "actor 要在 config 之后")
+    assert(idx("scripts/whale/actor.lua") < idx("scripts/whale/observe.lua"), "观察器要在 Actor Provider 之后")
+    assert(idx("scripts/whale/util.lua") < idx("scripts/whale/observe.lua"), "util 要在观察之前")
+    assert(idx("scripts/whale/observe.lua") < idx("scripts/whale/actions.lua"), "观察要在动作之前")
+    assert(idx("scripts/whale/actions.lua") < idx("scripts/whale/macros.lua"), "宏要加载在动作之后")
+    assert(idx("scripts/whale/macros.lua") < idx("scripts/whale/bridge.lua"), "宏要在文件桥之前")
+    assert(idx("scripts/whale/reflex.lua") < idx("scripts/whale/bridge.lua"), "反射层要在文件桥之前")
+    assert(idx("scripts/whale/hud.lua") == #MODIMPORTS, "hud 要最后")
     assert(#POSTINITS == 3, "应该有 3 个 postinit，实际 " .. #POSTINITS)
     assert(CPOSTS[1] == "screens/playerhud", "应该往玩家 HUD 上挂小窗")
     assert(Whale.files.state == "whale_state.json", "文件名表没装上")

@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
+const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
 const STUB = `
 CLOCK = 1000
@@ -33,6 +34,8 @@ BOSS_TAG = false
 TARGET_ATTACKING = false
 TARGET_HP = 100
 FOUND = {}
+INV_ITEMS = {}
+EQUIP_LOG = {}
 
 GLOBAL = {}
 GLOBAL.pcall = pcall
@@ -122,8 +125,7 @@ BWS2 = {
 }
 
 PLAYER = {
-    prefab = 'wilson',
-    Transform = { GetWorldPosition = function() return 10, 0, 10 end },
+    prefab = 'wilson',    Transform = { GetWorldPosition = function() return 10, 0, 10 end },
     HasTag = function() return false end,
     ClearBufferedAction = function() end,
     IsValid = function() return true end,
@@ -144,7 +146,13 @@ PLAYER = {
             Stop = function() STOPS = STOPS + 1 end,
             PushAction = function() end,
         },
-        inventory = { GetEquippedItem = function() return nil end },
+        inventory = {
+            GetEquippedItem = function() return nil end,
+            ForEachItem = function(self, fn)
+                for _, it in ipairs(INV_ITEMS) do fn(it) end
+            end,
+            Equip = function(self, item) EQUIP_LOG[#EQUIP_LOG + 1] = item.prefab end,
+        },
     },
 }
 
@@ -183,7 +191,7 @@ function load(fengari, modules) {
   }
   run(STUB, '假环境')
   for (const module of modules) {
-    run(readFileSync(join(MOD, 'scripts', 'main', module), 'utf8'), module)
+    run(readFileSync(join(LEGACY_HOME, 'scripts', 'main', module), 'utf8'), module)
   }
   return { run }
 }
@@ -365,8 +373,53 @@ test('P6-M4：状态机拒绝非法迁移（IDLE 不能直接 COMPLETE）', asyn
   `)
 })
 
-// ───────────────────────── 两侧白名单一致 ─────────────────────────
+test('P6-M4：周围敌对超过上限 → 拒绝开战（被围攻不接单，硬门槛在 Lua）', async () => {
+  const { run } = await luaWith('threat_observer.lua', 'combat_executor.lua')
+  run(`
+    -- 真机教训（2026-11-12）：青蛙雨时 20 只青蛙在场，单杀一只是送人头
+    FOUND = {
+      make_entity({ prefab = 'frog', x = 13, z = 10 }),
+      make_entity({ prefab = 'frog', x = 14, z = 10 }),
+      make_entity({ prefab = 'frog', x = 15, z = 10 }),
+      make_entity({ prefab = 'frog', x = 16, z = 10 }),
+    }
+    REPORTS = {}
+    BWS2.combat.executeCommand({ id = 'c20', type = 'start_combat',
+      params = { controller_id = 'C1', session_id = 'S1', confirmed = true } }, report, 0)
+    local rep = find_report('FAILED')
+    assert(rep ~= nil, '4 个敌人时应拒绝')
+    assert(string.find(rep.error, 'too_many_enemies', 1, true) ~= nil,
+      '错误码应是 too_many_enemies，实际 ' .. tostring(rep and rep.error))
+    assert(BWS2.combat.status().state == 'IDLE', '被拒绝时不应进入状态机')
 
+    -- 上限调到 5 时应该放行
+    REPORTS = {}
+    BWS2.combat.executeCommand({ id = 'c21', type = 'start_combat',
+      params = { controller_id = 'C1', session_id = 'S1', confirmed = true, max_enemies = 5 } }, report, 0)
+    assert(find_report('EXECUTING') ~= nil, '上限 5 时应放行')
+  `)
+})
+
+test('P6-M4：手上空着时从背包挑伤害最高的武器装备（只装备，不制作）', async () => {
+  const { run } = await luaWith('threat_observer.lua', 'combat_executor.lua')
+  run(`
+    INV_ITEMS = { { prefab = 'axe' }, { prefab = 'spear' }, { prefab = 'torch' } }
+    EQUIP_LOG = {}
+    FOUND = { make_entity({ prefab = 'spider', x = 13, z = 10 }) }
+    REPORTS = {}
+    BWS2.combat.executeCommand({ id = 'c22', type = 'start_combat',
+      params = { controller_id = 'C1', session_id = 'S1', confirmed = true } }, report, 0)
+    CLOCK = CLOCK + 2
+    BWS2.combat.Drive()   -- ASSESSING → PREPARING（这里会装备武器）→ ENGAGING
+    assert(#EQUIP_LOG == 1, '应装备一次，实际 ' .. tostring(#EQUIP_LOG))
+    assert(EQUIP_LOG[1] == 'spear', '应挑伤害最高的 spear，实际 ' .. tostring(EQUIP_LOG[1]))
+    assert(BWS2.combat.status().equipped_weapon == 'spear', 'status 要能查到装备了什么')
+    INV_ITEMS = {}
+    EQUIP_LOG = {}
+  `)
+})
+
+// ───────────────────────── 两侧白名单一致 ─────────────────────────
 function luaTableKeys(source, tableName) {
   const start = source.indexOf(`local ${tableName} = {`)
   assert.ok(start >= 0, `找不到 Lua 表 ${tableName}`)
@@ -378,15 +431,15 @@ function luaTableKeys(source, tableName) {
 }
 
 test('P6：Lua 的自动交战白名单与 TS 档案一致（防两边漂移）', async () => {
-  const luaSource = readFileSync(join(MOD, 'scripts', 'main', 'combat_executor.lua'), 'utf8')
+  const luaSource = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'combat_executor.lua'), 'utf8')
   const luaAuto = luaTableKeys(luaSource, 'AUTONOMOUS_ENEMIES')
   const profiles = await import('../mcp-server/dist/src/survival/profiles.js')
   assert.deepEqual(luaAuto, profiles.autoEngageList(), 'Lua AUTONOMOUS_ENEMIES 必须等于 TS autoEngageList')
 })
 
 test('P6：Lua 与 TS 的 Boss 名单一致', async () => {
-  const luaThreat = readFileSync(join(MOD, 'scripts', 'main', 'threat_observer.lua'), 'utf8')
-  const luaCombat = readFileSync(join(MOD, 'scripts', 'main', 'combat_executor.lua'), 'utf8')
+  const luaThreat = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'threat_observer.lua'), 'utf8')
+  const luaCombat = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'combat_executor.lua'), 'utf8')
   const profiles = await import('../mcp-server/dist/src/survival/profiles.js')
   const tsBosses = profiles.bossList()
   assert.deepEqual(luaTableKeys(luaThreat, 'BOSS_PREFABS'), tsBosses, 'threat_observer 的 Boss 名单要和 TS 一致')

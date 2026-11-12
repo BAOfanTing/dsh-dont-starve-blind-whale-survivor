@@ -1,14 +1,17 @@
-﻿# 启动 Phase 1 Bridge（读饥荒日志，提供 REST 接口）
+# 启动 Phase 1 Bridge（读饥荒日志，提供 REST 接口）
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File start-bridge.ps1
 #   powershell -ExecutionPolicy Bypass -File start-bridge.ps1 -Port 18081 -LogDir "C:\Users\你\OneDrive\文档\Klei\DoNotStarveTogether"
+#
+# ⚠ M1.0：Phase 1 Bridge 已归档到 archive/phase-a/bridge/，正式运行不用它
+#   （正式链路是文件桥 + 根目录 lib/*.js）。这个脚本只留给「想翻旧账」的场景。
 param(
     [int]$Port = 18081,
     [string]$LogDir = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
-$bridge = Join-Path $repo 'bridge'
+$bridge = Join-Path $repo 'archive\phase-a\bridge'
 
 if (-not (Test-Path (Join-Path $bridge 'dist\src\index.js'))) {
     Write-Host '还没编译，先跑 install-bridge.ps1 …'

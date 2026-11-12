@@ -1,4 +1,4 @@
-# macOS/Linux 也能用同样的思路，但脚本是给 Windows 写的
+﻿# macOS/Linux 也能用同样的思路，但脚本是给 Windows 写的
 node_modules/
 tests/node_modules/
 bridge/node_modules/
@@ -24,3 +24,6 @@ agent/node_modules/
 agent/dist/
 survival/node_modules/
 survival/dist/
+# M1.0：归档目录里的构建产物与依赖同样不入库
+archive/**/node_modules/
+archive/**/dist/

@@ -8,22 +8,28 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ACTION_NAMES, TOOLS, executeTool } from '../lib/tools.js'
+import { ACTION_NAMES, MACRO_NAMES, TOOLS, executeTool } from '../lib/tools.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
 
 const actionsLua = readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8')
-/** actions.lua 里注册的 JOBS.xxx */
-const LUA_JOBS = new Set([...actionsLua.matchAll(/^JOBS\.([a-z_]+)\s*=/gm)].map((m) => m[1]))
+const macrosLua = readFileSync(join(MOD, 'scripts', 'whale', 'macros.lua'), 'utf8')
+/** 模组里真正注册的动作：actions.lua 的 JOBS.xxx + macros.lua 的 A.register("xxx") */
+const LUA_JOBS = new Set([
+  ...[...actionsLua.matchAll(/^JOBS\.([a-z_]+)\s*=/gm)].map((m) => m[1]),
+  ...[...macrosLua.matchAll(/A\.register\("([a-z_]+)"/g)].map((m) => m[1]),
+])
+/** 暴露给模型的全部名字：原子动作 + 宏 */
+const EXPOSED = new Set([...ACTION_NAMES, ...MACRO_NAMES])
 
 test('模组里注册的动作，一个都不能在插件里漏掉（漏了模型永远用不上）', () => {
-  const missing = [...LUA_JOBS].filter((name) => !ACTION_NAMES.has(name)).sort()
+  const missing = [...LUA_JOBS].filter((name) => !EXPOSED.has(name)).sort()
   assert.deepEqual(missing, [], `这些动作模组里能做、但没暴露给模型：${missing.join('、')}`)
 })
 
 test('暴露给模型的动作，模组里都得真的存在（不然调用必然失败）', () => {
-  const extra = [...ACTION_NAMES].filter((name) => !LUA_JOBS.has(name)).sort()
+  const extra = [...EXPOSED].filter((name) => !LUA_JOBS.has(name)).sort()
   assert.deepEqual(extra, [], `这些动作暴露给模型了、但模组里没有实现：${extra.join('、')}`)
 })
 

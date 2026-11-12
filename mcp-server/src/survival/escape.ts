@@ -162,6 +162,23 @@ export function planEscape(ctx: SurvivalContext, options: EscapeOptions = {}): E
       confidence: 'high',
     })
     notes.push('光源状态来自引擎 Light 组件统计（light_sources_within_8）；为 0 且 in_light=false 才判定黑暗')
+  } else if (ctx.world.isDusk === true && ctx.environment.inLight === false
+    && !ctx.inventory.some((item) => ['torch', 'lantern', 'minerhat', 'pumpkin_lantern'].includes(item.prefab))
+    && (ctx.environment.lightSources ?? 0) === 0) {
+    // 真机发现（2026-11-12）：只判 is_night 会漏掉黄昏 —— 等真黑了才报警，那时已经在挨打了。
+    // 黄昏 + 没光 + 背包里也没有光源 = 现在就该备好，而不是等到夜里。
+    list.push({
+      kind: 'darkness_light',
+      priority: 65,
+      urgency: 'P2',
+      direction: null,
+      distance_tiles: null,
+      actions: ['gather_resource', 'craft_item', 'build_campfire', 'move_to_target'],
+      reason: '黄昏了、不在光照内、背包里也没有光源：太阳一落就会挨暗影生物的攻击',
+      risk: '现在做火把要 2 草 2 枝 / 营火要 3 草 2 木；材料不够就得先往基地/火堆方向走',
+      auto_allowed: false,
+      confidence: 'high',
+    })
   }
 
   // ② 低温 / ③ 高温

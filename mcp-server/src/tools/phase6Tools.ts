@@ -474,11 +474,22 @@ function threatTools(): ToolDefinition[] {
           : null
 
         const hazards: Array<{ key: string; label: string; severity: 'critical' | 'high' | 'medium' | 'low' | 'unknown'; detail: string }> = []
+        const isDusk = context.world.isDusk === true
         hazards.push({
           key: 'darkness',
           label: '黑暗',
-          severity: night ? (inLight === false ? 'critical' : inLight === true ? 'low' : 'unknown') : 'low',
-          detail: !night ? '白天，无黑暗风险' : inLight === null ? '夜间，但拿不到光照状态' : inLight ? '夜间，在光照内' : '夜间且不在光照内（极其危险）',
+          severity: night
+            ? (inLight === false ? 'critical' : inLight === true ? 'low' : 'unknown')
+            : isDusk
+              ? (inLight === false ? 'high' : 'medium')
+              : 'low',
+          detail: !night && !isDusk
+            ? '白天，无黑暗风险'
+            : night
+              ? (inLight === null ? '夜间，但拿不到光照状态' : inLight ? '夜间，在光照内' : '夜间且不在光照内（极其危险）')
+              : (inLight === false
+                ? '黄昏且不在光照内：太阳一落就没光了，现在就要备好火把/火堆'
+                : '黄昏，在光照内（注意别走远）'),
         })
         hazards.push({
           key: 'cold',
@@ -608,6 +619,7 @@ function combatWriteTools(): ToolDefinition[] {
           .optional()
           .describe(`要打的目标（白名单：${autoEngageList().join('/')}）；不传则打最近的合法目标`),
         radius: z.number().int().min(2).max(20).default(12).describe('搜索半径（格）'),
+        max_enemies: z.number().int().min(1).max(8).default(3).describe('周围敌对生物上限：超过就拒绝开战（被围攻不接单）'),
         max_duration_s: z.number().int().min(5).max(180).default(45).describe('最长战斗时长（秒）'),
         retreat_hp_percent: z.number().int().min(10).max(80).default(30).describe('生命低于该百分比自动脱离'),
         kite_distance: z.number().min(1.5).max(6).default(3).describe('风筝保持距离（格）'),
@@ -619,6 +631,7 @@ function combatWriteTools(): ToolDefinition[] {
         const args = rawArgs as {
           target_prefab?: string
           radius?: number
+          max_enemies?: number
           max_duration_s?: number
           retreat_hp_percent?: number
           kite_distance?: number
@@ -645,6 +658,7 @@ function combatWriteTools(): ToolDefinition[] {
           decision,
           params: {
             radius: args.radius,
+            max_enemies: args.max_enemies,
             max_duration_s: args.max_duration_s,
             retreat_hp_percent: args.retreat_hp_percent,
             kite_distance: args.kite_distance,

@@ -1290,6 +1290,223 @@ JOBS.heal = function(j, p)
     return "done", "用了 " .. j.data.name .. "（血量没明显变化）"
 end
 
+-- ─────────────────── M1.5：把接口尽量交还给 AI ───────────────────
+-- 设计原则（玩家定的方向）：**接口全暴露，AI 看状态自己决定调哪个**。
+-- 所以这里不是"多写几个专用动作"，而是：
+--   act            —— 泛化派发：游戏 ACTIONS 表里的任意动作，指定 target/item/坐标就能做
+--   list_actions   —— 列出当前版本游戏真正有的动作名（模型不用猜）
+--   list_recipes   —— 列出"现在能做什么/缺什么"（不用猜配方名）
+--   store / take   —— 容器存取（背包只有 15 格，这是硬需求）
+--   harvest        —— 锅/晾肉架出锅（现在料放进去拿不出来）
+
+--- 找到附近符合条件的容器（箱子/冰箱/背包这类）
+local function find_container(p, radius, want)
+    return U.find_nearest(p, radius or 10, nil, nil, function(e)
+        local c = e.components ~= nil and e.components.container or nil
+        if c == nil or e:HasTag("burnt") then return false end
+        if want ~= nil and want ~= "" then
+            local prefab = string.lower(tostring(e.prefab or ""))
+            if string.find(prefab, string.lower(want), 1, true) == nil then return false end
+        end
+        return true
+    end)
+end
+
+JOBS.act = function(j, p)
+    if j.step == "start" then
+        local want = string.upper(tostring(j.args.action or ""))
+        local action = GLOBAL.ACTIONS[want]
+        if action == nil then
+            local near = {}
+            for k in pairs(GLOBAL.ACTIONS) do
+                if type(k) == "string" and (want == "" or string.find(k, want, 1, true) ~= nil) then
+                    near[#near + 1] = k
+                end
+            end
+            table.sort(near)
+            return "fail", string.format("游戏里没有叫 %s 的动作。相近的：%s（用 list_actions 看全部）",
+                tostring(j.args.action), #near > 0 and table.concat(near, "、", 1, math.min(#near, 12)) or "（没有相近的）")
+        end
+
+        local target, pos = nil, nil
+        if j.args.x ~= nil and j.args.z ~= nil then
+            local cx, cz = U.tile_center(tonumber(j.args.x), tonumber(j.args.z))
+            pos = Vector3(cx, 0, cz)
+        elseif j.args.target ~= nil and j.args.target ~= "" then
+            local list = find_by_name(p, tonumber(j.args.radius) or 20, j.args.target)
+            if #list == 0 then return "fail", string.format("附近没有 %s", tostring(j.args.target)) end
+            target = list[1].ent
+        end
+
+        local item = nil
+        if j.args.item ~= nil and j.args.item ~= "" then
+            item = U.find_item(p, j.args.item)
+            if item == nil then return "fail", "背包里没有 " .. tostring(j.args.item) end
+        end
+
+        if busy(p) then
+            if U.now() - j.t0 > 20 then return "fail", "手上还忙着，这个动作没开始" end
+            return "run"
+        end
+
+        j.data.label = want
+        j.data.target_name = target ~= nil and U.pretty(target) or nil
+        push(p, BufferedAction(p, target, action, item, pos))
+        j.data.phase_start = U.now()
+        j.step = "acting"
+        return "run"
+    end
+
+    if busy(p) then
+        if U.now() - j.data.phase_start > 60 then return "fail", "这个动作做了 60 秒还没结束" end
+        return "run"
+    end
+    local where = j.data.target_name ~= nil and ("（" .. j.data.target_name .. "）") or ""
+    return "done", "做了 " .. tostring(j.data.label) .. where
+end
+
+JOBS.list_actions = function(j, p)
+    local want = j.args ~= nil and string.upper(tostring(j.args.filter or "")) or ""
+    local names = {}
+    for k, v in pairs(GLOBAL.ACTIONS) do
+        if type(k) == "string" and v ~= nil and (want == "" or string.find(k, want, 1, true) ~= nil) then
+            names[#names + 1] = k
+        end
+    end
+    table.sort(names)
+    if #names == 0 then
+        return "done", "没有匹配 «" .. tostring(j.args.filter) .. "» 的动作"
+    end
+    return "done", string.format("游戏里有 %d 个动作：\n%s\n（做的时候用 act {\"action\":\"名字\", \"target\":\"东西名或坐标\", \"item\":\"背包里的东西\"}）",
+        #names, table.concat(names, " "))
+end
+
+JOBS.list_recipes = function(j, p)
+    local builder = p.components.builder
+    if builder == nil then return "fail", "现在不能制作东西" end
+    local only_craftable = j.args.craftable_only == true
+    local limit = tonumber(j.args.limit) or 40
+    local craftable, known = {}, 0
+    for name, recipe in pairs(GLOBAL.AllRecipes or {}) do
+        if type(name) == "string" and recipe ~= nil then
+            local ok, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
+            if ok and knows then
+                known = known + 1
+                local ok2, has = pcall(function() return builder:HasIngredients(recipe) end)
+                local can = ok2 and has == true
+                if can then
+                    local parts = {}
+                    for _, ing in ipairs(recipe.ingredients or {}) do
+                        parts[#parts + 1] = string.format("%s×%d", tostring(ing.type), tonumber(ing.amount) or 1)
+                    end
+                    craftable[#craftable + 1] = string.format("%s（%s）", name, table.concat(parts, " "))
+                end
+            end
+        end
+    end
+    table.sort(craftable)
+    if only_craftable then
+        if #craftable == 0 then return "done", "现在材料不够，什么都做不了" end
+        return "done", string.format("现在材料够、能做的（共 %d 个）：\n%s", #craftable,
+            table.concat(craftable, "\n", 1, math.min(#craftable, limit)))
+    end
+    local head = string.format("你已解锁 %d 个配方，其中现在材料就够的有 %d 个：", known, #craftable)
+    return "done", head .. "\n" .. (#craftable > 0 and table.concat(craftable, "\n", 1, math.min(#craftable, limit)) or "（暂无）")
+end
+
+JOBS.store = function(j, p)
+    local item = U.find_item(p, j.args.item)
+    if item == nil then return "fail", "背包里没有 " .. tostring(j.args.item or "?") end
+    local chest = find_container(p, tonumber(j.args.radius) or 10, j.args.container)
+    if chest == nil then return "fail", "附近没有箱子/冰箱这类容器" end
+    local container = chest.components.container
+    local ok = pcall(function()
+        if item.components.inventoryitem ~= nil then
+            item.components.inventoryitem:RemoveFromOwner()
+        end
+        container:GiveItem(item, nil, p:GetPosition())
+    end)
+    if not ok then return "fail", "放不进 " .. U.pretty(chest) end
+    return "done", string.format("把 %s 放进 %s 了", U.pretty(item), U.pretty(chest))
+end
+
+JOBS.take = function(j, p)
+    local chest = find_container(p, tonumber(j.args.radius) or 10, j.args.container)
+    if chest == nil then return "fail", "附近没有箱子/冰箱这类容器" end
+    local container = chest.components.container
+    local want = j.args.item
+    local found = nil
+    local slots = 0
+    pcall(function() slots = container:GetNumSlots() end)
+    for slot = 1, math.max(slots, 1) do
+        local it = container:GetItemInSlot(slot)
+        if it ~= nil then
+            if want == nil or want == "" then
+                found = it
+                break
+            end
+            local prefab = string.lower(tostring(it.prefab or ""))
+            if string.find(prefab, string.lower(tostring(want)), 1, true) ~= nil then
+                found = it
+                break
+            end
+        end
+    end
+    if found == nil then
+        return "fail", string.format("%s 里没有 %s", U.pretty(chest), want ~= nil and tostring(want) or "东西")
+    end
+    local name = U.pretty(found)
+    pcall(function()
+        container:RemoveItem(found, true)
+        p.components.inventory:GiveItem(found, nil, p:GetPosition())
+    end)
+    return "done", string.format("从 %s 里拿出 %s", U.pretty(chest), name)
+end
+
+--- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable
+JOBS.harvest = function(j, p)
+    local want = j.args.target
+    local thing = U.find_nearest(p, tonumber(j.args.radius) or 12, nil, nil, function(e)
+        if want ~= nil and want ~= "" then
+            local prefab = string.lower(tostring(e.prefab or ""))
+            if string.find(prefab, string.lower(tostring(want)), 1, true) == nil then return false end
+        end
+        if e.components ~= nil and e.components.stewer ~= nil then return true end
+        if e.components ~= nil and e.components.harvestable ~= nil then
+            local ok, can = pcall(function() return e.components.harvestable:CanBeHarvested() end)
+            return ok and can == true
+        end
+        return false
+    end)
+    if thing == nil then return "fail", "附近没有能出锅/收割的东西（锅熟了？晾肉架干了？）" end
+
+    local stewer = thing.components.stewer
+    if stewer ~= nil then
+        local done_ok, is_done = pcall(function() return stewer:IsDone() end)
+        local cooking = false
+        pcall(function() cooking = stewer:IsCooking() end)
+        if done_ok and not is_done then
+            if cooking then
+                local left = 0
+                pcall(function() left = stewer:GetTimeToCook() end)
+                return "fail", string.format("%s 还在煮，大概还要 %d 秒", U.pretty(thing), math.floor(left or 0))
+            end
+            return "fail", U.pretty(thing) .. " 是空的，先往里放食材（用 act {\"action\":\"COOK\", \"target\":\"cookpot\", \"item\":\"…\"}）"
+        end
+        local ok2 = pcall(function() stewer:Harvest() end)
+        if not ok2 then return "fail", "出锅失败（可能锅被烧了）" end
+        return "done", "从 " .. U.pretty(thing) .. " 里把做好的菜拿出来了"
+    end
+
+    if busy(p) then
+        if U.now() - j.t0 > 20 then return "fail", "手不空，没收割成" end
+        return "run"
+    end
+    push(p, BufferedAction(p, thing, ACTIONS.HARVEST, nil))
+    j.data.phase_start = U.now()
+    return "done", "收割了 " .. U.pretty(thing)
+end
+
 JOBS.stop = function(j, p)
     if p ~= nil then
         client_stop(p)
@@ -1302,6 +1519,58 @@ JOBS.stop = function(j, p)
 end
 
 -- ─────────────────────────── 对外 ───────────────────────────
+
+--- 给宏（macros.lua）用：注册动作、推进子动作、数背包
+function A.register(name, fn)
+    JOBS[name] = fn
+end
+
+A.find_by_name = find_by_name
+A.push = push
+A.best_tool = best_tool
+A.best_food = best_food
+A.best_fuel = best_fuel
+A.find_container = find_container
+A.recipe_of = recipe_of
+
+--- 背包里某样东西有几个（prefab 模糊匹配）
+function A.count_item(p, prefab)
+    if p == nil or prefab == nil then return 0 end
+    local inv = p.components.inventory
+    if inv == nil then return 0 end
+    local want = string.lower(tostring(prefab))
+    local total = 0
+    inv:ForEachItem(function(item)
+        local name = string.lower(tostring(item.prefab or ""))
+        if string.find(name, want, 1, true) ~= nil then
+            total = total + U.count(item)
+        end
+    end)
+    return total
+end
+
+--- 同步推进一个子动作，直到它结束（宏在上面套循环）
+--- m 是一个"伪 job"表：{ sub = nil } 由调用方持有
+function A.run_sub(m, name, args)
+    local p = U.player()
+    if p == nil then return "fail", "现在没有玩家" end
+    if m.sub == nil then
+        m.sub = { name = name, args = args or {}, step = "start", data = {}, t0 = U.now() }
+    end
+    local fn = JOBS[m.sub.name]
+    if fn == nil then
+        m.sub = nil
+        return "fail", "没有这个子动作：" .. tostring(name)
+    end
+    local ok, status, text = pcall(fn, m.sub, p)
+    if not ok then
+        m.sub = nil
+        return "fail", "子动作出错：" .. tostring(status)
+    end
+    if status == "run" or status == nil then return "run", nil end
+    m.sub = nil
+    return status, text
+end
 
 -- ── 结果校验：背包净变化 ──
 -- 只回"干了 N 下"没有用：模型不知道到底拿到了什么，就会开始编造（phase5 的 M7 就是被这条坑到的）。

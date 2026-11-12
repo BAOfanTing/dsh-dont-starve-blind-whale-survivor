@@ -107,6 +107,11 @@ local MIN_MAX_DURATION = 5
 local MAX_MAX_DURATION = 180
 local DEFAULT_RETREAT_HP = 30
 local DEFAULT_KITE_DISTANCE = 3.0
+-- 周围敌对生物上限（硬门槛）：超过就拒绝开战。
+-- 真机教训（2026-11-12）：青蛙雨时 20 只青蛙在场，单杀一只是送人头。
+-- 这条**必须在 Lua 里**，不能只靠 Node 的优先级门禁（直连 Bridge 会绕过它）。
+local DEFAULT_MAX_ENEMIES = 3
+local MAX_MAX_ENEMIES = 8
 
 -- ─────────────── 运行时状态 ───────────────
 local state = "IDLE"
@@ -253,16 +258,9 @@ local function move_relative(p, target, keep_distance, away)
 end
 
 --- 攻击一次：优先 combat:TryAttack（走游戏自己的攻击条件检查），否则退回 BufferedAction。
-local function attack_once(p, target)
-    if p == nil or target == nil then return false, "no_target" end
-    local combat = p.components ~= nil and p.components.combat or nil
-    if combat ~= nil and combat.TryAttack ~= nil then
-        local ok, did = pcall(function() return combat:TryAttack(target) end)
-        if ok and did == true then return true, "try_attack" end
-        if ok then return false, "try_attack_refused" end
-        -- TryAttack 抛错：不要当成功，交给上层判断
-        return false, "try_attack_error"
-    end
+--- force_buffered=true 时**跳过** TryAttack 直接推 BufferedAction —— 用于
+--- "TryAttack 连续被拒"的兜底（真机踩到：没有武器/目标状态特殊时 TryAttack 会一直返回 false）。
+local function push_attack_action(p, target)
     local ACTIONS = GLOBAL.ACTIONS
     local BufferedAction = GLOBAL.BufferedAction
     if ACTIONS == nil or ACTIONS.ATTACK == nil or BufferedAction == nil then
@@ -278,6 +276,19 @@ local function attack_once(p, target)
     end)
     if ok_push then return true, "buffered_action" end
     return false, "push_failed"
+end
+
+local function attack_once(p, target, force_buffered)
+    if p == nil or target == nil then return false, "no_target" end
+    local combat = p.components ~= nil and p.components.combat or nil
+    if force_buffered ~= true and combat ~= nil and combat.TryAttack ~= nil then
+        local ok, did = pcall(function() return combat:TryAttack(target) end)
+        if ok and did == true then return true, "try_attack" end
+        if ok then return false, "try_attack_refused" end
+        -- TryAttack 抛错：不要当成功，交给上层判断（会累计拒绝次数后改走 BufferedAction）
+        return false, "try_attack_error"
+    end
+    return push_attack_action(p, target)
 end
 
 --- 能不能打（读游戏自己的判定；拿不到就当"可以试一次"，由 TryAttack 兜底）
@@ -300,6 +311,13 @@ local function player_attack_range(p, fallback)
 end
 
 -- ─────────────── 装备监控 ───────────────
+
+-- 手上武器的伤害（档案值，只用于"从背包里挑一把最好的"）
+local WEAPON_PREFABS = {
+    spear = 34, golden_spear = 34, hambat = 59, tentaclespike = 51, nightsword = 68,
+    glasscutter = 68, axe = 27.2, goldenaxe = 27.2, pickaxe = 27.2, goldenpickaxe = 27.2,
+    torch = 17, boomerang = 27.2,
+}
 
 local function equipped_of(slot_name)
     local p = player()
@@ -330,6 +348,33 @@ local function equipment_snapshot()
     }
 end
 
+--- 手上没武器时，从背包里挑一把伤害最高的**自动装备**。
+--- 真机教训（2026-11-12）：第一版不装备武器，空手 10 伤害打 100 血的青蛙要 10 下。
+--- 这里只从背包里挑，不制作、不偷东西。
+--- 注意：必须定义在 equipped_of 之后（Lua 的 local 作用域从声明处开始，
+--- 放在前面会解析成全局 nil —— 这个坑当场踩过一次）。
+local function equip_best_weapon()
+    local p = player()
+    if p == nil or p.components == nil or p.components.inventory == nil then return nil end
+    local hands = equipped_of("HANDS")
+    if hands ~= nil then return hands.prefab end
+    local inv = p.components.inventory
+    local best, best_damage = nil, 0
+    pcall(function()
+        inv:ForEachItem(function(item)
+            if item == nil then return end
+            local damage = WEAPON_PREFABS[item.prefab]
+            if damage ~= nil and damage > best_damage then
+                best, best_damage = item, damage
+            end
+        end)
+    end)
+    if best == nil then return nil end
+    local ok = pcall(function() inv:Equip(best) end)
+    if ok then return best.prefab end
+    return nil
+end
+
 -- ─────────────── 目标选择 ───────────────
 
 --- 找最近的可自动交战目标。白名单外的敌人一律不选（保守避战）。
@@ -355,6 +400,25 @@ local function find_target(p, want_prefab, radius)
     end
     if best == nil then return nil, "no_engageable_target" end
     return best, nil, best_dist
+end
+
+--- 数一下周围有多少个"会打我"的敌对生物（用于开战前的数量硬门槛）。
+--- 只数 hostile/monster 且带 health 的，跟 threat_observer 的判定保持一致。
+local function count_hostiles(p, radius)
+    local px, py, pz = world_pos(p)
+    if px == nil or GLOBAL.TheSim == nil then return 0 end
+    local ok_find, found = pcall(function()
+        return GLOBAL.TheSim:FindEntities(px, py or 0, pz, radius * TILE, nil,
+            { "INLIMBO", "FX", "DECOR", "NOCLICK" }, { "hostile", "monster" })
+    end)
+    if not ok_find or found == nil then return 0 end
+    local n = 0
+    for _, ent in ipairs(found) do
+        if is_valid(ent) and ent ~= p and not is_dead(ent) and (ent.components or {}).health ~= nil then
+            n = n + 1
+        end
+    end
+    return n
 end
 
 -- ─────────────── 结果回执 ───────────────
@@ -507,7 +571,8 @@ local function tick_body()
     end
 
     if state == "PREPARING" then
-        -- 面向目标、记下起始装备，然后进入交战
+        -- 面向目标、装备武器、记下起始装备，然后进入交战
+        ctx.equipped_weapon = equip_best_weapon()
         ctx.attack_range = player_attack_range(p, ctx.profile.attack_range)
         ctx.hp_start = ctx.hp_start or hp
         transition("ENGAGING", "prepared")
@@ -554,23 +619,21 @@ local function tick_body()
             return
         end
 
-        if d > range * 0.9 then
-            -- 够不着：走到攻击距离边上
-            move_relative(p, target, range * 0.75, false)
+        if d > range then
+            -- 够不着：**直接朝目标追**。
+            -- 真机教训（2026-11-12）：原来走到"目标旁边 1.5 格"再打，遇到不追我的青蛙
+            -- （它自己也在走）就永远差最后 0.2 格 —— 58 秒 0 次命中。追身位才是对的。
+            move_relative(p, target, 0, false)
             return
         end
 
-        local allowed = can_attack(p, target)
-        if allowed == false then
-            -- 冷却没好：保持距离等他出手
-            move_relative(p, target, ctx.kite_distance, true)
-            return
-        end
-
-        local ok_attack, how = attack_once(p, target)
+        local force_buffered = (ctx.attack_refusals or 0) >= 3
+        local ok_attack, how = attack_once(p, target, force_buffered)
+        ctx.attack_attempts = (ctx.attack_attempts or 0) + 1
         if ok_attack then
             ctx.hits = ctx.hits + 1
             ctx.last_attack_api = how
+            ctx.attack_refusals = 0
             ctx.backoff_until = t + ctx.profile.backoff
         else
             ctx.last_attack_error = how
@@ -578,6 +641,8 @@ local function tick_body()
                 finish("ABORTED", { reason = "no_attack_api" }, "attack_api_unavailable", "FAILED")
                 return
             end
+            -- TryAttack 连续被拒 → 下一 tick 改走 BufferedAction（Phase 5 验证过的路径）
+            ctx.attack_refusals = (ctx.attack_refusals or 0) + 1
             -- 打不出去就先退一步再说，别站着挨打
             move_relative(p, target, ctx.kite_distance, true)
             ctx.backoff_until = t + ctx.profile.backoff
@@ -707,6 +772,10 @@ function C.status()
         attack_range = ctx ~= nil and round(ctx.attack_range, 2) or nil,
         last_attack_api = ctx ~= nil and ctx.last_attack_api or nil,
         last_attack_error = ctx ~= nil and ctx.last_attack_error or nil,
+        attack_attempts = ctx ~= nil and ctx.attack_attempts or 0,
+        attack_refusals = ctx ~= nil and ctx.attack_refusals or 0,
+        equipped_weapon = ctx ~= nil and ctx.equipped_weapon or nil,
+        can_attack_now = (ctx ~= nil and is_valid(ctx.target)) and can_attack(p, ctx.target) or nil,
         duration_s = ctx ~= nil and round(now() - ctx.started_at, 1) or 0,
         transitions = transitions,
         counts = counts,
@@ -764,6 +833,15 @@ local function begin(command, report, startedMs, mode, want_state)
     if target == nil then return false, tostring(err or "no_target") end
     if BOSS_PREFABS[target.prefab] == true then
         return false, "boss_requires_supervised_combat: 目标是 Boss，需要人工监督"
+    end
+
+    -- 周围敌对数量硬门槛：被围攻时不接单（任务书 §4「敌人数量」/§12 安全默认）
+    local hostile_count = count_hostiles(p, radius)
+    local max_enemies = clamp(params.max_enemies, 1, MAX_MAX_ENEMIES, DEFAULT_MAX_ENEMIES)
+    if hostile_count > max_enemies then
+        counts.denied = counts.denied + 1
+        return false, string.format(
+            "too_many_enemies: 周围 %d 个敌对生物（上限 %d），先脱离再单杀", hostile_count, max_enemies)
     end
 
     local profile = KITE_PROFILES[target.prefab] or KITE_PROFILES.DEFAULT

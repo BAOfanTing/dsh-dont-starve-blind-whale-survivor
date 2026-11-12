@@ -139,9 +139,14 @@ export function arbitrate(input: ArbitrationInput): ArbitrationDecision {
   }
   if (darkness) {
     reasons.push('夜间且不在光照内：暗影生物会直接致命')
-    safetyRules.push('P0-黑暗：只允许点灯/撤离')
-    nextSteps.push('equip_item(torch) 或 craft_item(torch) 或 build_campfire（都需确认）', '有敌人时先 evade_threat')
-    return finish('P0', 'LIGHT', ['craft_item', 'build_campfire', 'equip_item', 'retreat_from_combat', 'abort_combat', 'evade_threat', 'stop_task'], '黑夜无光：必须先解决光源，禁止采集与探索')
+    safetyRules.push('P0-黑暗：只允许点灯/撤离/就地取材（砍树挖矿这种慢活禁止）')
+    // 真机发现（2026-11-12）：原来这里把 gather 也禁了 —— 结果"没材料 → 不能采 → 永远点不上灯"
+    // 死锁。采草/捡树枝是点灯的前置，必须放行；慢动作（砍树/挖矿）夜里确实危险，继续禁。
+    nextSteps.push('就地采草/捡树枝 → craft_item(torch)（2 草 2 枝）', '有现成的火把/灯笼就 equip_item', '材料不够就往火堆或基地走（move_to_target）')
+    return finish('P0', 'LIGHT',
+      ['craft_item', 'build_campfire', 'equip_item', 'eat_item', 'gather_resource', 'pick_up_item', 'move_to_target',
+        'recover_after_combat', 'retreat_from_combat', 'evade_threat', 'abort_combat', 'stop_task'],
+      '黑夜无光：必须先解决光源；砍树/挖矿这类慢活禁止，采草/捡树枝可以（点灯前置）')
   }
   if (freezing || overheating) {
     reasons.push(`体温 ${temp}℃：${freezing ? '过冷' : '过热'}会持续掉血`)
@@ -177,7 +182,18 @@ export function arbitrate(input: ArbitrationInput): ArbitrationDecision {
     return finish('P1', 'EVADE', ['retreat_from_combat', 'evade_threat', 'abort_combat', 'eat_item', 'craft_item', 'equip_item', 'stop_task'], '高威胁：先避险，不允许采集/砍矿')
   }
 
-  // ───────── P2：进食 / 治疗 / 保暖 / 降温 ─────────
+  // ───────── P2：进食 / 治疗 / 保暖 / 降温 / 备光 ─────────
+  // 真机发现（2026-11-12）：黄昏时只判 is_night，结果"天要黑了"这条没有进优先级，
+  // 等到真黑了才 P0 —— 那时角色已经在挨打了。黄昏没光就提前一档处理。
+  if (ctx.world.isDusk === true && ctx.environment.inLight === false) {
+    reasons.push('黄昏且不在光照内：入夜就没光了（这是 P0「黑暗」的前一步）')
+    safetyRules.push('P2-黄昏备光：先解决光源，别开新战线')
+    nextSteps.push('craft_item(torch)（2 草 2 枝）/ build_campfire（3 草 2 木）/ 往火堆或基地走')
+    return finish('P2', 'LIGHT',
+      ['craft_item', 'build_campfire', 'equip_item', 'eat_item', 'gather_resource', 'pick_up_item', 'move_to_target',
+        'recover_after_combat', 'abort_combat', 'retreat_from_combat', 'evade_threat', 'stop_task'],
+      '黄昏要点灯：先备光源，不要探索/开新战线')
+  }
   if (hunger !== null && hunger <= 30) {
     reasons.push(`饥饿 ${hunger}% 偏低`)
     safetyRules.push('P2-低饥饿：允许进食/采集，禁止开战')

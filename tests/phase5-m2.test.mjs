@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
+const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
 const STUB = `
 GLOBAL = {}
@@ -90,7 +91,7 @@ function load(fengari, extra = '') {
     }
   }
   run(STUB, '假游戏环境')
-  run(readFileSync(join(MOD, 'scripts', 'main', 'action_executor.lua'), 'utf8'), 'action_executor.lua')
+  run(readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'action_executor.lua'), 'utf8'), 'action_executor.lua')
   if (extra.length > 0) run(extra, '额外设置')
   const get = (name) => {
     lua.lua_getglobal(L, to_luastring(name))

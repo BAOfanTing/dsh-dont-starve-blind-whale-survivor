@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
+const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
 const STUB = `
 CLOCK = 1000
@@ -91,7 +92,7 @@ function load(fengari) {
     }
   }
   run(STUB, '假环境')
-  run(readFileSync(join(MOD, 'scripts', 'main', 'action_executor.lua'), 'utf8'), 'action_executor.lua')
+  run(readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'action_executor.lua'), 'utf8'), 'action_executor.lua')
   return { run }
 }
 
@@ -291,7 +292,7 @@ test('M4：status() 暴露 8 个写动作（M2 2 + M3 2 + M4 4）', async () => 
   `)
 })
 
-test('M4：三路互守 —— 观察器与文件桥都暴露 KeepAlive', async () => {
+test('M4：三路互守 —— 归档后的 A 栈互守保留，B 栈不再依赖 A 栈', async () => {
   const fengari = await import('fengari')
   const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari
   const L = lauxlib.luaL_newstate()
@@ -305,14 +306,18 @@ test('M4：三路互守 —— 观察器与文件桥都暴露 KeepAlive', async 
     }
   }
   // 只检查源码里三处互守调用是否都接上了（避免搭整套文件桥+观察器 stub）
-  const net = readFileSync(join(MOD, 'scripts', 'main', 'net.lua'), 'utf8')
-  const obs = readFileSync(join(MOD, 'scripts', 'main', 'observer_manager.lua'), 'utf8')
+  const net = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'net.lua'), 'utf8')
+  const obs = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'observer_manager.lua'), 'utf8')
   const brg = readFileSync(join(MOD, 'scripts', 'whale', 'bridge.lua'), 'utf8')
+  // 归档的 A 栈自己那套互守原样保留（将来要复活某一段时还能用）
   assert.match(net, /function N\.keepAlive/, 'net.lua 应有 keepAlive')
   assert.match(obs, /function O\.KeepAlive/, 'observer_manager.lua 应有 KeepAlive')
   assert.match(obs, /Whale\.bridge\.KeepAlive/, '观察器应反向守护文件桥')
   assert.match(brg, /function B\.KeepAlive/, 'bridge.lua 应有 KeepAlive')
-  assert.match(brg, /BWS2\.net\.keepAlive/, '文件桥应反向守护 net')
-  assert.match(brg, /BWS\.observer\.KeepAlive/, '文件桥应反向守护观察器')
+  // M1.0 收敛后的新事实：B 栈（scripts/whale）不再引用 A 栈的全局（BWS/BWS2），
+  // 否则两条链又会互相拉起，谁都能对同一个角色下发动作。
+  assert.doesNotMatch(brg, /BWS2\.net\.keepAlive/, 'M1.0 之后文件桥不该再拉 A 栈的 net')
+  assert.doesNotMatch(brg, /BWS\.observer\.KeepAlive/, 'M1.0 之后文件桥不该再拉 A 栈的观察器')
+  assert.doesNotMatch(brg, /BWS2/, 'M1.0 之后文件桥里不该出现 BWS2')
   assert.ok(true)
 })

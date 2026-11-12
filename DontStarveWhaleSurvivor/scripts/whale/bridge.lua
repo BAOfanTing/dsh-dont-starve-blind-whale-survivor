@@ -20,8 +20,17 @@ local B = {}
 local FILES = Whale ~= nil and Whale.files or {}
 
 local TICK = 0.2      -- 动作推进
-local READ_CMD = 0.3  -- 读指令
-local WRITE_STATE = 1 -- 写状态（会被设置覆盖）
+local READ_CMD = 0.3  -- 读指令（保留：io 通道优先，读不到再走持久化字符串）
+--- 状态写盘间隔：M1.1 起由 modinfo 的 INTERVAL 决定（config.lua 兜底 1 秒），
+--- 运行中还能被 whale_settings.json 的 interval 覆盖（插件侧热改）。
+local WRITE_STATE = 1
+do
+    local c = Whale ~= nil and Whale.config or nil
+    if c ~= nil and c.get ~= nil then
+        local ok, value = pcall(c.get, "state_interval")
+        if ok and tonumber(value) ~= nil then WRITE_STATE = math.max(0.2, tonumber(value)) end
+    end
+end
 
 local seq = 0
 local tick_count = 0
@@ -93,9 +102,44 @@ end
 -- ─────────────────── 状态 ───────────────────
 
 local function build_state()
-    local p = U.player()
-    local text, data = Whale.observe.Build(p)
+    local now = U.now()
+    local provider = Whale ~= nil and Whale.actor or nil
+    local actor, why = nil, nil
+    if provider ~= nil and provider.get_actor ~= nil then
+        local ok, got, reason = pcall(provider.get_actor)
+        if ok then actor, why = got, reason else why = tostring(got) end
+    else
+        actor = U.player()
+    end
+
     seq = seq + 1
+    -- M1.1：观察器只从 Actor Provider 拿实体；文本与结构化数据同源（data → text）
+    local text, data
+    local ok_build, err = pcall(function()
+        text, data = Whale.observe.BuildSample(actor, { seq = seq, now = now })
+    end)
+    if not ok_build or data == nil then
+        data = {
+            schema = "bws.state/1",
+            ready = false,
+            observer = {
+                snapshot_id = "s" .. tostring(seq),
+                sequence = seq,
+                timestamp = now,
+                status = "error",
+                errors = { "观察器出错：" .. tostring(err) },
+                unavailable_fields = {},
+            },
+        }
+        text = "# 快照 s" .. tostring(seq) .. " · 状态 error\n观察器出错：" .. tostring(err)
+    end
+    if actor == nil and why ~= nil and data.observer ~= nil then
+        data.observer.status = data.observer.status or "no_actor"
+        local errs = data.observer.errors or {}
+        errs[#errs + 1] = "没有观察对象：" .. tostring(why)
+        data.observer.errors = errs
+    end
+
     -- 诊断用：外面看这几个数字就知道模组是活着、还是找不到玩家
     data.players = U.count_players()
     data.tick = tick_count
@@ -129,14 +173,9 @@ end
 
 function B.Report(ok, text, cmd_id)
     local id = cmd_id or last_cmd_id
-    -- Phase 5 M2：把动作最终结果转给 HTTP 命令通道的 action_executor（一行 hook，不改原逻辑）
-    if BWS2 ~= nil and BWS2.actionExecutor ~= nil and BWS2.actionExecutor.onActionReport ~= nil then
-        pcall(BWS2.actionExecutor.onActionReport, ok and true or false, tostring(text or ""), id)
-    end
-    -- Phase 5 M6：把同一个动作结果也交给任务链引擎（任务链靠它判断这一步成没成）
-    if BWS2 ~= nil and BWS2.tasks ~= nil and BWS2.tasks.OnActionResult ~= nil then
-        pcall(BWS2.tasks.OnActionResult, ok and true or false, tostring(text or ""))
-    end
+    -- M1.0：A 栈（scripts/main）已归档，这里原来有两个转发钩子
+    -- （动作执行器的 onActionReport、任务链的 OnActionResult，都挂在 A 栈的全局表上）。
+    -- 现在结果只写一份给外面的 Node，不再有第二条链路需要它。
     pending_result = Whale.json.encode({
         v = 1,
         id = id,
@@ -259,14 +298,6 @@ end
 local function server_tick()
     tick_count = tick_count + 1
     server_last_tick_at = bridge_now()
-    -- Phase 5 M4 三路互守：文件桥是最细的周期任务（0.2s），顺手拉 net 与观察器一把。
-    -- pcall 隔离，任何一条挂了都不影响自己。
-    if BWS2 ~= nil and BWS2.net ~= nil and BWS2.net.keepAlive ~= nil then
-        pcall(BWS2.net.keepAlive)
-    end
-    if BWS ~= nil and BWS.observer ~= nil and BWS.observer.KeepAlive ~= nil then
-        pcall(BWS.observer.KeepAlive)
-    end
     step("读设置", poll_settings)
     step("读指令", poll_command)
     step("跑动作", function() Whale.actions.Tick() end)

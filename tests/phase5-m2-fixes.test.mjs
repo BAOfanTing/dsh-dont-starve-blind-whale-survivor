@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
+const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
 /** 通用假环境：可控时钟 + 可失效的周期任务 + 记录所有 HTTP 请求 */
 const STUB = `
@@ -129,7 +130,7 @@ function load(fengari, files, extra = '') {
     }
   }
   run(STUB, '假环境')
-  for (const f of files) run(readFileSync(join(MOD, 'scripts', 'main', `${f}.lua`), 'utf8'), `${f}.lua`)
+  for (const f of files) run(readFileSync(join(LEGACY_HOME, 'scripts', 'main', `${f}.lua`), 'utf8'), `${f}.lua`)
   if (extra.length > 0) run(extra, '额外设置')
   const get = (name) => {
     lua.lua_getglobal(L, to_luastring(name))

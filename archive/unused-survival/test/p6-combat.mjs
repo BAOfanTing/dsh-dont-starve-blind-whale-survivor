@@ -47,8 +47,12 @@ async function waitForGame(timeoutMs = 120_000) {
   while (Date.now() - started < timeoutMs) {
     const status = await api('/api/v1/bridge/status').catch(() => null)
     const sessions = status?.data?.sessions ?? []
-    const alive = sessions.find((session) => session.alive === true)
-    if (alive !== undefined) return alive
+    const alive = sessions.filter((session) => session.alive === true)
+    // 优先挑"master 分片且有玩家"的那个（caves 分片常年没玩家，选错了什么都看不到）
+    const best = alive.find((session) => session.shard === 'master' && session.player_status?.prefab !== undefined)
+      ?? alive.find((session) => session.player_status?.present === true)
+      ?? alive[0]
+    if (best !== undefined) return best
     await sleep(2000)
     const wait = Math.round((Date.now() - started) / 1000)
     if (wait % 10 === 0) console.log(`  等一下…已经等了 ${wait}s（游戏要进世界并且**没有暂停**）`)
@@ -163,17 +167,19 @@ async function main() {
   }
 
   section('⑤ 真实战斗（需要授权：会真的打怪）')
+  const lease = Date.now() + 300_000
   const sync = await api('/api/v1/control/sync', {
     method: 'POST',
     body: {
-      controller_id: 'P6_TEST',
-      session_id: 'P6S',
       mode: 'SUPERVISED',
-      lease_seconds: 120,
+      holder: 'P6_TEST',
+      session_id: 'P6S',
+      lease_expires_at: lease,
+      emergency_stop: false,
       reason: 'Phase 6 真机战斗验证',
     },
   })
-  check(sync.status === 200, '拿到控制权（SUPERVISED）', sync.data)
+  check(sync.status === 200 && sync.data?.control?.holder === 'P6_TEST', `拿到控制权（holder=${sync.data?.control?.holder ?? '?'}）`, sync.data)
 
   const started = await command('start_combat', {
     confirmed: true,
@@ -202,7 +208,7 @@ async function main() {
   console.log(`  abort_combat：${aborted.ok ? '已停止' : '被拒绝'} ${JSON.stringify(aborted.command?.result ?? aborted.error)}`)
   await api('/api/v1/control/sync', {
     method: 'POST',
-    body: { controller_id: 'P6_TEST', session_id: 'P6S', mode: 'SUPERVISED', holder: null, lease_seconds: 0, reason: '测试结束' },
+    body: { mode: 'SUPERVISED', holder: null, session_id: 'P6S', lease_expires_at: 0, emergency_stop: false, reason: '测试结束' },
   })
   summary()
 }

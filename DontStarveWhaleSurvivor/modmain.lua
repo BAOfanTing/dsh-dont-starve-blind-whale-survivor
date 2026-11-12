@@ -17,7 +17,7 @@ Whale = {
     -- 版本号跟 modinfo.lua 走：状态文件里的 mod 字段要和模组列表里显示的一致，
     -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
     -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
-    version = (type(version) == "string" and version) or "0.10.0",
+    version = (type(version) == "string" and version) or "0.12.0",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -50,46 +50,53 @@ end
 
 Whale.verbose = modconfig("VERBOSE", false) and true or false
 Whale.interval = tonumber(modconfig("INTERVAL", 1)) or 1
-Whale.reflex_on = modconfig("REFLEX", true) and true or false
+Whale.reflex_on = modconfig("REFLEX", false) and true or false
 
 modimport("scripts/whale/json.lua")
 modimport("scripts/whale/util.lua")
+-- 配置出口：把 modinfo 那几项夹到安全区间，作为唯一生效值（M1.1）
+modimport("scripts/whale/config.lua")
+-- 观察对象唯一入口（Actor Provider）：谁来当"我"由它回答（M1.1）
+modimport("scripts/whale/actor.lua")
+
+-- 把 modinfo 的配置真正绑到行为上（值会夹取；读不到就用默认值并记进 problems）
+if Whale.config ~= nil and Whale.config.build ~= nil then
+    Whale.config.build(function(key)
+        if key == "state_interval" then return modconfig("INTERVAL", 1) end
+        if key == "observe_interval" then return modconfig("OBSERVER_INTERVAL", 2) end
+        if key == "scan_radius" then return modconfig("OBSERVER_SCAN_RADIUS", 16) end
+        if key == "scan_seconds" then return modconfig("OBSERVER_SCAN_SECONDS", 4) end
+        if key == "reflex" then return modconfig("REFLEX", false) end
+        if key == "verbose" then return modconfig("VERBOSE", false) end
+        return nil
+    end)
+    Whale.interval = Whale.config.get("state_interval")
+end
+
 modimport("scripts/whale/observe.lua")
 modimport("scripts/whale/actions.lua")
--- 保命反射层：血见底/入夜没光/火要灭/被贴脸时自己动手（要有动作模块，所以放这之后）
+-- 宏（任务级接口）：采集到够数 / 砍到够木头 / 锅做饭 / 守夜（依赖动作模块，放它之后）
+modimport("scripts/whale/macros.lua")
+-- 保命反射层（默认关）：血见底/入夜没光/火要灭/被贴脸时自己动手
 modimport("scripts/whale/reflex.lua")
 modimport("scripts/whale/bridge.lua")
 modimport("scripts/whale/hud.lua")
 
--- ─────────── Phase 1（Blind Whale Survivor）：只读观察器，日志输出 ───────────
--- 和上面那套（文件桥 + 动作 + HUD）互不影响：这一层只 print JSON 到日志，由 TypeScript Bridge 读。
-modimport("scripts/main/json_encoder.lua")
-modimport("scripts/main/player_observer.lua")
-modimport("scripts/main/inventory_observer.lua")
-modimport("scripts/main/world_observer.lua")
-modimport("scripts/main/entity_observer.lua")
--- Phase 6 M1：威胁 / 环境观察器（敌人战斗状态、光源、体温、季节读数）
-modimport("scripts/main/threat_observer.lua")
-modimport("scripts/main/state_serializer.lua")
-modimport("scripts/main/observer_manager.lua")
-
--- ─────────── Phase 2：HTTP 通信（M2 只做能力验证，不执行任何游戏动作）───────────
--- bws_config.lua 由 node tools/write-bws-config.mjs 生成（含 token，不进仓库）；缺失就跳过
-pcall(modimport, "bws_config.lua")
-modimport("scripts/main/config.lua")
-modimport("scripts/main/http_client.lua")
-modimport("scripts/main/connection.lua")
-modimport("scripts/main/heartbeat.lua")
-modimport("scripts/main/telemetry.lua")
-modimport("scripts/main/commands.lua")
--- Phase 5 M2：Lua Action Executor（固定白名单 + 服务端权威 + 控制权二次校验）
-modimport("scripts/main/action_executor.lua")
-modimport("scripts/main/net.lua")
-modimport("scripts/main/probe.lua")
--- Phase 5 M6：任务链引擎（依赖 Whale.actions / Whale.util，所以放最后）
-modimport("scripts/main/task_runner.lua")
--- Phase 6 M4：战斗执行器 / Kiting（高频 tick 在 Lua 里跑，0.1 秒一次）
-modimport("scripts/main/combat_executor.lua")
+-- ─────────── A 栈（Phase 1~6，已归档，M1.0）───────────
+-- 这里原来还有 19 个 modimport：scripts/main/{json_encoder,player_observer,inventory_observer,
+-- world_observer,entity_observer,threat_observer,state_serializer,observer_manager,config,
+-- http_client,connection,heartbeat,telemetry,commands,action_executor,net,probe,task_runner,
+-- combat_executor}.lua，外加生成文件 bws_config.lua。
+--
+-- 它们和上面的 whale 那套是**两条并行的产品线**：都有自己的观察器、自己的通信通道
+-- （TheSim:QueryServer → 本地 HTTP）、自己的动作入口（BWS2.actionExecutor / combat / tasks），
+-- 而且都能对同一个角色下发动作。M1.0 的收敛决定只留 B 栈，所以整条 A 栈的运行入口在这里断开。
+--
+-- 代码没有删，全部搬到 archive/phase-a/scripts/main/（连同 archive/phase-a/bridge/ 这个 Node 端）。
+-- 想恢复某一段（比如 M4 的战斗 Kiting），从 archive 里搬回来再单独 modimport，别整条链一起起。
+--
+-- modimport("archive/phase-a/scripts/main/http_client.lua")   -- 例：只搬 HTTP 传输
+-- modimport("archive/phase-a/scripts/main/combat_executor.lua") -- 例：只搬战斗执行器
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
 AddClassPostConstruct("screens/playerhud", function(self, owner)
@@ -101,37 +108,16 @@ end)
 -- 每进入一次世界（读档 / 新建）启动一次
 AddGamePostInit(function()
     Whale.bridge.boot()
-    if BWS ~= nil and BWS.observer ~= nil then BWS.observer.Start() end
-    -- Phase 2 M2：只有服务端 + 配置里开了 probe 才跑通信探针
-    if BWS2 ~= nil and BWS2.probe ~= nil and GLOBAL.TheWorld ~= nil and GLOBAL.TheWorld.ismastersim then
-        local ok_cfg, cfg = pcall(BWS2.config.get)
-        if ok_cfg and type(cfg) == "table" then
-            -- M3：心跳 + 状态推送（正式通道）
-            if BWS2.net ~= nil then
-                pcall(BWS2.net.start)
-            end
-            -- M2：通信探针（诊断用，可在 bws_config.lua 里关掉）
-            if cfg.probe and BWS2.probe ~= nil then
-                BWS2.probe.start()
-            end
-        end
-    end
 end)
 
 AddPlayerPostInit(function(inst)
     Whale.bridge.boot()
     Whale.bridge.on_player(inst)
-    -- 世界可能比玩家晚就绪，这里再试一次（Start 自己是幂等的）
-    if BWS ~= nil and BWS.observer ~= nil then BWS.observer.Start() end
 end)
 
 -- 玩家睡觉醒来、死亡、被传送到别的世界时，别让上一件事继续卡着
 AddPlayerPostInit(function(inst)
     inst:ListenForEvent("death", function()
         if Whale.actions then Whale.actions.Abort("你死了") end
-        -- Phase 6 M4：死亡时战斗也必须立刻收手（不等观察器 tick）
-        if BWS2 ~= nil and BWS2.combat ~= nil and BWS2.combat.ForceStop ~= nil then
-            pcall(BWS2.combat.ForceStop, "你死了")
-        end
     end)
 end)

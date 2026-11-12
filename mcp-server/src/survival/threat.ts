@@ -350,6 +350,10 @@ export function assessThreat(ctx: SurvivalContext, overrides: Partial<ThreatConf
   if (ctx.world.isNight === true && ctx.environment.inLight === false) {
     environmentDanger += 0.6
     envReasons.push('夜间且不在光照内')
+  } else if (ctx.world.isDusk === true && ctx.environment.inLight === false) {
+    // 真机发现（2026-11-12）：黄昏不给加成，等于"天要黑了"这个信号被忽略
+    environmentDanger += 0.2
+    envReasons.push('黄昏且不在光照内（快要入夜）')
   }
   if (ctx.player.temperature !== null && (ctx.player.temperature < 5 || ctx.player.temperature > 65)) {
     environmentDanger += 0.3

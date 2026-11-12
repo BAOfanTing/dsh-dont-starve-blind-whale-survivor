@@ -59,8 +59,18 @@ function U.tile_dist(a, b)
     return U.dist(a, b) / U.TILE
 end
 
---- 现在操作的玩家。房主优先，其次第一个活人。
+--- 现在操作的玩家。
+--- M1.1 起这里只是**兼容层**：真正的"观察谁"由 Whale.actor（Actor Provider）决定，
+--- 所有调用方（actions / observe / reflex / bridge）都通过它拿实体。
+--- 只有在 actor.lua 没加载时（单文件测试）才退回下面这段旧的挑人逻辑。
 function U.player()
+    local provider = Whale ~= nil and Whale.actor or nil
+    if provider ~= nil and provider.get_actor ~= nil then
+        local ok, actor = pcall(provider.get_actor)
+        if ok then return actor end
+        return nil
+    end
+
     local players = GLOBAL.AllPlayers
     if players == nil then return nil end
     local best = nil

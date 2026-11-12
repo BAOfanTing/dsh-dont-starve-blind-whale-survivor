@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
+const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
 const STUB = `
 CLOCK = 1000
@@ -88,7 +89,7 @@ function load(fengari) {
     }
   }
   run(STUB, '假环境')
-  run(readFileSync(join(MOD, 'scripts', 'main', 'task_runner.lua'), 'utf8'), 'task_runner.lua')
+  run(readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'task_runner.lua'), 'utf8'), 'task_runner.lua')
   return { run }
 }
 
