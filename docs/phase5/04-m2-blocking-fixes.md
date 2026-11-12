@@ -1,18 +1,33 @@
 # Phase 5 M2 · 两个阻塞项修复（net.lua 自愈 + 动作终态回执）
 
-> 修的是上一轮真机验证暴露的两个反复出现的问题。
-> **沙箱测试全过（11 个新用例，全项目 432 全过），真机验证脚本已备好但尚未跑成**
-> （世界当时还没连上，见 §5）。如实标注，不把沙箱说成真机。
+> 两个修复**已通过真机验证**（2026-11-12 13:45）：故意重启 Bridge 后
+> `net.keepAlive` 在 2 秒内自动恢复心跳；`move_to` 走完
+> `EXECUTING → SUCCEEDED` 并带回游戏内真实完成文本。详见 §5.2。
+>
+> ⚠️ **诊断更正（2026-11-12 13:43）**：§1 早期把"通道断"归因为 `DoPeriodicTask` 失效，
+> 实测证明**前几轮的主因是游戏被暂停**（详见 §5.1）。`net.keepAlive` 修的是
+> "任务失效但观察器 Tick 还活着"的场景，**对游戏暂停无效，也不该有效**。
+> 该修复的价值由 §5.2 的"重启 Bridge 后自动恢复"直接验证。
 
-## 1. 阻塞项 A：net.lua 周期任务失效导致命令通道永久断
+## 1. 阻塞项 A：命令通道在运行中断掉
 
-### 根因（实测两次）
+### 现象（实测多次）
 
-`net.lua` 的 `N.start()` 只在 `AddGamePostInit` 调一次，心跳 / telemetry 补发 /
-命令轮询全挂在**单一 `DoPeriodicTask`**。世界重载或 Bridge 重启后该任务失效，
-但 `started` 守卫仍是 true，现有的 `IsValid()` 检查因为没人再调 `N.start()` 而永远没机会跑。
-结果：游戏进程还在（CPU 在涨）、观察器 telemetry 偶尔还在推，但心跳=0、命令 poll 停，
-所有动作命令永远 QUEUED。
+游戏进程还在（CPU 在涨），但 Bridge 侧心跳/telemetry/命令 poll 全停，
+`connected=False`、所有动作命令永远 QUEUED。
+
+### 根因：两个不同的原因，之前被混为一谈
+
+1. **主因（已实测确认）：游戏被暂停。**
+   DST 暂停时引擎不再触发 `DoPeriodicTask`，所有 Lua 周期任务（观察器、
+   `net.tick`、命令轮询）一起停摆 —— 见 §5.1 的时间戳证据。
+   这是**引擎的正常行为**，不是 bug；暂停时本来也不该执行游戏动作。
+2. **次因（推测，未单独证实）：世界重载后单个周期任务失效但其它任务仍活着。**
+   这种情况下 `started` 守卫仍是 true，现有 `IsValid()` 检查没机会跑。
+   `net.keepAlive` 针对的是这一类。
+
+**之前的诊断把 1 误判成 2，这里更正。** `keepAlive` 挂在观察器 Tick 上，
+而观察器在暂停时也停，所以它救不了暂停场景 —— 设计上就不该救。
 
 ### 修法：`N.keepAlive()`（不依赖任务对象"看着有效"，只看 tick 最近有没有真跑过）
 
@@ -119,25 +134,87 @@ B7  执行中重投不提前判 SUCCEEDED（pending_command_id 判据）        
 4. 授权后下发 `move_to`，验证命令从 `EXECUTING` 走到终态、并记录真实位移
 5. 自动清理控制权
 
-用户确认"重启世界后立刻测"，但准备执行时探测到：
-```
-alive=False stale=True  connected=False
-所有会话心跳距 ≈1157 秒，日志只有外部 GET 查询、没有 heartbeat/telemetry
-```
-即**世界还没连上**（可能仍在启动或需 DSH 界面确认）。没有空等、没有擅自重启，
-把代码先提交，真机验证留到世界起来后执行。
+用户确认"重启世界后立刻测"，第一次探测到世界还没连上；用户再次进入游戏后
+脚本等了 80 秒仍是 `alive=false connected=false`。
 
-**这两个修复目前只有沙箱验证，没有真机验证** —— 这是本轮必须明说的空白。
-尤其 `net.keepAlive` 的价值就在于"真机重启 Bridge 后能否自动恢复"，
-沙箱测试无法替代。
+### 5.1 最终查明：游戏被暂停（用户指出，实测证实）
+
+用户提示「我游戏打开地图暂停了，你好像 bridge 就连不上」。查 Bridge 日志：
+
+```
+最后一次游戏端 POST: 13:38:35 (heartbeat + telemetry)
+之后到 13:43:07: 只剩我脚本的 GET /state 与 /bridge/status，游戏端 0 条 POST
+新会话 41871255830AC8ED-master-1794461892: 心跳=9 推送=12，然后停
+DST 进程仍在：PID 15880/37196，13:34:07 启动，CPU 130.8 / 113.6
+```
+
+**DST 暂停时引擎不再触发 `DoPeriodicTask`**，所有 Lua 周期任务
+（观察器 Tick、`net.tick`、`commands.poll`）一起停摆 →
+心跳停 → Bridge 判超时 → `connected=False` → 命令永远 QUEUED。
+
+这是**引擎的正常行为**，不是 `net.lua` 的 bug，也不是 Bridge 重启导致的。
+前几轮反复出现的"通道断"，主因应该都是这个；之前把它归因为
+"周期任务失效"是**误判**，已在 §1 更正。
+
+`net.keepAlive()` 挂在观察器 Tick 上，而观察器在暂停时也停，
+所以**它对暂停场景无效，也不该有效**（暂停时本来就不该执行游戏动作）。
+该修复针对的是另一类场景：单个周期任务失效但观察器仍活着。
+
+**给后续真机测试的操作要求：游戏必须处于未暂停状态**（关掉地图/暂停菜单），
+否则任何命令都不会被 poll。
+
+### 5.2 真机验证通过（2026-11-12 13:45，用户取消暂停后）
+
+用户取消暂停后立刻跑 `survival/test/verify-fixes.mjs`（脚本会**故意重启 Bridge**
+来制造之前导致通道断掉的场景）。完整输出：
+
+```
+=== ① 等游戏会话连上 ===
+  t+0s alive=true connected=true stale=false
+  就绪: session=41871255830AC8ED-master-1794461892 玩家=沃尔夫冈 位置=(-82,70)
+
+=== ② 故意重启 Bridge ===
+  已停旧 Bridge → 新 Bridge PID=43948
+
+=== ③ 观察 net.keepAlive 是否自动恢复 ===
+  t+2s connected=true alive=true stale=false 心跳距=665ms
+  ✅ 自动恢复（之前会永久断）
+
+=== ④ 授权控制权 ===
+  sync HTTP 200 holder=FIX_C1
+
+=== ⑤ 下发 move_to，验证完整回执链路 ===
+  起点 (-82,70) → 目标 (-79,71)
+  enqueue HTTP 200 id=cmd_mwd4kygs_17
+  t+3s  状态=EXECUTING  result=null
+  终态  SUCCEEDED
+    result={"completed":true,"text":"走到了 (-79,71) 附近（还差 1.1 格）",
+            "action":"move_to","job":"move_to"}
+  终点 (-79,71) x=-314.05  位移=true
+
+=== ⑥ 清理 ===
+  最终 control: mode=SUPERVISED holder=null
+```
+
+**结论**：
+- **A（自愈）**：重启 Bridge 后 **2 秒**心跳自动恢复（665ms 前），
+  `net.keepAlive` 真机生效；之前每次重启都会永久断。
+- **B（终态回执）**：命令真的走了 `EXECUTING → SUCCEEDED` 两阶段，
+  终态带**游戏内真实完成文本**（"还差 1.1 格"正是 `Whale.actions.move_to` 的
+  到达判定输出），且角色真实位移 `(-82,70) → (-79,71)`。
+  `NEEDS_RECONCILIATION` 语义所需的"是否完成可知"链路已打通。
+- 控制权自动清理回 `SUPERVISED / holder=null`。
+
+两个修复至此**沙箱 + 真机双重验证通过**。
 
 ## 6. 剩余未完成（累积）
 
-1. **真机验证自愈与终态回执**（§5）
+1. ~~真机验证自愈与终态回执~~ ✅ 已在 §5.2 完成
 2. Controller HTTP 门面无认证
 3. 控制权变更未联动取消 Bridge 队列里已入队命令
 4. `move_to_target` 未实现（M3 采集时带出）
 5. DST 脚本源码仍打包，无法静态核对 `locomotor` 签名（但真机已验证可用）
+6. `unknown_completion` / `action_timeout` 分支只有沙箱验证，真机未触发（需制造断线场景）
 
 ## 7. 复现
 
