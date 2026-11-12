@@ -14,6 +14,7 @@
 import { loadConfig } from './config.js'
 import { createGameToolService } from './server/createServer.js'
 import { startStdioServer } from './transports/stdio.js'
+import { createHttpTransport } from './transports/http.js'
 import { createLogger } from './utils/logger.js'
 
 async function main(): Promise<void> {
@@ -36,9 +37,41 @@ async function main(): Promise<void> {
   const service = createGameToolService(config, logger)
 
   if (config.transport === 'http') {
-    // M5 才实现；这里明确拒绝，不假装支持
-    logger.error('Streamable HTTP 传输还没实现（计划在 M5）')
-    process.exit(2)
+    if (config.token.length === 0) {
+      logger.error('拒绝启动：HTTP 传输必须配 token（不允许裸奔）', {
+        hint: '用 BWS_TOKEN 指定，或先跑 node tools/write-bws-config.mjs',
+      })
+      process.exit(2)
+    }
+    const transport = createHttpTransport(service, config, logger, {
+      host: config.httpHost,
+      port: config.httpPort,
+      token: config.token,
+    })
+    try {
+      const port = await transport.listen()
+      logger.info('Streamable HTTP 传输已就绪', {
+        url: `http://${config.httpHost}:${port}`,
+        health: `http://${config.httpHost}:${port}/healthz`,
+        note: '只监听本机；需要 Bearer token；Host/Origin 已校验',
+      })
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? ''
+      if (code === 'EADDRINUSE') {
+        logger.error(`端口 ${config.httpPort} 已被占用`, { hint: '换端口：set BWS_MCP_PORT=8791' })
+      } else {
+        logger.error('HTTP 传输启动失败：' + String((error as Error)?.message ?? error))
+      }
+      process.exit(2)
+    }
+    const shutdown = (signal: string) => {
+      logger.info(`收到 ${signal}，关闭 HTTP 传输`)
+      void transport.close().then(() => process.exit(0))
+      setTimeout(() => process.exit(0), 2000).unref()
+    }
+    process.on('SIGINT', () => shutdown('SIGINT'))
+    process.on('SIGTERM', () => shutdown('SIGTERM'))
+    return
   }
 
   const handle = await startStdioServer(service, logger)
