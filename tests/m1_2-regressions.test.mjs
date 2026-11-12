@@ -39,6 +39,8 @@ player.components.inventory = {
 GLOBAL.AllPlayers = { player }
 GLOBAL.TheWorld = { state = { cycles = 1, phase = "day", season = "autumn", temperature = 20 },
                     HasTag = function() return false end, ismastersim = true }
+GLOBAL.setmetatable = setmetatable
+GLOBAL.getmetatable = getmetatable
 GLOBAL.pcall = pcall
 GLOBAL.tonumber = tonumber
 GLOBAL.error = error
@@ -69,7 +71,7 @@ async function loadLua() {
   }
   run(STUB, '假游戏')
   run('Whale = { verbose = false, version = "0.12.0" }', 'Whale')
-  for (const name of ['json', 'util', 'config', 'actor', 'observe']) {
+  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const get = (name) => {
@@ -88,8 +90,9 @@ test('M1.2-回归1 附近为空（legacy 且无桶）→ 说"没什么值得注�
   env.run(`
     local actor = Whale.actor.get_actor()
     local text, data = Whale.observe.Build(actor)
-    assert(data.nearby.status == "legacy", "空扫描也应该标 legacy")
-    assert(#data.nearby.buckets == 0, "这里应该没有实体桶")
+    assert(data.nearby.status == "empty", "空扫描要标 empty（不是 error），实际：" .. tostring(data.nearby.status))
+    assert(data.nearby.total_returned == 0, "这里应该没有实体")
+    assert(data.nearby.delta.status == "baseline", "第一次扫描的 delta 应该是 baseline")
     OUT = text
   `, '附近为空')
   const text = env.get('OUT')
@@ -103,10 +106,10 @@ test('M1.2-回归2 扫描出错（status=error）才说"读不到"', async () =>
     local actor = Whale.actor.get_actor()
     local text, data = Whale.observe.Build(actor)
     -- 直接把 nearby 换成出错形态，验证渲染分支
-    data.nearby = { status = "error", radius = 16, scan_seconds = 4 }
+    data.nearby = { status = "error", radius = 16, scan_seconds = 4, error = "find_entities_failed" }
     OUT = Whale.observe.Render(data)
   `, '扫描出错')
-  assert.match(env.get('OUT'), /暂时读不到（扫描出错）/)
+  assert.match(env.get('OUT'), /暂时读不到（扫描出错/)
 })
 
 test('M1.2-回归3 文件刚写完（<2 秒）时不再啰嗦"文件 0 秒前写过"', () => {

@@ -98,6 +98,8 @@ GLOBAL.TheWorld = {
     DoPeriodicTask = function() return { Cancel = function() end } end,
 }
 
+GLOBAL.setmetatable = setmetatable
+GLOBAL.getmetatable = getmetatable
 GLOBAL.pcall = pcall
 GLOBAL.tonumber = tonumber
 GLOBAL.error = error
@@ -135,7 +137,7 @@ async function main() {
                        result = "whale_result.json", io_result = "whale_io_result.json",
                        settings = "whale_settings.json", io_settings = "whale_io_settings.json",
                        pause = "whale_pause.json", io_pause = "whale_io_pause.json" }`, '文件名表')
-  for (const name of ['json', 'util', 'config', 'actor', 'observe', 'bridge']) {
+  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe', 'bridge']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   // 配置：用 modinfo 的默认值
@@ -195,7 +197,9 @@ async function main() {
     check('world season', snapshot.world?.season, 'autumn')
     check('world temp', snapshot.world?.world_temperature, 12)
     check('nearby radius', snapshot.nearby?.radius, 16)
-    check('nearby legacy marker', snapshot.nearby?.status, 'legacy')
+    check('nearby status (空场景)', snapshot.nearby?.status, 'empty')
+    check('nearby schema', snapshot.nearby?.schema, 'bws.nearby/1')
+    check('nearby delta baseline', snapshot.nearby?.delta?.status, 'baseline')
     check('unavailable has weather?', snapshot.unavailableFields.includes('world.world_configuration'), false)
     check('textSource', snapshot.textSource, 'lua')
     check('text has actor name', text.includes('沃利'), true)

@@ -116,6 +116,8 @@ function mkplayer(opts)
     return p
 end
 
+GLOBAL.setmetatable = setmetatable
+GLOBAL.getmetatable = getmetatable
 GLOBAL.pcall = pcall
 GLOBAL.tonumber = tonumber
 GLOBAL.error = error
@@ -136,7 +138,7 @@ const FILES = `Whale.files = {
     pause = "whale_pause.json", io_pause = "whale_io_pause.json",
 }`
 
-function loadLua(fengari, { modules = ['json', 'util', 'config', 'actor', 'observe'] } = {}) {
+function loadLua(fengari, { modules = ['json', 'util', 'config', 'actor', 'nearby', 'observe'] } = {}) {
   const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari
   const L = lauxlib.luaL_newstate()
   lualib.luaL_openlibs(L)

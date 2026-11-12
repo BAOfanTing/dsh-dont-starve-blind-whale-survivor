@@ -61,6 +61,18 @@ local function round1(v)
     return math.floor(v * 10 + 0.5) / 10
 end
 
+--- 作业动作的中文说法（渲染附近实体时用）
+local WORK_LABELS = { CHOP = "砍", MINE = "挖矿", DIG = "铲", HAMMER = "拆" }
+
+--- 数字渲染：整数不带小数（13），非整数保留 1 位（12.5）
+local function fmt_num(value)
+    if value == nil then return "?" end
+    local n = tonumber(value)
+    if n == nil then return "?" end
+    if math.abs(n - math.floor(n + 0.5)) < 0.05 then return string.format("%d", math.floor(n + 0.5)) end
+    return string.format("%.1f", n)
+end
+
 local function item_block(item, slot)
     if item == nil then return nil end
     local block = {
@@ -224,161 +236,35 @@ local function world_block(p, unavailable)
     return block
 end
 
--- ─────────────────────────── Nearby（沿用现有扫描，M1.4 才重写）───────────────────────────
+-- ─────────────────────────── Nearby（M1.4：结构化，实现搬到 nearby.lua）───────────────────────────
 
-local scan_cache = { at = nil, actor_id = nil, radius = nil, buckets = nil }
-
-local function workable_is(ent, action)
-    local w = ent.components ~= nil and ent.components.workable or nil
-    if w == nil or w.action == nil then return false end
-    return action ~= nil and w.action.id == action
-end
-
-local function entry_block(ent, dist, actor)
-    local x, _, z = U.pos(ent)
-    local block = {
-        prefab = ent.prefab,
-        name = U.pretty(ent),
-        dist = round1(dist),
-    }
-    if x ~= nil then
-        local tx, tz = U.tile_of(x, z)
-        block.tile_x = tx
-        block.tile_z = tz
-    end
-    return block
-end
-
-local function collect_buckets(actor, radius)
-    local groups = {}
-    local shown = {}
-
-    local function add(kind, label, list, limit, extra)
-        if list == nil or #list == 0 then return end
-        local kept = {}
-        for _, entry in ipairs(list) do
-            if not shown[entry.ent] then
-                shown[entry.ent] = true
-                kept[#kept + 1] = entry
-            end
-        end
-        if #kept == 0 then return end
-        local items = {}
-        for i = 1, math.min(#kept, limit or 6) do
-            local block = entry_block(kept[i].ent, kept[i].d / U.TILE, actor)
-            local more = extra ~= nil and extra(kept[i].ent) or nil
-            if more ~= nil then
-                for k, v in pairs(more) do block[k] = v end
-            end
-            items[#items + 1] = block
-        end
-        groups[#groups + 1] = {
-            kind = kind,
-            label = label,
-            total = #kept,
-            shown = #items,
-            truncated = #kept > #items,
-            items = items,
-        }
-    end
-
-    local pickables = U.find_all(actor, radius, nil, nil, function(e)
-        if e:HasTag("pickable") and not e:HasTag("barren") then return true end
-        if e.components ~= nil and e.components.harvestable ~= nil then
-            local ok, can = pcall(function() return e.components.harvestable:CanBeHarvested() end)
-            return ok and can == true
-        end
-        return false
-    end)
-    add("pickable", "可采", pickables, 6)
-
-    local ground = U.find_all(actor, radius, nil, nil, function(e)
-        local item = e.components ~= nil and e.components.inventoryitem or nil
-        if item == nil or item.owner ~= nil then return false end
-        if e:HasTag("bird") or e:HasTag("structure") or e:HasTag("cooker") then return false end
-        local c = e.components
-        if c ~= nil and (c.stewer ~= nil or c.cookpot ~= nil) then return false end
-        return true
-    end)
-    add("ground", "可捡", ground, 6, function(e)
-        local n = U.count(e)
-        return n > 1 and { count = n } or nil
-    end)
-
-    add("chop", "可砍", U.find_all(actor, radius, nil, nil, function(e) return workable_is(e, "CHOP") end), 5)
-    add("mine", "可挖矿", U.find_all(actor, radius, nil, nil, function(e) return workable_is(e, "MINE") end), 5)
-    add("dig", "可铲", U.find_all(actor, radius, nil, nil, function(e) return workable_is(e, "DIG") end), 3)
-    add("hammer", "可拆", U.find_all(actor, radius, nil, nil, function(e) return workable_is(e, "HAMMER") end), 3)
-
-    local monsters = U.find_all(actor, radius, { "hostile" }, nil, function(e)
-        local h = e.components ~= nil and e.components.health or nil
-        return h ~= nil and not h:IsDead()
-    end)
-    add("hostile", "敌人", monsters, 6, function(e)
-        local h = e.components.health
-        local targeting = false
-        local combat = e.components.combat
-        if combat ~= nil and combat.target ~= nil then targeting = combat.target == actor end
-        return {
-            hp = math.floor(h.currenthealth),
-            hp_max = math.floor(h.maxhealth),
-            targeting_actor = targeting,
-        }
-    end)
-
-    local fires = U.find_all(actor, radius, nil, nil, function(e)
-        return e.components ~= nil and e.components.fueled ~= nil and e:HasTag("fire")
-    end)
-    add("fire", "火堆", fires, 3, function(e)
-        local fuel = e.components.fueled
-        local percent = fuel ~= nil and fuel.GetPercent ~= nil and fuel:GetPercent() or nil
-        if percent == nil then return nil end
-        return { fuel_percent = math.floor(percent * 100) }
-    end)
-
-    add("structure", "建筑", U.find_all(actor, radius, { "structure" }, nil, function() return true end), 5)
-    add("ally", "队友", U.find_all(actor, radius + 20, { "player" }, nil, function(e) return e ~= actor end), 4)
-
-    return groups
-end
-
-local function nearby_block(actor, info, now, unavailable)
-    local radius = cfg("scan_radius", 16)
-    local seconds = cfg("scan_seconds", 4)
-
-    local cached = scan_cache
-    local fresh = cached.buckets ~= nil
-        and cached.actor_id == info.actor_id
-        and cached.radius == radius
-        and cached.at ~= nil
-        and (now - cached.at) < seconds
-
-    if fresh then
-        return {
-            status = "legacy",
-            radius = radius,
-            scan_seconds = seconds,
-            scanned_at = cached.at,
-            cached = true,
-            buckets = cached.buckets,
-        }
-    end
-
-    local ok, buckets = pcall(collect_buckets, actor, radius)
-    if not ok or buckets == nil then
+--- 附近实体这里只做"取数据"：扫描/分类/上限/引用/delta 全在 Whale.nearby 里。
+--- 这里只负责把配置和身份传进去，拿回一份可直接序列化的结构。
+local function nearby_block(actor, info, now, unavailable, identity)
+    local provider = Whale ~= nil and Whale.nearby or nil
+    if provider == nil or provider.Observe == nil then
         unavailable[#unavailable + 1] = "nearby"
-        return { status = "error", radius = radius, scan_seconds = seconds }
+        return { status = "error", radius = cfg("scan_radius", 16), scan_seconds = cfg("scan_seconds", 4),
+                 buckets = {}, error = "nearby_module_missing",
+                 delta = { status = "reset", added = {}, removed = {}, changed = {} } }
     end
-    scan_cache = { at = now, actor_id = info.actor_id, radius = radius, buckets = buckets }
-    return {
-        status = "legacy",
-        radius = radius,
-        scan_seconds = seconds,
-        scanned_at = now,
-        cached = false,
-        buckets = buckets,
-    }
+
+    local ok, result = pcall(provider.Observe, actor, info, now, {
+        radius = cfg("scan_radius", 16),
+        scan_seconds = cfg("scan_seconds", 4),
+        max_total = cfg("nearby_max_total", 60),
+        max_per_bucket = cfg("nearby_max_per_bucket", 12),
+        identity = identity,
+    })
+    if not ok or result == nil then
+        unavailable[#unavailable + 1] = "nearby"
+        return { status = "error", radius = cfg("scan_radius", 16), scan_seconds = cfg("scan_seconds", 4),
+                 buckets = {}, error = "nearby_failed",
+                 delta = { status = "reset", added = {}, removed = {}, changed = {} } }
+    end
+    return result
 end
+
 
 -- ─────────────────────────── 告警（只报事实）───────────────────────────
 
@@ -521,27 +407,78 @@ function O.Render(data)
     end
 
     local nearby = data.nearby
-    if nearby ~= nil and nearby.buckets ~= nil and #nearby.buckets > 0 then
-        lines[#lines + 1] = "附近（" .. tostring(nearby.radius) .. " 格内）："
-        for _, bucket in ipairs(nearby.buckets) do
-            local parts = {}
-            for _, item in ipairs(bucket.items or {}) do
-                local text = (item.name or item.prefab or "?") .. "(" .. tostring(item.tile_x) .. "," .. tostring(item.tile_z) .. ")"
-                    .. " 距" .. tostring(item.dist)
-                if item.count ~= nil and item.count > 1 then text = text .. " ×" .. item.count end
-                if item.hp ~= nil then text = text .. " " .. tostring(item.hp) .. "/" .. tostring(item.hp_max) .. "血" end
-                if item.targeting_actor then text = text .. " 正在追你" end
-                if item.fuel_percent ~= nil then text = text .. " 燃料 " .. tostring(item.fuel_percent) .. "%" end
-                parts[#parts + 1] = text
-            end
-            local tail = bucket.truncated and ("（还有 " .. tostring(bucket.total - bucket.shown) .. " 个）") or ""
-            lines[#lines + 1] = "  " .. bucket.label .. "：" .. table.concat(parts, "；") .. tail
+    if nearby ~= nil then
+        local head = "附近（" .. tostring(nearby.radius) .. " 格内"
+        local scan = nearby.scan or {}
+        if scan.reused then
+            head = head .. "，沿用 " .. tostring(math.floor((scan.age_ms or 0) / 100) / 10) .. " 秒前的扫描"
         end
-    elseif nearby ~= nil and nearby.status == "error" then
-        -- 只有"扫描出错"才说读不到；status=legacy 只说明"这套还是旧扫描"，不是故障（M1.2 修）
-        lines[#lines + 1] = "附近：暂时读不到（扫描出错）"
-    elseif nearby ~= nil and nearby.buckets ~= nil then
-        lines[#lines + 1] = "附近（" .. tostring(nearby.radius) .. " 格内）：没什么值得注意的"
+        if nearby.truncated then
+            head = head .. "，只显示 " .. tostring(nearby.total_returned) .. "/" .. tostring(nearby.total_found) .. " 个"
+        end
+        head = head .. "）："
+
+        if nearby.status == "error" then
+            lines[#lines + 1] = "附近：暂时读不到（扫描出错：" .. tostring(nearby.error or "?") .. "）"
+        elseif nearby.status == "empty" or nearby.total_returned == 0 then
+            lines[#lines + 1] = head .. "没什么值得注意的"
+        else
+            lines[#lines + 1] = head
+            local defs = (Whale.nearby ~= nil and Whale.nearby.BUCKETS) or {}
+            for _, def in ipairs(defs) do
+                local bucket = nearby.buckets ~= nil and nearby.buckets[def.key] or nil
+                if bucket ~= nil and #bucket > 0 then
+                    local parts = {}
+                    for _, item in ipairs(bucket) do
+                        local text = tostring(item.ref) .. " " .. tostring(item.label or item.prefab or "?")
+                        local pos = item.position or {}
+                        text = text .. "(" .. fmt_num(pos.x) .. "," .. fmt_num(pos.z) .. ")"
+                        text = text .. " 距" .. fmt_num(item.distance)
+                        if item.health ~= nil then
+                            text = text .. " " .. tostring(item.health) .. "/" .. tostring(item.max_health or "?") .. "血"
+                        end
+                        if item.stack_size ~= nil and item.stack_size > 1 then text = text .. " ×" .. tostring(item.stack_size) end
+                        if item.work_action ~= nil then text = text .. " 可" .. tostring(WORK_LABELS[item.work_action] or item.work_action) end
+                        if item.is_harvestable == true then text = text .. " 可收" end
+                        if item.fuel_percent ~= nil then text = text .. " 燃料 " .. tostring(item.fuel_percent) .. "%" end
+                        if item.targeting_you then text = text .. " 正在追你" end
+                        parts[#parts + 1] = text
+                    end
+                    lines[#lines + 1] = "  " .. def.label .. "：" .. table.concat(parts, "；")
+                end
+            end
+        end
+
+        local delta = nearby.delta
+        if delta ~= nil and delta.status == "ok"
+            and ((delta.added_count or 0) + (delta.removed_count or 0) + (delta.changed_count or 0)) > 0 then
+            local bits = {}
+            for _, item in ipairs(delta.added or {}) do
+                bits[#bits + 1] = "新出现 " .. tostring(item.ref) .. " " .. tostring(item.label or item.prefab)
+            end
+            if (delta.removed_count or 0) > 0 then
+                local names = {}
+                for _, item in ipairs(delta.removed or {}) do
+                    names[#names + 1] = tostring(item.label or item.prefab)
+                end
+                bits[#bits + 1] = "消失 " .. tostring(delta.removed_count) .. " 个（" .. table.concat(names, "、") .. "）"
+            end
+            for _, item in ipairs(delta.changed or {}) do
+                local fields = item.fields or {}
+                local what = {}
+                if fields.health ~= nil then
+                    what[#what + 1] = "生命 " .. tostring(fields.health.from) .. "→" .. tostring(fields.health.to)
+                end
+                if fields.distance ~= nil then what[#what + 1] = "距离变化" end
+                if fields.stack_size ~= nil then what[#what + 1] = "数量变化" end
+                if fields.is_harvestable ~= nil then what[#what + 1] = "可采集状态变了" end
+                if fields.work_action ~= nil then what[#what + 1] = "可作业状态变了" end
+                if fields.category ~= nil then what[#what + 1] = "分类变了" end
+                bits[#bits + 1] = "变化 " .. tostring(item.ref) .. " " .. tostring(item.label or item.prefab)
+                    .. ("" .. (#what > 0 and ("（" .. table.concat(what, "、") .. "）") or ""))
+            end
+            lines[#lines + 1] = "  变化：" .. table.concat(bits, "；")
+        end
     end
 
     local unavailable = obs.unavailable_fields or {}
@@ -633,7 +570,7 @@ function O.BuildData(actor, opts)
     if info ~= nil then
         data.player = player_block(actor, info, unavailable)
         data.world = world_block(actor, unavailable)
-        data.nearby = nearby_block(actor, info, now, unavailable)
+        data.nearby = nearby_block(actor, info, now, unavailable, data.identity)
         data.warnings = warnings(actor, data.player, data.world)
         data.dead = not info.alive
         data.x, data.z = info.tile_x, info.tile_z

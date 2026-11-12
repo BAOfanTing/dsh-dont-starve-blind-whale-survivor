@@ -162,6 +162,8 @@ NEARBY = {
 
 -- 模拟饥荒的模组沙箱：这些名字在 mod 环境里是 nil（0.1.0 用了 pcall，游戏启动就崩），
 -- 模组只能从 GLOBAL 里拿。把它们置 nil，就能在本地复现这类错误。
+GLOBAL.setmetatable = setmetatable
+GLOBAL.getmetatable = getmetatable
 GLOBAL.pcall = pcall
 GLOBAL.tonumber = tonumber
 GLOBAL.error = error
@@ -210,7 +212,7 @@ function loadMod(fengari) {
   run(STUB, '假游戏环境')
   run('Whale = { verbose = false, version = "0.1.0", files = {} }', 'Whale 表')
   run(FILES, '文件名')
-  for (const name of ['json', 'util', 'observe', 'actions']) {
+  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe', 'actions']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const global = (name) => {
@@ -750,6 +752,8 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         "scripts/whale/macros.lua", "scripts/whale/reflex.lua", "scripts/whale/bridge.lua", "scripts/whale/hud.lua",
         -- M1.1：配置出口 + 观察对象唯一入口
         "scripts/whale/config.lua", "scripts/whale/actor.lua",
+        -- M1.4：附近实体结构化（独立模块）
+        "scripts/whale/nearby.lua",
     }) do
         assert(idx(name) ~= nil, "少了 modimport：" .. name)
     end
@@ -759,10 +763,11 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
         assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
     end
-    assert(#MODIMPORTS == 10, "只该 modimport 10 个 B 栈模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 11, "只该 modimport 11 个 B 栈模块，实际 " .. #MODIMPORTS)
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
     assert(idx("scripts/whale/config.lua") < idx("scripts/whale/actor.lua"), "actor 要在 config 之后")
     assert(idx("scripts/whale/actor.lua") < idx("scripts/whale/observe.lua"), "观察器要在 Actor Provider 之后")
+    assert(idx("scripts/whale/nearby.lua") < idx("scripts/whale/observe.lua"), "附近实体模块要在观察器之前")
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/observe.lua"), "util 要在观察之前")
     assert(idx("scripts/whale/observe.lua") < idx("scripts/whale/actions.lua"), "观察要在动作之前")
     assert(idx("scripts/whale/actions.lua") < idx("scripts/whale/macros.lua"), "宏要加载在动作之后")

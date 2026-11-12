@@ -13,6 +13,18 @@ local io = GLOBAL.io
 
 local J = {}
 
+-- 空表的 JSON 形状天生有歧义：Lua 里 {} 既可能是空对象也可能是空数组。
+-- 需要"空也要是 []"的地方（比如 nearby 的分类桶），用 setmetatable(t, J.ARRAY) 标一下。
+-- setmetatable 在模组沙箱里可能没有，所以从 GLOBAL 取，取不到就退化成"不做标记"。
+local setmetatable = GLOBAL.setmetatable
+local getmetatable = GLOBAL.getmetatable
+J.ARRAY = { __jsonarray = true }
+local function mark_array(t)
+    if setmetatable ~= nil then pcall(setmetatable, t, J.ARRAY) end
+    return t
+end
+J.arr = mark_array
+
 local ESCAPES = {
     ['"'] = '\\"',
     ['\\'] = '\\\\',
@@ -49,6 +61,12 @@ local encode_value
 
 local function encode_table(v, out)
     local n = array_size(v)
+    local mt = getmetatable ~= nil and getmetatable(v) or nil
+    local forced_array = mt ~= nil and mt.__jsonarray == true
+    if forced_array and n == 0 then
+        out[#out + 1] = '[]'
+        return
+    end
     if n > 0 then
         out[#out + 1] = '['
         for i = 1, n do

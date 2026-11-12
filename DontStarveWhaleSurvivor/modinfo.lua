@@ -9,7 +9,7 @@ description = [[
 不需要截图，也不需要视觉模型。只在本地主机（自己开的世界）里生效。
 ]]
 author = "大肥鱼（参考 dsh-stardew-blind-whale-farmer 做的饥荒版）"
-version = "0.12.1"
+version = "0.13.0"
 
 api_version = 10
 dst_compatible = true
@@ -91,6 +91,30 @@ configuration_options = {
             { description = "4 秒", data = 4 },
             { description = "8 秒", data = 8 },
         },
+    {
+        name = "OBSERVER_NEARBY_MAX_TOTAL",
+        label = "附近实体总上限",
+        hover = "一次快照最多给 AI 看多少个附近实体（威胁/食物/资源/容器/建筑/生物/其它合计）。太少会漏掉东西，太多会涨 token。",
+        options = {
+            { description = "30 个", data = 30 },
+            { description = "60 个（默认）", data = 60 },
+            { description = "100 个", data = 100 },
+            { description = "200 个", data = 200 },
+        },
+        default = 60,
+    },
+    {
+        name = "OBSERVER_NEARBY_MAX_PER_BUCKET",
+        label = "每类实体上限",
+        hover = "每个分类（威胁/食物/资源/…）最多显示几个，避免一片浆果丛把别的都挤掉。",
+        options = {
+            { description = "6 个", data = 6 },
+            { description = "12 个（默认）", data = 12 },
+            { description = "20 个", data = 20 },
+            { description = "50 个", data = 50 },
+        },
+        default = 12,
+    },
         default = 4,
     },
 }

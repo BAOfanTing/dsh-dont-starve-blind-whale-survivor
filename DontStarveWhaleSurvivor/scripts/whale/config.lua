@@ -21,6 +21,8 @@ C.DEFAULTS = {
     observe_interval = 2,
     scan_radius = 16,
     scan_seconds = 4,
+    nearby_max_total = 60,
+    nearby_max_per_bucket = 12,
     reflex = false,
     verbose = false,
 }
@@ -31,6 +33,8 @@ C.RANGES = {
     observe_interval = { 0.5, 10 },
     scan_radius = { 4, 40 },
     scan_seconds = { 1, 60 },
+    nearby_max_total = { 10, 200 },
+    nearby_max_per_bucket = { 2, 50 },
 }
 
 C.values = {}
