@@ -130,7 +130,7 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
   }
 })
 
-test('tools/call：未实现的工具老实返回 NOT_IMPLEMENTED', async () => {
+test('tools/call：仍未实现的工具老实返回 NOT_IMPLEMENTED', async () => {
   const h = startServer()
   try {
     await h.request(1, 'initialize', {
@@ -140,11 +140,12 @@ test('tools/call：未实现的工具老实返回 NOT_IMPLEMENTED', async () => 
     })
     h.notify('notifications/initialized')
 
-    const call = await h.request(2, 'tools/call', { name: 'get_player_status', arguments: {} })
+    // get_recent_events 是唯一还没实现的（M4 才做事件流）
+    const call = await h.request(2, 'tools/call', { name: 'get_recent_events', arguments: {} })
     assert.equal(call.result.isError, true)
     assert.equal(call.result.structuredContent.ok, false)
     assert.equal(call.result.structuredContent.error.code, 'NOT_IMPLEMENTED')
-    assert.match(String(call.result.structuredContent.error.message), /M3/)
+    assert.match(String(call.result.structuredContent.error.message), /M4/)
     // 文本内容也要给 AI 看
     assert.match(call.result.content[0].text, /NOT_IMPLEMENTED/)
   } finally {
