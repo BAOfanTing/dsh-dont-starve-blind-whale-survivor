@@ -1,6 +1,6 @@
 # M1.4 · 附近实体观察数据结构（协议）
 
-> schema：`bws.nearby/1`（模组 0.13.0 起；**0.13.2 起 `snapshot_id` 带运行实例号**）
+> schema：`bws.nearby/1`（模组 0.13.0 起；0.13.2 起 `snapshot_id` 带运行实例号；0.13.4 起 `scan.duration_ms` 有真实精度与来源）
 > 生产者：Lua `scripts/whale/nearby.lua`（唯一实现），由 `observe.lua` 放进 `data.nearby`
 > 消费者：Node `lib/state/snapshot.js`（原样透传）→ `get_state`（text / json）
 > 原则：**只报真实读到的东西**；读不到就 `null` / 不出现；**GUID 只在 Lua 内部用于跨扫描匹配，绝不发给模型**。
@@ -20,14 +20,15 @@
   "cached": false,             // true = 本次没重扫，用的是上一次结果
   "max_total": 60,             // 来自 OBSERVER_NEARBY_MAX_TOTAL
   "max_per_bucket": 12,        // 来自 OBSERVER_NEARBY_MAX_PER_BUCKET
-  "total_found": 35,           // 扫到多少（去重、过滤后，截断前）
-  "total_returned": 20,        // 实际给出多少
+  "total_found": 35,           // ★ 候选数：FindEntities 结果里"通过了过滤+能分类+能取坐标"的实体数（不是引擎原始条数）
+  "total_returned": 20,        // 实际给出多少（= 所有桶条目之和）
   "truncated": true,           // total_returned < total_found
   "scan": {
-    "reused": false,           // 是否复用上次扫描
+    "reused": false,           // 是否复用上次扫描（true = 本次没有真正扫描）
     "timestamp": 1794500012.5, // 这次扫描发生的游戏时间（秒）
     "age_ms": 0,               // 距这次扫描多久（reused 时 > 0）
-    "duration_ms": 2,          // 扫描耗时（Lua 侧实测，诊断用）
+    "duration_ms": 0.7,        // 扫描耗时（毫秒，1 位小数；计量不可用时字段缺席 = null）
+    "duration_source": "os.clock", // os.clock | realtime | unavailable（0.13.4 起）
     "scan_seconds": 4
   },
   "buckets": { "threats": [], "food": [], "resources": [], "containers": [],
@@ -184,7 +185,19 @@ refs[snapshot_id] = { ["#1"] = <entity>, ["#2"] = <entity>, ... }
 | `added` | 这次进了 kept（有 `#N`）**且**上次完整扫描里没有 |
 | `removed` | 上次完整扫描有、这次完整扫描**也没有**（真消失）；带 `previous_ref`（仅历史） |
 | `changed` | 两次都在完整扫描**且这次进 kept（有 `#N`）**；窗口外的变化不报（无法操作） |
-| `not_returned_count` / `not_returned` | 扫到了但没进 kept；**没有引用**，不能作为动作目标 |
+| `not_returned_count` / `not_returned` | 扫到了但没进 kept；**没有引用**，不能作为动作目标（字段在 `delta` 下） |
+
+### 统计口径（0.13.4 明确）
+
+| 字段 | 精确含义 |
+|---|---|
+| `total_found` | `FindEntities` 结果里，**排除了**（自己 / 无效 / INLIMBO / 没有观察价值 / 无法分类 / 取不到坐标）之后的数量；`other` 兜底桶也算在内 |
+| `total_returned` | 实际进入七个桶的条目数（每实体只进一个桶） |
+| `truncated` | `total_returned < total_found` |
+| `delta.not_returned_count` | `total_found - total_returned`（单桶上限 + 总量上限共同造成） |
+| `scan.duration_ms` | 单次扫描耗时（毫秒，1 位小数）；`os.clock` 优先，退回 `TheSim:GetRealTime()`（引擎单位就是毫秒），都不可用则**字段缺席**（= null），**不写 0** |
+| `scan.duration_source` | 计时来源，便于解释性能数据 |
+| `scan.reused` | `true` = 本次没扫描，直接复用上一次结果（引用与 `snapshot_id` 都不变） |
 
 ### 什么时候 `status = "baseline"`（不报新增）
 
