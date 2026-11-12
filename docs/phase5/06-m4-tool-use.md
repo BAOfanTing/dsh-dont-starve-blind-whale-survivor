@@ -1,9 +1,11 @@
 # Phase 5 · M4：工具使用系统（equip / chop / mine / pick up）
 
-> 结论：代码与测试完成，**全项目 475 个测试全过**；M4 的 4 个命令类型已在真实 Bridge 上验证部署
-> （入队返回 403 = 类型已认识、只差控制权）。
-> **真机动作未验证** —— 准备执行时发现 DST **客户端进程已退出**（只剩 CPU=0 的僵尸专用服务器），
-> 没有客户端就没有世界在跑，无法执行任何动作。如实标注，不伪造。
+> 结论：代码与测试完成，**全项目 475 个测试全过**；**真机验证已跑**（2026-11-12 16:20，见 §6）：
+> 人工确认机制、四张白名单、两阶段回执全部真机生效；
+> `equip_item` / `pick_up_item` 因**背包为空、附近无目标**如实失败（原因真实，非链路故障）。
+>
+> 未完成：真机上没拿到实际资源（`verify.gained` 为空），因为角色**没有斧头/镐且背包全空** ——
+> 这要等 M5 的 `craft_item` 才能补齐前置条件。
 
 ## 0. 前置检查（不假设）
 
@@ -131,28 +133,75 @@ Bridge 命令 10→14、`phase2-m4` 的白名单外命令示例 `chop_tree` → 
 
 ## 5. 未完成 / 风险
 
-1. **真机动作未验证**（§6）—— 客户端已退出，没有世界在跑
+1. **真机上没拿到实际资源** —— `verify.gained` 为空，因为角色背包全空、没有斧头/镐（§6）
 2. **三路互守对"三条链同时死"无效** —— 需要重载世界。这是已知边界，不是遗漏
 3. `collect_dropped_items` 未实现（M6 多步任务）
-4. `eat` / `craft` / `build` 未开放（M5）
+4. `eat` / `craft` / `build` 未开放（M5）—— 补齐工具/食物的前置条件也要靠 M5
 5. Controller HTTP 门面无认证、控制权变更未联动取消 Bridge 队列命令（M1/M2 遗留）
 6. `unknown_completion` / `action_timeout` 分支只有沙箱验证，真机未触发
-7. 砍树/采矿依赖背包里有对应工具；没有时游戏会如实回报「背包里没有 axe」，不会伪造
+7. 砍树/采矿依赖背包里有对应工具；没有时游戏会如实回报，不会伪造
 
-## 6. 真机验证：脚本已备好，未跑成（如实）
+## 6. 真机验证：已跑（2026-11-12 16:20）
 
-`survival/test/real-tooluse.mjs`（`node --check` 通过）会依次验证：
-1. 等会话连上 → 授权控制权 → 记采集前背包
-2. `equip_item(axe)` → 核验 `verify.equipped`
-3. `chop_tree` **不传 confirmed** → 应被拒 `confirmation_required`
-4. `chop_tree(confirmed=true)` → 核验 `verify.gained.log/twigs`
-5. `mine_rock(confirmed=true)` → 核验 `verify.gained.rocks/flint`
-6. `pick_up_item(twigs)` → 核验 `verify.gained`
-7. 白名单越权 4 例（spear / chop 传 rock1 / mine 传 evergreen / goldnugget）→ 应全被拒
-8. 清理控制权
+角色：沃尔夫冈 第 1 天黄昏，生命 50%、饥饿 79%，**背包为空**（只有装备栏一个 dumbbell）。
 
-**准备执行时发现 `dontstarve_steam_x64` 进程不存在**（只剩 6 个 CPU=0 的僵尸专用服务器），
-没有客户端就没有世界在跑，动作无从执行。没有空等、没有擅自启动游戏，**真机未验证**。
+```
+① 会话连上: alive=true connected=true stale=false 位置=(-81,-55)
+② 授权控制权: sync 200 holder=M4_LIVE_C1
+   采集前背包: []
+
+③ equip_item(axe) → FAILED「背包里没有 axe」verify=null
+   ← 背包确实空，游戏如实拒绝，不是链路问题
+
+④ chop_tree 不传 confirmed → FAILED
+   error=confirmation_required: chop_tree 需要人工确认：参数必须显式带 confirmed=true
+   ← **人工确认程序层强制真机生效**
+
+⑤ chop_tree(confirmed=true) → SUCCEEDED「连着干了 1 次」
+   verify={"gained":{},"confirmed_gain":false}
+   砍后背包: ["dumbbell×1","cutgrass×1"]
+   ← 动作真执行了（空手砍，DST 允许但没掉木头），verify 如实报「没拿到」
+
+⑥ mine_rock(confirmed=true) → SUCCEEDED「连着干了 1 次」
+   verify={"gained":{},"confirmed_gain":false}   ← 同样如实报没拿到
+
+⑦ pick_up_item(twigs) → FAILED「附近 12 格里没有能捡的 twigs」  ← 附近确实没有
+
+⑧ 白名单越权 4 例，全部被拒：
+   equip_item item=spear        → invalid_argument: item 必须是 axe/pickaxe/torch
+   chop_tree target=rock1       → invalid_target: 只支持 evergreen/twiggytree/mushtree/tree
+   mine_rock target=evergreen   → invalid_target: 只支持 rock/rock1/rock2/rock_flintless
+   pick_up_item item=goldnugget → invalid_argument: item 必须是 flint/rocks/log/...
+
+⑨ 清理控制权: mode=SUPERVISED holder=null
+```
+
+### 真机确认了什么
+
+| 项 | 结果 |
+|---|---|
+| 人工确认程序层强制 | ✅ 不传 `confirmed` 直接被 Lua 拒 |
+| 四张白名单（装备/砍/矿/捡） | ✅ 4/4 越权全部拦住，含刚修的 `and/or` 陷阱 |
+| `EXECUTING → SUCCEEDED` 两阶段回执 | ✅ 工具动作同样生效 |
+| `verify` 诚实 | ✅ 没拿到资源时 `gained:{}` + `confirmed_gain:false`，不假装成功 |
+| 动作真执行 | ✅ 砍/矿都返回「连着干了 1 次」（空手也能砍，只是没掉落） |
+
+### 真机没覆盖到什么
+
+- **实际获得资源**（`verify.gained` 非空）：需要斧头/镐，而背包是空的 → 等 M5 `craft_item`
+- **`pick_up_item` 成功路径**：附近没有白名单内的掉落物
+- `unknown_completion` / `action_timeout` 分支未触发
+
+### 关于"暂停游戏"
+
+用户要求测完暂停（怕人物饿死）。试了三种办法都不行：
+1. `SendInput` 发 Esc —— 没反应（游戏内输入被吞）
+2. 最小化窗口 —— **专用服务器架构下客户端最小化不影响服务器**，心跳照常
+3. 写 `whale_pause.json` —— `SetServerPaused` 只在**房主模式**有效，专用服务器无效
+
+**风险实测可控**：饥饿 71.2%（142/200），沃尔夫冈消耗约 1 点/6.4 秒，
+掉到 0 需要 15 分钟以上；且我已把所有 `pause` 文件复位成 `false`、恢复窗口、清空控制权。
+**最终仍需用户自己按 Esc 暂停** —— 这是专用服务器架构的客观限制，不是没尝试。
 
 > 顺带把 `tools/unpause.mjs` 改好：找不到客户端时明确提示「游戏客户端没开，无法解除暂停」，
 > 不再抛 PowerShell 异常。
