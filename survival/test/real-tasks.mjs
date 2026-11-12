@@ -74,21 +74,21 @@ console.log('\n=== ④ 越权：start_task("rm_rf") 应被拒 ===')
 show('bad task', await run('start_task', { task: 'rm_rf' }, 20))
 
 console.log('\n=== ⑤ start_task(forage) 启动 ===')
-const start = await run('start_task', { task: 'forage' }, 30)
-show('start forage', start)
+const start = await run('start_task', { task: 'stock_logs' }, 30)
+show('start stock_logs', start)
 
 console.log('\n=== ⑥ 观察任务推进（每 3 秒查一次，最多 60 秒）===')
-for (let i = 1; i <= 20; i += 1) {
-  await sleep(3000)
+for (let i = 1; i <= 90; i += 1) {
+  await sleep(1000)
   const st = await run('get_task_status', {}, 15)
   const r = st?.result ?? {}
-  console.log(`  t+${i * 3}s running=${r.running} task=${r.task ?? '-'} step=${r.step_index ?? '-'}/${r.step_total ?? '-'} done=${r.steps_done ?? '-'} skipped=${r.steps_skipped ?? '-'} why=${r.current_why ?? '-'}`)
+  console.log(`  t+${i}s running=${r.running} task=${r.task ?? '-'} step=${r.step_index ?? '-'}/${r.step_total ?? '-'} done=${r.steps_done ?? '-'} skipped=${r.steps_skipped ?? '-'} why=${r.current_why ?? '-'}`)
   if (r.running !== true) { console.log(`  → 任务结束：${JSON.stringify(r).slice(0, 300)}`); break }
 }
 
 console.log('\n=== ⑦ 再启动一个任务然后 stop_task ===')
-const start2 = await run('start_task', { task: 'stock_logs' }, 30)
-show('start stock_logs', start2)
+const start2 = await run('start_task', { task: 'survive_night' }, 30)
+show('start survive_night', start2)
 await sleep(3000)
 const stop = await run('stop_task', {}, 30)
 show('stop', stop)

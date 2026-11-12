@@ -261,10 +261,18 @@ T.TASKS = TASKS
 -- ─────────────────────────── 运行时状态 ───────────────────────────
 
 local run = nil   -- { name, step_index, started_at, steps_done, steps_skipped, last_error, retries }
+-- 真机发现（2026-11-12）：任务跑完后 run 被清空，进度信息就丢了，
+-- 上层只能看到 running=false，不知道刚才那个任务做了几步、跳了几步、有没有失败。
+-- 所以保留一份最后一次任务的总结（只留纯数据，不含函数）。
+local last_run = nil
 
 local function task_status()
     if run == nil then
-        return { running = false }
+        local out = { running = false }
+        if last_run ~= nil then
+            out.last = last_run
+        end
+        return out
     end
     local tpl = TASKS[run.name]
     local total = tpl ~= nil and #tpl.steps or 0
@@ -309,6 +317,7 @@ function T.Start(name)
             return false, '已有动作在跑：' .. tostring(cur) .. '（先 stop）'
         end
     end
+    last_run = nil   -- 新任务开始，清掉上一次的总结
     run = {
         name = name,
         step_index = 1,
@@ -360,6 +369,11 @@ function T.Tick()
             run.name, run.steps_done, run.steps_skipped)
         print('[BWS2] ' .. text)
         release_controls(p)
+        last_run = {
+            task = run.name, ok = true, text = text,
+            steps_done = run.steps_done, steps_skipped = run.steps_skipped,
+            elapsed_s = now() - (run.started_at or now()),
+        }
         run = nil
         return text
     end
@@ -414,6 +428,11 @@ function T.Tick()
             local text = string.format('任务 %s 失败：%s', run.name, tostring(run.last_error))
             print('[BWS2] ' .. text)
             release_controls(p)
+            last_run = {
+                task = run.name, ok = false, text = text, error = run.last_error,
+                steps_done = run.steps_done, steps_skipped = run.steps_skipped,
+                elapsed_s = now() - (run.started_at or now()),
+            }
             run = nil
             return text
         end
@@ -443,6 +462,11 @@ function T.Tick()
             run.name, run.step_index, tostring(step.why))
         print('[BWS2] ' .. text)
         release_controls(p)
+        last_run = {
+            task = run.name, ok = false, text = text, error = text,
+            steps_done = run.steps_done, steps_skipped = run.steps_skipped,
+            elapsed_s = now() - (run.started_at or now()),
+        }
         run = nil
         return text
     end

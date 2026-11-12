@@ -365,6 +365,10 @@ local function job_work(j, p, action_id)
         j.data.until_gone = j.args.until_gone == true
         j.data.max_hits = tonumber(j.args.max_hits) or 30
         j.data.cur_hits = 0          -- 当前目标已经干了几下
+        -- 真机 bug（2026-11-12）：done_targets 在 busy 分支和 done_count 分支**都会累加**，
+        -- 同一棵树被算两次 → chop(count=3) 砍 1~2 棵就报"干倒了 3 个目标"但没真砍够。
+        -- 加 counted 标记，确保每个目标只计一次。
+        j.data.counted = false
         j.step = "next"
     end
     if j.step == "next" then
@@ -415,6 +419,7 @@ local function job_work(j, p, action_id)
         if item ~= nil then equip_if_needed(p, item) end
         local ba = BufferedAction(p, target, action, item)
         j.data.target = target
+        j.data.counted = false              -- 新目标，重置计数标记
         j.data.ba = ba                      -- 保存，连砍时复用（不重建，避免打断状态机）
         j.data.last_name = U.pretty(target)
         j.data.phase_start = U.now()
@@ -478,8 +483,17 @@ local function job_work(j, p, action_id)
                 if done_this then
                     -- 目标倒了：立刻松手，避免继续砍下一棵
                     hold_control(p, false)
-                    j.data.done_targets = (j.data.done_targets or 0) + 1
-                    j.data.done_count = math.max(j.data.done_count, 1)
+                    -- 真机 bug（2026-11-12 第二次）：done_this 只看"目标无效/动作变了"，
+                    -- 但如果这一斧根本没挥出去（cur_hits == 0），那是换目标而不是砍倒，
+                    -- 不能计数 —— 否则 chop(count=3) 会报"砍倒 3 个"实际只倒 1 棵。
+                    local actually_chopped = (j.data.cur_hits or 0) > 0
+                    if actually_chopped and not j.data.counted then
+                        j.data.counted = true
+                        j.data.done_targets = (j.data.done_targets or 0) + 1
+                    end
+                    if actually_chopped then
+                        j.data.done_count = math.max(j.data.done_count, 1)
+                    end
                     if j.data.done_targets >= j.data.count then
                         return "done", string.format("干倒了 %d 个目标（连续砍，共 %d 下）",
                             j.data.done_targets, j.data.done_count)
@@ -487,6 +501,7 @@ local function job_work(j, p, action_id)
                     -- 还要继续砍下一棵：清掉目标回 next 重新挑
                     j.data.target = nil
                     j.data.ba = nil
+                    j.data.counted = false
                     j.data.phase_wait = false
                     j.step = "next"
                     return "run"
@@ -538,8 +553,11 @@ local function job_work(j, p, action_id)
                     return "run"
                 end
             end
-            -- 目标砍倒了（或变成树桩）
-            j.data.done_targets = (j.data.done_targets or 0) + 1
+            -- 目标砍倒了（或变成树桩）：只有真的挥过斧头才算
+            if (j.data.cur_hits or 0) > 0 and not j.data.counted then
+                j.data.counted = true
+                j.data.done_targets = (j.data.done_targets or 0) + 1
+            end
             j.data.cur_hits = 0
             if j.data.done_targets >= j.data.count then
                 hold_control(p, false)

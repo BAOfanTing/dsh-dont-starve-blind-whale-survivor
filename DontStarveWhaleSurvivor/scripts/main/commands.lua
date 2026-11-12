@@ -29,11 +29,14 @@ local ALLOWED = { ping = true, echo = true, get_state = true, refresh_state = tr
     equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
     eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
     start_task = true, stop_task = true, get_task_status = true }
+-- 走独立执行器（action_executor）的命令：这些是**原子游戏动作**，需要控制权二次校验 + 异步回执。
+-- Phase 5 M6：start_task / stop_task **不在这里** —— 它们是任务链命令，由本文件自己处理
+-- （任务链内部会自己去调原子动作，不需要 action_executor 的 assert 流程）。
+-- 真机踩到：把它们放进来会被转给 action_executor，那里没有同名动作 → unknown_action。
 local ACTION_COMMANDS = { move_to = true, stop_movement = true,
     gather_resource = true, move_to_target = true,
     equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
-    eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
-    start_task = true, stop_task = true }
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
 
 local polling = false
 local nextPollAt = 0

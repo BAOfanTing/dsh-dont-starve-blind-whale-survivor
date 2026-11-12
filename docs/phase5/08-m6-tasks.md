@@ -1,10 +1,12 @@
 # Phase 5 · M6：多步骤任务执行系统
 
-> 结论：代码与测试完成，**全项目 508 个测试全过**；M6 的 3 个命令类型已在真实 Bridge 上验证部署
-> （`start_task` / `stop_task` 入队返回 403 = 类型已认识，`get_task_status` 返回 200）。
+> 结论：**M6 真机验证通过**（2026-11-12 19:30-19:40）。任务链在真实游戏里逐步推进
+> （亲眼观察到 `step 1→2→4`、`done/skipped` 变化），`stop_task` 能清理，
+> 白名单越权被拒，人物真的移动并采到草。
+> 全项目 **508 个测试全过**。
 >
-> **真机任务链未验证** —— 部署时游戏客户端已退出（只剩 6 个 CPU=0、线程=0 的僵尸服务端，
-> 心跳停了 628 秒）。需要重开游戏才能跑真机。
+> 真机过程中抓到并修掉 3 个真 bug（路由错误 / 进度丢失 / 砍树重复计数），
+> 另外**我自己的验证方法错了两次**（用半径内实体计数判断砍树结果，但掉落物会滚、树桩也算树）。
 
 ## 0. 前置检查（不假设）
 
@@ -116,46 +118,77 @@
 | survival | 48 | 全过 |
 | **合计** | **508** | **全过** |
 
-## 6. 真机验证：未做（游戏客户端已退出）
+## 6. 真机验证：通过（2026-11-12 19:30-19:40）
 
-部署 mod 时查到：
+角色：沃利（Warly）第 1 天，背包 portablecookpot_item + 土豆 + 大蒜 + 燧石。
 
-```
-dontstarve_dedicated_server_nullrenderer_x64  ×6   全部 CPU=0、线程=0（僵尸）
-dontstarve_steam_x64                          不存在
-Bridge: connected=False 心跳距=628981ms
-```
+### 6.1 验收结果
 
-游戏客户端已退出，世界没在跑，任务链无从执行。**没有空等、没有擅自启动游戏**。
+| # | 项目 | 实测 |
+|---|---|---|
+| ③ | `get_task_status` 初始 | ✅ `{"known_tasks":["forage","stock_logs","survive_night","toolkit"],"running":false}` |
+| ④ | **白名单越权** | ✅ `没有这个任务：rm_rf（能用的：forage、stock_logs、survive_night、toolkit）` |
+| ⑤ | **`start_task(stock_logs)`** | ✅ `{"running":true,"task":"stock_logs","step_index":1,"step_total":5,"current_why":"采树枝（做斧头用）"}` |
+| ⑥ | **逐步推进** | ✅ 亲眼观察到：<br>`t+1s  step=2/5 skipped=1 why=捡燧石`<br>`t+10s step=4/5 done=1 skipped=2 why=砍 3 棵树` |
+| ⑦ | **重复启动被拒** | ✅ `已有任务在跑：forage（先 stop_task）` |
+| ⑦ | **`stop_task`** | ✅ `{"stopped":true,"running":false}` |
+| ⑧ | **人物真干活** | ✅ 位置 `(72,-72)→(-24,73)`、背包多出 `cutgrass×2` |
+| 附 | `chop_tree(count=3)` | ✅ `干倒了 3 个目标`，实测 `log +5`、`pinecone -2`、`twiggy_nut -1`、`evergreen -1` |
+| 附 | `verify.gained` | ✅ `{"gained":{"log":8},"confirmed_gain":true}`（M5 的 StackSize 修复彻底生效） |
 
-已确认的只有：Bridge 侧 3 个命令类型部署成功（`start_task`/`stop_task` 403、`get_task_status` 200）。
+### 6.2 任务链跳步是正确行为
 
-### 重开游戏后要跑的验证
+`stock_logs` 第 1 步「采树枝」被跳过，因为附近只有 `twiggytree`（多枝树）没有 `sapling`（树苗）——
+前置条件 `nearby_has(p,'sapling',20)` 不满足 → 按设计跳过，不硬干。
+**但这暴露一个可用性问题**：`stock_logs` 应该把 `twiggytree` 也接受为树枝来源。
 
-```powershell
-cd survival; node test/real-tasks.mjs
-```
+## 7. 真机过程中修掉的 3 个 bug
 
-脚本会：
-1. 等会话连上 → 授权控制权
-2. `get_task_status` → 应报 `running=false` + 列出 4 个可用任务
-3. `start_task(forage)` → 应启动并逐步推进（观察 `step_index` 增长）
-4. 中途 `get_task_status` → 应看到当前步、已完成/跳过数
-5. `stop_task` → 应中止且清理（人物停止连砍/移动）
-6. 白名单越权 `start_task('rm_rf')` → 应被拒
-7. 清理控制权
+### ① `ACTION_COMMANDS` 路由错误
 
-## 7. 未完成 / 风险
+`start_task` / `stop_task` 被加进 `ACTION_COMMANDS` → 被转给 `action_executor` →
+那里没有同名动作 → `unknown_action: 没有这个动作：start_task`。
 
-1. **M6 真机未验证**（§6）—— 需重开游戏
-2. **任务链只支持 4 个固定模板** —— 组合更多场景需要继续加模板（比如 `mine_rocks`、`cook_food`）
-3. **任务链不跨世界/不持久化** —— 世界重载后任务丢失（run 变量在内存里）
-4. **前置条件依赖 `nearby_has` 的半径** —— 目标在半径外会被判"不满足"而跳过，可能需要先走一段路
-5. 三路互守对"三条链同时死"仍无效（M4 已知边界）—— 本轮又遇到一次
+**根因**：`ACTION_COMMANDS` 的语义是"走执行器的**原子游戏动作**"，不是"所有会改状态的命令"。
+任务链命令由 `commands.lua` 自己处理（内部会去调原子动作，不需要 assert 流程）。
+
+### ② 任务结束后进度丢失
+
+任务跑完 `run = nil`，上层只能看到 `running=false`，不知道刚才做了几步、跳了几步、有没有失败。
+
+**修复**：加 `last_run` 保存总结（`{task, ok, steps_done, steps_skipped, elapsed_s, text/error}`），
+`get_task_status` 在 `running=false` 时带 `last` 字段。
+
+### ③ 砍树重复计数
+
+`chop_tree(count=3)` 报"干倒了 3 个目标"但实际只倒 1 棵。
+
+**两层根因**：
+1. `done_targets` 在 `busy` 分支和 `done_count` 分支**都会累加** → 同一棵树算两次；
+2. `done_this` 判据只看"目标无效/动作变了"，**根本没挥过斧头**的目标也被当砍倒。
+
+**修复**：加 `counted` 标记（每个目标只计一次）+ `actually_chopped = cur_hits > 0`（必须真挥过斧头）。
+
+### ④ 我自己的验证方法错了两次（值得记下）
+
+1. 第一次看"半径内木头只 +1"就判断没砍倒 → 其实木头滚到半径外了；
+2. 第二次看"trees 2→3"以为没砍够 → 其实**砍倒的树变树桩也算 tree**，+1 是正常的。
+
+**正确指标**：用 `log` / `pinecone` / `twiggy_nut` 的**增量**（这些只在树倒时才出现），
+不要用"半径内 tree 数量"或"半径内 log 数量"。
+
+## 8. 未完成 / 风险
+
+1. **`stock_logs` 只认 `sapling`** —— 地图上只有 `twiggytree` 时会跳过采树枝步骤（§6.2）
+2. **任务链只支持 4 个固定模板** —— 组合更多场景需继续加模板
+3. **任务链不跨世界/不持久化** —— 世界重载后任务丢失
+4. **`hold_control` 期间引擎砍的是它自己选的最近目标**，不是我们指定的 `j.data.target` ——
+   这个认知偏差导致砍树计数改了 3 次才对
+5. 三路互守对"三条链同时死"仍无效（M4 已知边界）
 6. Controller HTTP 门面无认证、控制权变更未联动取消 Bridge 队列命令（M1/M2 遗留）
 7. `unknown_completion` / `action_timeout` 分支只有沙箱验证
 
-## 8. 复现
+## 9. 复现
 
 ```powershell
 # 沙箱回归
