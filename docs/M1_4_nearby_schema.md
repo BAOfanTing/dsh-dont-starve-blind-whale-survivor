@@ -34,7 +34,9 @@
                "structures": [], "creatures": [], "other": [] },
   "delta": { "status": "baseline" | "ok" | "reset",
              "added_count": 0, "removed_count": 0, "changed_count": 0,
-             "added": [], "removed": [], "changed": [] },
+             "added": [], "removed": [], "changed": [],
+             "not_returned_count": 0,   // 0.13.3：扫到了但没进 kept 的数量
+             "not_returned": [] },      // 0.13.3：最多 12 条 {prefab, category, distance}，**不带 ref**
   "error": "find_entities_failed"   // 仅 status=error 时出现
 }
 ```
@@ -173,6 +175,16 @@ refs[snapshot_id] = { ["#1"] = <entity>, ["#2"] = <entity>, ... }
 | `changed[].fields` | 只放有意义的变化：`health`（≥1）、`distance`（≥1 格）、`stack_size`、`is_harvestable` 翻转、`work_action` 变化、`category` 变化 |
 
 匹配方式：**按 GUID 匹配**（Lua 内部），不使用 `#N`（每次扫描都会重排）。
+
+**基线范围（0.13.3 起）**：基线是**完整 FindEntities 候选集合**，不是截断后的返回集合。
+因此"被容量限制挤出窗口"的实体**不会**出现在 `removed` 里，而是计入 `not_returned_count`。
+
+| 字段 | 语义（0.13.3） |
+|---|---|
+| `added` | 这次进了 kept（有 `#N`）**且**上次完整扫描里没有 |
+| `removed` | 上次完整扫描有、这次完整扫描**也没有**（真消失）；带 `previous_ref`（仅历史） |
+| `changed` | 两次都在完整扫描**且这次进 kept（有 `#N`）**；窗口外的变化不报（无法操作） |
+| `not_returned_count` / `not_returned` | 扫到了但没进 kept；**没有引用**，不能作为动作目标 |
 
 ### 什么时候 `status = "baseline"`（不报新增）
 

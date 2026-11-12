@@ -316,10 +316,42 @@ end
 
 local prev = { key = nil, by_guid = nil } -- 上一次成功扫描的基线
 
-local function compute_delta(list, key)
+--- 把一个扫描条目压成"跨扫描可比较的视图"（不含实体对象，避免长期持有）
+--- ref == nil 表示：这次扫描到了、但**没有**进 kept（没有可操作引用）
+local function entry_view(entry)
+    local b = entry.block
+    return {
+        guid = entry.guid,
+        ref = b.ref,
+        category = b.category,
+        prefab = b.prefab,
+        label = b.label,
+        distance = b.distance,
+        health = b.health,
+        stack_size = b.stack_size,
+        is_harvestable = b.is_harvestable,
+        work_action = b.work_action,
+    }
+end
+
+--- Delta 语义（0.13.3 修）：
+---   · 基线 = **完整扫描候选集合**（截断前），不是返回集合
+---     → 被容量限制挤出的实体不会被误报成 removed
+---   · added 只报"这次进了 kept（有 #N）且上次完整扫描里没有"的实体
+---   · removed 只报"上次完整扫描有、这次完整扫描也没有"的实体（真实缺席）
+---   · changed 只报"两次完整扫描都有、且这次进了 kept（有 #N）"的实体
+---
+--- @param full     本次完整扫描的条目数组（已排序；kept 的条目带 ref）
+--- @param kept_set { [guid] = true } 本次真正返回的实体
+--- @param key      session|shard
+local function compute_delta(full, kept_set, key)
     local current = {}
-    for _, entry in ipairs(list) do
-        if entry.guid ~= nil then current[entry.guid] = entry end
+    local order = {}
+    for _, entry in ipairs(full) do
+        if entry.guid ~= nil then
+            current[entry.guid] = entry_view(entry)
+            order[#order + 1] = entry.guid
+        end
     end
 
     if prev.by_guid == nil or prev.key ~= key then
@@ -329,56 +361,55 @@ local function compute_delta(list, key)
     end
 
     local added, removed, changed = {}, {}, {}
-    for guid, entry in pairs(current) do
+    for _, guid in ipairs(order) do
+        local now = current[guid]
         local before = prev.by_guid[guid]
         if before == nil then
-            added[#added + 1] = entry
-        else
+            -- 新进完整扫描的实体：只有这次也进了 kept 才算 added（否则没有引用，报了也没法操作）
+            if now.ref ~= nil then added[#added + 1] = now end
+        elseif now.ref ~= nil then
+            -- 两次都在完整扫描里：只有这次能操作才报变化
             local fields = {}
-            if before.block.category ~= entry.block.category then
-                fields.category = { from = before.block.category, to = entry.block.category }
+            if before.category ~= now.category then
+                fields.category = { from = before.category, to = now.category }
             end
-            local dh = (entry.block.health or 0) - (before.block.health or 0)
-            if entry.block.health ~= nil and before.block.health ~= nil and math.abs(dh) >= 1 then
-                fields.health = { from = before.block.health, to = entry.block.health }
+            if before.health ~= nil and now.health ~= nil and math.abs(now.health - before.health) >= 1 then
+                fields.health = { from = before.health, to = now.health }
             end
-            local dd = (entry.block.distance or 0) - (before.block.distance or 0)
-            if math.abs(dd) >= 1.0 then
-                fields.distance = { from = before.block.distance, to = entry.block.distance }
+            if before.distance ~= nil and now.distance ~= nil and math.abs(now.distance - before.distance) >= 1.0 then
+                fields.distance = { from = before.distance, to = now.distance }
             end
-            if (entry.block.stack_size or 0) ~= (before.block.stack_size or 0) then
-                fields.stack_size = { from = before.block.stack_size, to = entry.block.stack_size }
+            if (before.stack_size or 0) ~= (now.stack_size or 0) then
+                fields.stack_size = { from = before.stack_size, to = now.stack_size }
             end
-            if before.block.is_harvestable ~= nil and entry.block.is_harvestable ~= nil
-                and before.block.is_harvestable ~= entry.block.is_harvestable then
-                fields.is_harvestable = { from = before.block.is_harvestable, to = entry.block.is_harvestable }
+            if before.is_harvestable ~= nil and now.is_harvestable ~= nil
+                and before.is_harvestable ~= now.is_harvestable then
+                fields.is_harvestable = { from = before.is_harvestable, to = now.is_harvestable }
             end
-            if before.block.work_action ~= nil and entry.block.work_action ~= nil
-                and before.block.work_action ~= entry.block.work_action then
-                fields.work_action = { from = before.block.work_action, to = entry.block.work_action }
+            if before.work_action ~= nil and now.work_action ~= nil
+                and before.work_action ~= now.work_action then
+                fields.work_action = { from = before.work_action, to = now.work_action }
             end
             local field_count = 0
             for _ in pairs(fields) do field_count = field_count + 1 end
-            if field_count > 0 then
-                changed[#changed + 1] = { entry = entry, fields = fields }
-            end
+            if field_count > 0 then changed[#changed + 1] = { entry = now, fields = fields } end
+        end
+        -- 两次都在、但这次没进 kept → 什么都不报（它只是被截断了，不是变化）
+        if kept_set[guid] == nil and now.ref ~= nil then
+            -- 理论上不会发生（kept 的 ref 一定非空），留着是为了防御
+            now.ref = nil
         end
     end
+
+    -- 真实缺席：上次完整扫描有、这次完整扫描也没有
     for guid, before in pairs(prev.by_guid) do
-        if current[guid] == nil then
-            removed[#removed + 1] = before
-        end
+        if current[guid] == nil then removed[#removed + 1] = before end
     end
 
     prev = { key = key, by_guid = current }
 
-    -- 排序保证确定性：新增按当前顺序（已在 list 里排好）、消失/变化按 category+distance
-    table.sort(removed, function(a, b)
-        return (a.block.distance or 0) < (b.block.distance or 0)
-    end)
-    table.sort(changed, function(a, b)
-        return (a.entry.block.distance or 0) < (b.entry.block.distance or 0)
-    end)
+    table.sort(removed, function(a, b) return (a.distance or 0) < (b.distance or 0) end)
+    table.sort(changed, function(a, b) return (a.entry.distance or 0) < (b.entry.distance or 0) end)
 
     return {
         status = "ok",
@@ -391,8 +422,10 @@ local function compute_delta(list, key)
     }
 end
 
---- 把 delta 变成可以直接序列化的紧凑结构（引用要用**当前**快照的 #N）
-local function delta_out(delta)
+--- 把 delta 变成可以直接序列化的紧凑结构
+--- @param delta      compute_delta 的结果
+--- @param not_returned 本次"扫到了但没进 kept"的条目（没有 ref，不能当可操作目标）
+local function delta_out(delta, not_returned)
     local out = {
         status = delta.status,
         added_count = delta.added_count,
@@ -401,31 +434,43 @@ local function delta_out(delta)
         added = arr({}),
         removed = arr({}),
         changed = arr({}),
+        not_returned_count = #(not_returned or {}),
+        not_returned = arr({}),
     }
-    for _, entry in ipairs(delta.added) do
+    for _, item in ipairs(delta.added) do
         out.added[#out.added + 1] = {
-            ref = entry.block.ref,
-            prefab = entry.block.prefab,
-            label = entry.block.label,
-            category = entry.block.category,
+            ref = item.ref,
+            prefab = item.prefab,
+            label = item.label,
+            category = item.category,
         }
     end
-    for _, entry in ipairs(delta.removed) do
-        -- previous_ref 是**旧快照**的编号，不能当现在的引用用
-        out.removed[#out.removed + 1] = {
-            previous_ref = entry.block.ref,
-            prefab = entry.block.prefab,
-            label = entry.block.label,
-            category = entry.block.category,
+    for _, item in ipairs(delta.removed) do
+        -- previous_ref 是**上次扫描**的编号，不能当现在的引用用；上次没返回就没有这个字段
+        local view = {
+            prefab = item.prefab,
+            label = item.label,
+            category = item.category,
         }
+        if item.ref ~= nil then view.previous_ref = item.ref end
+        out.removed[#out.removed + 1] = view
     end
     for _, item in ipairs(delta.changed) do
         out.changed[#out.changed + 1] = {
-            ref = item.entry.block.ref,
-            prefab = item.entry.block.prefab,
-            label = item.entry.block.label,
-            category = item.entry.block.category,
+            ref = item.entry.ref,
+            prefab = item.entry.prefab,
+            label = item.entry.label,
+            category = item.entry.category,
             fields = item.fields,
+        }
+    end
+    -- 只带前 12 条明细，数量用 not_returned_count 表达（避免 JSON 膨胀）
+    for i = 1, math.min(#(not_returned or {}), 12) do
+        local entry = not_returned[i]
+        out.not_returned[#out.not_returned + 1] = {
+            prefab = entry.block.prefab,
+            category = entry.block.category,
+            distance = entry.block.distance,
         }
     end
     return out
@@ -506,7 +551,19 @@ local function build(actor, info, now, opts, identity)
     -- 顺手也避免 refs 越攒越多。
     refs = { [snapshot_id] = ref_map }
 
-    local delta = compute_delta(kept, baseline_key(identity))
+    -- Delta 基线用**完整扫描候选集合**（list），返回集合（kept）只决定"能不能操作"
+    local kept_set = {}
+    for _, entry in ipairs(kept) do
+        if entry.guid ~= nil then kept_set[entry.guid] = true end
+    end
+    local not_returned = {}
+    for _, entry in ipairs(list) do
+        -- 没有 GUID 的实体（只有假游戏里会出现）不进 delta 逻辑，避免 nil 索引
+        if entry.guid ~= nil and kept_set[entry.guid] == nil then
+            not_returned[#not_returned + 1] = entry
+        end
+    end
+    local delta = compute_delta(list, kept_set, baseline_key(identity))
     local duration_ms = math.floor((U.now() - started) * 1000)
 
     return {
@@ -524,7 +581,7 @@ local function build(actor, info, now, opts, identity)
         truncated = #kept < scanned.found,
         scan = { reused = false, timestamp = now, age_ms = 0, duration_ms = duration_ms, scan_seconds = opts.scan_seconds },
         buckets = buckets,
-        delta = delta_out(delta),
+        delta = delta_out(delta, not_returned),
     }
 end
 

@@ -259,7 +259,7 @@ local function nearby_block(actor, info, now, unavailable, identity)
     if not ok or result == nil then
         unavailable[#unavailable + 1] = "nearby"
         return { status = "error", radius = cfg("scan_radius", 16), scan_seconds = cfg("scan_seconds", 4),
-                 buckets = {}, error = "nearby_failed",
+                 buckets = {}, error = "nearby_failed: " .. tostring(result),
                  delta = { status = "reset", added = {}, removed = {}, changed = {} } }
     end
     return result
