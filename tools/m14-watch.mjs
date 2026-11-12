@@ -23,6 +23,7 @@ import { join } from 'node:path'
 
 import { GameBridge } from '../lib/bridge.js'
 import { normalizeState } from '../lib/state/snapshot.js'
+import { createWatchStats } from './m14-counters.mjs'
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => {
@@ -41,6 +42,7 @@ const bridge = new GameBridge({ log: (level, msg) => console.log(`[${level}] ${m
 
 // ── 采样状态 ──
 const frames = []
+const counters = createWatchStats() // 轮询 / 文件版本 / 扫描快照 三层分开统计
 const parseErrors = []
 const perSnapshot = new Map() // snapshot_id → { firstSeen, lastSeen, refs, refsStable, ... }
 const deltaTimeline = []      // 每次 delta 内容变化都记一条
@@ -104,6 +106,7 @@ while (Date.now() - startedAt < seconds * 1000) {
 
   if (!state) {
     statusCounts.missing++
+    counters.poll({ snapshot: null })
     frames.push({ t, status: 'missing' })
     await new Promise((r) => setTimeout(r, intervalMs))
     continue
@@ -116,6 +119,7 @@ while (Date.now() - startedAt < seconds * 1000) {
   } catch (error) {
     parseErrors.push({ t, where: 'normalizeState', message: String(error?.message ?? error) })
   }
+  counters.poll({ snapshot, parseError: parseErrors.length > 0 ? parseErrors[parseErrors.length - 1].message : null })
 
   const nearby = snapshot?.nearby ?? null
   const refs = flatRefs(nearby)
@@ -184,9 +188,9 @@ while (Date.now() - startedAt < seconds * 1000) {
         added_count: delta.added_count,
         removed_count: delta.removed_count,
         changed_count: delta.changed_count,
-        added: (delta.added ?? []).slice(0, 6),
-        removed: (delta.removed ?? []).slice(0, 6),
-        changed: (delta.changed ?? []).slice(0, 6),
+        added: delta.added ?? [],
+        removed: delta.removed ?? [],
+        changed: delta.changed ?? [],
       })
     }
   }
@@ -211,6 +215,7 @@ while (Date.now() - startedAt < seconds * 1000) {
     sequence: snapshot?.sequence ?? null,
     schema: snapshot?.schema ?? null,
     actorId: snapshot?.actor?.actorId ?? null,
+    actorTile: snapshot?.actor ? [snapshot.actor.tileX, snapshot.actor.tileZ] : null,
     playerInventoryUsed: snapshot?.player?.inventory?.used ?? null,
     worldDay: snapshot?.world?.day ?? null,
     nearby: nearby
@@ -261,6 +266,8 @@ const summary = {
     reusedSnapshots: snapshotsWithData.filter((s) => s.reusedSeen && !s.freshSeen).length,
     freshSnapshots: snapshotsWithData.filter((s) => s.freshSeen).length,
   },
+  // 三层口径（0.13.4 修：不要把"轮询次数"当成"观察次数"）
+  cache: counters.summary(),
   sequence: { last: lastSeq, regressions: seqRegressions },
   writeIntervalMsMedian: median(mtimeDeltas),
   nearbyBytes: {
@@ -295,6 +302,9 @@ const lines = [
   `- 状态文件：${summary.statePath ?? '**没找到**'}`,
   `- nearby 三态计数：ok=${statusCounts.ok ?? 0} empty=${statusCounts.empty ?? 0} error=${statusCounts.error ?? 0} missing=${statusCounts.missing ?? 0} unknown=${statusCounts.unknown ?? 0}`,
   `- 七个桶（出现过的帧数）：${JSON.stringify(bucketSeen)}`,
+  `- 轮询 ${summary.cache.poll_count} 次 ｜ 唯一文件版本 ${summary.cache.unique_file_versions} ｜ 重复轮询 ${summary.cache.duplicate_polls}`,
+  `- 其中 reused 版本 ${summary.cache.reused_file_versions} ｜ 新扫描版本 ${summary.cache.fresh_scan_file_versions} ｜ 复用率 ${summary.cache.reused_ratio}`,
+  `- 去重键：${summary.cache.version_key_kind} ｜ 解析错误 ${summary.cache.parse_errors} ｜ 缺文件帧 ${summary.cache.missing_frames}`,
   `- 扫描快照：${summary.snapshots.count} 个 ${JSON.stringify(summary.snapshots.ids)}`,
   `  · 同一快照内引用稳定：${summary.snapshots.allRefsStableWithinSnapshot}`,
   `  · 纯复用快照：${summary.snapshots.reusedSnapshots} ｜ 含新扫描的快照：${summary.snapshots.freshSnapshots}`,
