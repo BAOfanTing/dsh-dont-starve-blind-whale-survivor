@@ -79,7 +79,7 @@ test('HTTP：连接真实 MCP Server，自动发现工具/资源/提示词', asy
 
     // 工具清单不写死：断言与 MCP Server 实际返回一致
     const tools = client.listTools()
-    assert.equal(tools.length, 24, `实际 ${tools.length} 个：` + tools.map((tool) => tool.name).join(','))
+    assert.equal(tools.length, 27, `实际 ${tools.length} 个：` + tools.map((tool) => tool.name).join(','))
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
       'build_campfire',
       'build_structure',
@@ -99,15 +99,18 @@ test('HTTP：连接真实 MCP Server，自动发现工具/资源/提示词', asy
       'get_nearby_threats',
       'get_player_status',
       'get_recent_events',
+      'get_task_status',
       'get_world_status',
       'mine_rock',
       'move_to_target',
       'pick_up_item',
       'probe_game_actions',
       'refresh_game_state',
+      'start_task',
+      'stop_task',
     ])
     // Phase 5 M3：2 个写动作工具显式标 false，其余只读
-    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire'])
+    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire', 'start_task', 'stop_task'])
     for (const tool of tools) {
       assert.equal(tool.readOnly, !WRITE_TOOLS.has(tool.name), `${tool.name} readOnly 不对`)
       assert.ok(tool.description.length > 0, `${tool.name} 应有描述`)
@@ -196,7 +199,7 @@ test('stdio：拉起真实子进程，能力与 HTTP 一致', async () => {
     assert.equal(status.state, 'connected')
     assert.equal(status.transport, 'stdio')
     assert.equal(status.server?.name, 'blind-whale-survivor')
-    assert.equal(client.listTools().length, 24)
+    assert.equal(client.listTools().length, 27)
     assert.equal(client.listResources().length, 6)
     assert.equal(client.listPrompts().length, 4)
   } finally {
@@ -240,7 +243,7 @@ test('调用不存在的工具 → MCP_TOOL_NOT_FOUND，并列出可用工具', 
         assert.ok(error instanceof McpToolError)
         assert.equal(error.code, 'MCP_TOOL_NOT_FOUND')
         const detail = error.detail as { available?: string[] }
-        assert.ok(Array.isArray(detail.available) && detail.available.length === 24,
+        assert.ok(Array.isArray(detail.available) && detail.available.length === 27,
           'McpClient 列出的是 Server 侧全部工具（24 个），不是 Agent 白名单（14 个）')
         return true
       },
@@ -276,7 +279,7 @@ test('reconnect：断开后能重新连上并计数', async () => {
     const status = await client.reconnect()
     assert.equal(status.state, 'connected')
     assert.equal(status.reconnects, 1)
-    assert.equal(client.listTools().length, 24, '重连后工具清单仍完整')
+    assert.equal(client.listTools().length, 27, '重连后工具清单仍完整')
   } finally {
     await client.disconnect()
     await server.close()

@@ -124,7 +124,7 @@ test('GET /health：免认证，返回服务与就绪状态', async () => {
     assert.equal(result.json?.service, 'blind-whale-survivor-agent')
     assert.match(String(result.json?.version), /^0\.4\.0-m\d+$/)
     assert.equal(typeof result.json?.ready, 'boolean')
-    assert.equal(result.json?.tools, 14, 'health.tools 是 Agent 适配的只读工具数（14，2 个写工具被跳过）')
+    assert.equal(result.json?.tools, 15, 'health.tools 是 Agent 适配的只读工具数（15，12 个写工具被跳过）')
   } finally {
     await h.close()
   }
@@ -151,8 +151,8 @@ test('GET /api/agent/status：返回 MCP/工具/上下文/限制/Provider', asyn
     assert.equal(result.json?.ok, true)
     assert.equal(result.json?.ready, true)
     assert.equal(result.json?.mcp?.state, 'connected')
-    assert.equal(result.json?.tools?.adapted, 14)
-    assert.equal(result.json?.tools?.names?.length, 14)
+    assert.equal(result.json?.tools?.adapted, 15)
+    assert.equal(result.json?.tools?.names?.length, 15)
     assert.ok(result.json?.limits?.maxRounds > 0)
     assert.equal(result.json?.provider?.model, 'echo')
   } finally {

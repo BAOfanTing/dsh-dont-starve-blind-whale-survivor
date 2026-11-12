@@ -47,6 +47,8 @@ export const READ_ONLY_ALLOWLIST = [
   'get_control_status',
   // Phase 5 M3：只读探测游戏原生 ACTIONS 是否可用
   'probe_game_actions',
+  // Phase 5 M6：只读查询任务链进度（start_task/stop_task 是写动作，不加入）
+  'get_task_status',
 ] as const
 
 export type AllowedToolName = (typeof READ_ONLY_ALLOWLIST)[number]

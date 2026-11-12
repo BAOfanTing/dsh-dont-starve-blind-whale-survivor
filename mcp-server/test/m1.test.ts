@@ -104,7 +104,7 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
     h.notify('notifications/initialized')
     const list = await h.request(2, 'tools/list')
     assert.ok(Array.isArray(list.result.tools))
-    assert.equal(list.result.tools.length, 24, '应注册 24 个工具，实际 ' + list.result.tools.length)
+    assert.equal(list.result.tools.length, 27, '应注册 27 个工具，实际 ' + list.result.tools.length)
 
     const names = list.result.tools.map((t: { name: string }) => t.name).sort()
     assert.deepEqual(names, [
@@ -126,15 +126,18 @@ test('initialize 握手 + tools/list 列出全部工具', async () => {
       'get_nearby_threats',
       'get_player_status',
       'get_recent_events',
+      'get_task_status',
       'get_world_status',
       'mine_rock',
       'move_to_target',
       'pick_up_item',
       'probe_game_actions',
       'refresh_game_state',
+      'start_task',
+      'stop_task',
     ])
     // Phase 5 M3：2 个写动作工具显式标 readOnlyHint=false，其余仍为 true
-    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire'])
+    const WRITE_TOOLS = new Set(['gather_resource', 'move_to_target', 'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item', 'eat_item', 'craft_item', 'build_structure', 'build_campfire', 'start_task', 'stop_task'])
     for (const tool of list.result.tools) {
       assert.ok(tool.description && tool.description.length > 4, `${tool.name} 缺描述`)
       assert.ok(tool.inputSchema, `${tool.name} 缺 inputSchema`)

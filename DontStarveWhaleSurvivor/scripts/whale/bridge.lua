@@ -133,6 +133,10 @@ function B.Report(ok, text, cmd_id)
     if BWS2 ~= nil and BWS2.actionExecutor ~= nil and BWS2.actionExecutor.onActionReport ~= nil then
         pcall(BWS2.actionExecutor.onActionReport, ok and true or false, tostring(text or ""), id)
     end
+    -- Phase 5 M6：把同一个动作结果也交给任务链引擎（任务链靠它判断这一步成没成）
+    if BWS2 ~= nil and BWS2.tasks ~= nil and BWS2.tasks.OnActionResult ~= nil then
+        pcall(BWS2.tasks.OnActionResult, ok and true or false, tostring(text or ""))
+    end
     pending_result = Whale.json.encode({
         v = 1,
         id = id,

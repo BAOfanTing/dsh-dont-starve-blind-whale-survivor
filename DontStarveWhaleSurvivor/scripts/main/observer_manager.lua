@@ -253,6 +253,10 @@ function O.Tick()
         if Whale ~= nil and Whale.bridge ~= nil and Whale.bridge.KeepAlive ~= nil then
             pcall(Whale.bridge.KeepAlive)
         end
+        -- Phase 5 M6：推进任务链（一次 Tick 只走一步的状态机）
+        if BWS2 ~= nil and BWS2.tasks ~= nil and BWS2.tasks.Tick ~= nil then
+            pcall(BWS2.tasks.Tick)
+        end
     end)
     if not ok then
         O.error_count = O.error_count + 1

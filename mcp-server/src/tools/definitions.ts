@@ -19,6 +19,7 @@ import { createControlTools } from './controlTools.js'
 import { createGatherTools } from './gatherTools.js'
 import { createToolUseTools } from './toolUseTools.js'
 import { createSurvivalTools } from './survivalTools.js'
+import { createTaskTools } from './taskTools.js'
 import type { EventDetector } from './events.js'
 
 export interface ToolResult {
@@ -144,8 +145,8 @@ function createBridgeStatusTool(): ToolDefinition {
 
 /** 全部工具（顺序即 tools/list 的顺序） */
 export function createToolDefinitions(): ToolDefinition[] {
-  // Phase 5 M2 +1 只读控制权；M3 +3 采集；M4 +4 工具使用；M5 +4 生存
-  const tools = [createBridgeStatusTool(), ...createReadTools(), ...createControlTools(), ...createGatherTools(), ...createToolUseTools(), ...createSurvivalTools()]
+  // Phase 5 M2 +1 只读控制权；M3 +3 采集；M4 +4 工具使用；M5 +4 生存；M6 +3 任务链
+  const tools = [createBridgeStatusTool(), ...createReadTools(), ...createControlTools(), ...createGatherTools(), ...createToolUseTools(), ...createSurvivalTools(), ...createTaskTools()]
   const seen = new Set<string>()
   for (const tool of tools) {
     if (seen.has(tool.name)) throw new Error(`工具重名：${tool.name}`)

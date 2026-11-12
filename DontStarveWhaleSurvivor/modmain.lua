@@ -78,6 +78,8 @@ modimport("scripts/main/commands.lua")
 modimport("scripts/main/action_executor.lua")
 modimport("scripts/main/net.lua")
 modimport("scripts/main/probe.lua")
+-- Phase 5 M6：任务链引擎（依赖 Whale.actions / Whale.util，所以放最后）
+modimport("scripts/main/task_runner.lua")
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
 AddClassPostConstruct("screens/playerhud", function(self, owner)

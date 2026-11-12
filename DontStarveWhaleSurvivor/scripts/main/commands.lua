@@ -22,16 +22,18 @@ local tonumber = GLOBAL.tonumber
 
 local C = {}
 
--- Phase 5 M2/M3/M4：固定白名单，绝不执行任意外部字符串
+-- Phase 5 M2/M3/M4/M6：固定白名单，绝不执行任意外部字符串
 local ALLOWED = { ping = true, echo = true, get_state = true, refresh_state = true,
     move_to = true, stop_movement = true, get_movement_status = true,
     gather_resource = true, move_to_target = true, probe_game_actions = true,
     equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
-    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
+    start_task = true, stop_task = true, get_task_status = true }
 local ACTION_COMMANDS = { move_to = true, stop_movement = true,
     gather_resource = true, move_to_target = true,
     equip_item = true, chop_tree = true, mine_rock = true, pick_up_item = true,
-    eat_item = true, craft_item = true, build_structure = true, build_campfire = true }
+    eat_item = true, craft_item = true, build_structure = true, build_campfire = true,
+    start_task = true, stop_task = true }
 
 local polling = false
 local nextPollAt = 0
@@ -174,6 +176,39 @@ local function execute(command)
         local ok, result = pcall(BWS2.actionExecutor.probeGameActions)
         if not ok then return 'FAILED', nil, 'probe_actions_error: ' .. tostring(result) end
         return 'SUCCEEDED', result, nil
+    elseif kind == 'get_task_status' then
+        -- Phase 5 M6：只读，返回任务链当前进度
+        if BWS2.tasks == nil then
+            return 'FAILED', nil, 'task_runner_not_loaded'
+        end
+        local ok, summary = pcall(BWS2.tasks.Summary)
+        if not ok then return 'FAILED', nil, 'task_status_error: ' .. tostring(summary) end
+        return 'SUCCEEDED', summary, nil
+    elseif kind == 'start_task' then
+        -- Phase 5 M6：启动固定任务模板（只认 TASKS 白名单里的名字）
+        if BWS2.tasks == nil then
+            return 'FAILED', nil, 'task_runner_not_loaded'
+        end
+        local task = (command.params or {}).task
+        if type(task) ~= 'string' or task == '' then
+            return 'FAILED', nil, 'invalid_argument: start_task 需要 task 名字（字符串）'
+        end
+        local ok, err = BWS2.tasks.Start(task)
+        if not ok then
+            return 'FAILED', nil, tostring(err)
+        end
+        local ok2, summary = pcall(BWS2.tasks.Summary)
+        return 'SUCCEEDED', ok2 and summary or { running = true, task = task }, nil
+    elseif kind == 'stop_task' then
+        -- Phase 5 M6：中止任务（会清理动作与按键状态）
+        if BWS2.tasks == nil then
+            return 'FAILED', nil, 'task_runner_not_loaded'
+        end
+        local ok, err = BWS2.tasks.Stop('命令要求停止')
+        if not ok then
+            return 'FAILED', nil, tostring(err)
+        end
+        return 'SUCCEEDED', { running = false, stopped = true }, nil
     end
     return 'FAILED', nil, 'unsupported_command: ' .. tostring(kind)
 end
@@ -326,7 +361,8 @@ function C.status()
         allowed = { 'ping', 'echo', 'get_state', 'refresh_state', 'move_to', 'stop_movement',
             'get_movement_status', 'gather_resource', 'move_to_target', 'probe_game_actions',
             'equip_item', 'chop_tree', 'mine_rock', 'pick_up_item',
-            'eat_item', 'craft_item', 'build_structure', 'build_campfire' },
+            'eat_item', 'craft_item', 'build_structure', 'build_campfire',
+            'start_task', 'stop_task', 'get_task_status' },
         action_executor = BWS2.actionExecutor ~= nil and BWS2.actionExecutor.status() or nil,
     }
 end
