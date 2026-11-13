@@ -22,6 +22,15 @@
 比 pickup 的 2.5 格紧得多，**必须站得很近**。
 `harvest` 不会自动靠近 —— 远了直接 `out_of_range`，要靠近请先 `move_to`。
 
+## 3.1 `pickable` 标签的语义（真机踩过的坑，0.17.1 已修）
+
+`pickable` 标签不是"对象类型"，而是**"现在能采"**（组件在 `canbepicked and caninteractwith`
+变化时加/删它）。0.17.0 我把它当成候选资格，导致被采过的浆果丛从 `harvestables` 掉进 `resources`，
+`harvest_ready: false` 在真机上**从未出现过**。0.17.1 起候选只看组件，成熟看 `CanBePicked()`。
+
+**仍未真机复验**：0.17.1 需要重进世界加载；"被采过的浆果丛以 `harvest_ready: false` 出现在可收获桶"
+这一条目前只有 UNIT 证据（`harvest-29`/`harvest-30`）。
+
 ## 4. 成熟判据只有布尔
 
 原生只给 `CanBePicked()`（真/假），**没有**"还差几秒成熟"的接口。

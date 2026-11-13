@@ -91,14 +91,24 @@ function H.IsCandidate(ent, actor)
         return false, "prefab_not_allowed"
     end
 
-    -- 2) 复刻 componentactions 的原生资格：必须有 pickable 标签，且不是着火/炽热
-    if not has_tag(ent, "pickable") then return false, "target_not_harvestable" end
+    -- 2) 不是着火/炽热（复刻 componentactions 的这条排除）
     if has_tag(ent, "fire") or has_tag(ent, "intense") then
         return false, "target_not_harvestable"
     end
 
     -- 3) 必须有 pickable 组件（ACTIONS.PICK.fn 就是调它的 Pick）
     if comp(ent, "pickable") == nil then return false, "target_not_harvestable" end
+
+    -- ★ 注意：这里**故意不**要求 "pickable" 标签。
+    --   真机（0.17.0）实测发现：pickable 组件自己维护这个标签 ——
+    --       local function onpickable(self)
+    --           if self.canbepicked and self.caninteractwith then self.inst:AddTag("pickable")
+    --           else self.inst:RemoveTag("pickable") end
+    --       end
+    --   也就是说 **标签 = 现在能不能采**（等价于 IsReady）。
+    --   如果把它当"候选资格"，那么被采过的浆果丛会丢掉标签、掉进 resources 桶，
+    --   harvest_ready=false 这个状态就**永远不会出现在观察里** —— 与"Candidate 与 Ready 分离"矛盾。
+    --   所以：候选 = 这是不是一株批准的可收获对象（类型）；成熟 = 现在能不能采（IsReady，guard 仍然要判）。
 
     return true, nil
 end

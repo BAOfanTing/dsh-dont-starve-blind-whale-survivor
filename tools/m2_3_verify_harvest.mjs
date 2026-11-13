@@ -99,7 +99,10 @@ const nonPilot = flat(cur.snap.nearby).find((e) => ['evergreen', 'deciduoustree'
 if (!keys.includes('harvestables')) skip('非白名单目标被拒', '需要 0.17.0')
 else if (!nonPilot) skip('非白名单目标被拒', '附近没有树/草/岩石可试')
 else {
-  const r = await callMcp('harvest', { target_ref: nonPilot.ref, snapshot_id: cur.snap.nearby?.snapshot_id })
+  // 附近每 4 秒刷新一次，必须用**当下**的快照 id，否则会先被 stale_snapshot 拒掉（测不到想测的原因）
+  const fresh = read()
+  const freshNonPilot = flat(fresh.snap.nearby).find((e) => e.prefab === nonPilot.prefab && e.position && nonPilot.position && e.position.x === nonPilot.position.x && e.position.z === nonPilot.position.z) ?? nonPilot
+  const r = await callMcp('harvest', { target_ref: freshNonPilot.ref, snapshot_id: fresh.snap.nearby?.snapshot_id })
   console.log(`  → 对 ${nonPilot.ref} ${nonPilot.prefab}：`, String(r).slice(0, 120))
   const rejected = /prefab_not_allowed|target_not_harvestable|not_ready|out_of_range/.test(r)
   rejected ? pass('非白名单目标被拒', String(r).slice(0, 80))
@@ -114,8 +117,10 @@ console.log(`  已成熟且 >1.5 格的：${farReady.length} 个；已成熟且 
 if (!keys.includes('harvestables')) skip('超出原生距离 → out_of_range', '需要 0.17.0')
 else if (farReady.length === 0) skip('超出原生距离 → out_of_range', '附近没有"已成熟但较远"的浆果丛')
 else {
-  const t = farReady[0]
-  const r = await callMcp('harvest', { target_ref: t.ref, snapshot_id: cur.snap.nearby?.snapshot_id })
+  const fresh = read()
+  const freshReady = (fresh.snap.nearby?.buckets?.harvestables ?? []).filter((h) => h.harvest_ready === true && (h.distance ?? 0) > 1.5).sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))
+  const t = freshReady[0]
+  const r = await callMcp('harvest', { target_ref: t.ref, snapshot_id: fresh.snap.nearby?.snapshot_id })
   console.log(`  → 对 ${t.ref}（${t.distance} 格）：`, String(r).slice(0, 120))
   const oor = /out_of_range/.test(r)
   oor ? pass('超出原生距离 → out_of_range（不自动移动）', `${t.distance} 格`)
@@ -127,7 +132,9 @@ console.log('\n[6] 正常收获')
 if (!DO_HARVEST) skip('真机 harvest 成功并核对', '没加 --harvest（不会擅自采）')
 else if (!keys.includes('harvestables')) skip('真机 harvest 成功并核对', '需要 0.17.0')
 else {
-  let ready = harvestables.filter((h) => h.harvest_ready === true).sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0]
+  const fresh0 = read()
+  let ready = (fresh0.snap.nearby?.buckets?.harvestables ?? []).filter((h) => h.harvest_ready === true).sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0]
+  cur = fresh0
   if (!ready) skip('真机 harvest 成功并核对', '附近没有已成熟的浆果丛')
   else {
     // 太远就先 move_to（harvest 自己不会走）

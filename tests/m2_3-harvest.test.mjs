@@ -213,7 +213,7 @@ test('harvest-01 候选：批准的浆果丛通过；树/岩石/草/胡萝卜/�
     'true|nil;true|nil;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;')
 })
 
-test('harvest-02 候选：组件/标签/世界状态不满足时各自的原因', async () => {
+test('harvest-02 候选：缺组件 / 着火 / 炽热 / 失效 / limbo 各自的原因', async () => {
   const env = await load()
   env.run(`OUT = ""
     local function t(e)
@@ -221,13 +221,15 @@ test('harvest-02 候选：组件/标签/世界状态不满足时各自的原因'
       OUT = OUT .. tostring(why) .. ";"
     end
     t(mkbush({ pickable = false }))                                  -- 没有 pickable 组件
-    t(mkbush({ tags = {} }))                                         -- 没有 pickable 标签
+    -- ★ 真机发现：pickable 标签 == "现在能采"，被采过就没有标签了。
+    --   所以"没标签"不等于"不是候选"，只等于"现在不能采"（IsReady 的事）。
+    --   这里只验证它不是 target_not_harvestable（具体的候选/成熟结果见下方断言）。
     t(mkbush({ tags = { pickable = true, fire = true } }))            -- 着火
     t(mkbush({ tags = { pickable = true, intense = true } }))         -- 炽热
     t(mkbush({ valid = false }))                                     -- 实体失效
     t(mkbush({ limbo = true }))                                      -- limbo`, '候选原因')
   assert.equal(env.get('OUT'),
-    'target_not_harvestable;target_not_harvestable;target_not_harvestable;target_not_harvestable;entity_gone;in_limbo;')
+    'target_not_harvestable;target_not_harvestable;target_not_harvestable;entity_gone;in_limbo;')
 })
 
 test('harvest-03 IsReady 与 IsCandidate 分离：Candidate=true 但未成熟 → not_ready', async () => {
@@ -662,4 +664,24 @@ test('harvest-28 回归：move_to / stop / pickup 语义未变，白名单只多
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
   assert.deepEqual(ACTION_SPECS.pickup.args.target_ref.pattern, '^#[0-9]{1,4}$')
   assert.equal(ACTION_SPECS.harvest.requiresSnapshot, true)
+})
+
+
+test('harvest-29 真机回归：被采过的浆果丛（pickable 标签已被移除）仍是候选、Ready=false、且出现在可收获桶', async () => {
+  const env = await load()
+  // 模拟真机：Pick() 之后 canbepicked=false，组件把 pickable 标签摘掉
+  env.run(`PICKED = mkbush({ prefab = "berrybush", guid = 77, x = 3, z = 0, ready = false, tags = {} })
+    local ok_c, why_c = Whale.harvestrules.IsCandidate(PICKED)
+    local ok_r, why_r = Whale.harvestrules.IsReady(PICKED)
+    OUT = tostring(ok_c) .. "|" .. tostring(why_c) .. ";" .. tostring(ok_r) .. "|" .. tostring(why_r)
+          .. ";" .. tostring(Whale.harvestrules.ReadState(PICKED).can_be_picked)`, '被采过')
+  assert.equal(env.get('OUT'), 'true|nil;false|not_ready;false', '候选成立、但不成熟')
+})
+
+test('harvest-30 被采过的浆果丛必须仍然出现在 harvestables（harvest_ready=false），不能掉进 resources', async () => {
+  const env = await withBush('mkbush({ prefab = "berrybush", x = 3, z = 0, guid = 78, ready = false, tags = {} })')
+  const n = env.observe()
+  assert.equal(n.buckets.harvestables.length, 1, '不成熟也要能被看见（否则模型以为这株不存在）')
+  assert.equal(n.buckets.harvestables[0].harvest_ready, false)
+  assert.equal(n.buckets.resources.length, 0, '不该因为丢标签就掉进 resources')
 })

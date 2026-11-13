@@ -1,7 +1,7 @@
 # M2.3 · Harvest 测试报告
 
 > 版本：**0.17.0**
-> 全量：**475 / 475 通过**（M2.2 基线 447 + 本轮新增 **28**）
+> 全量：**477 / 477 通过**（M2.2 基线 447 + 本轮新增 **30**）
 > Lua → Node 管线自检：32 / 32
 > 证据类型：`UNIT`（fengari 假游戏 + 真实 harvestrules/nearby/guard/actions；Node 侧真实 dispatcher/control）、
 > `STATIC`（本机 `scripts.zip` 审查 + 源码断言）、`RUNTIME`（真机，见 §7）
@@ -13,9 +13,9 @@
 | 阶段 | tests | pass | fail |
 |---|---|---|---|
 | M2.2 基线 | 447 | 447 | 0 |
-| + M2.3 Harvest（28 个新用例） | **475** | **475** | 0 |
+| + M2.3 Harvest（30 个新用例） | **477** | **477** | 0 |
 
-新增文件：`tests/m2_3-harvest.test.mjs`（28 例）。
+新增文件：`tests/m2_3-harvest.test.mjs`（30 例）。
 
 **既有测试没有删除或跳过。** 改动的既有文件只有两类：
 1. 13 个 Lua harness 的模块列表补 `harvestrules`（跟随 `modmain` 真实顺序）；
@@ -105,19 +105,44 @@
 
 ## 11. 真机（RUNTIME）
 
-**状态：PENDING —— 需要重进世界加载 0.17.0。**
+环境：真实 DST；世界已加载 **0.17.0**；MCP（产品 `apply()`）在 18090。
+工具：`node tools/m2_3_verify_harvest.mjs --bridgeDir <Cluster_2\Master\save> [--harvest]`
 
-已确认（不是 Mock）：
+### 11.1 0.17.0 实测：**11 / 11 PASS**
 
-| 项 | 结果 |
-|---|---|
-| 0.17.0 已装盘，`harvestrules.lua` 已就位 | ✅ |
-| 源码与已装版本一致（`modinfo` = 0.17.0） | ✅ |
-| 工具白名单 | ✅ `move_to, stop, pickup, harvest`；工具数 37 |
-| 管线自检 | ✅ 32/32 |
-| 体验时世界内存版本 | **0.16.0**（还没有 `harvestables` 桶） |
+| 检查 | 实测 | 判定 |
+|---|---|---|
+| `harvestables` 桶存在 | 九桶齐全，文本段顺序正确（威胁 → 可拾取物 → **可收获** → 食物 → 资源） | ✅ |
+| 附近浆果丛进入可收获桶 | **10 株全部 `harvest_ready: true`**，`cycles_left` 4~5，`product: berries`，`item_kind: food` | ✅ |
+| 桶里只有批准对象 | 全是 `berrybush` | ✅ |
+| 不重复跨桶 | 浆果丛没有同时出现在 `food` | ✅ |
+| 过期引用 | 旧 `snapshot_id` → `stale_snapshot` | ✅ |
+| 非白名单目标 | 对 `#23 sapling` → `拒绝：prefab_not_allowed` | ✅ |
+| 超距 | 对 6.1 格的成熟浆果丛 → `拒绝：out_of_range`，**角色没有移动** | ✅ |
+| **正常收获** | 先 `move_to`（6.1 格 → 1 格），再 `harvest` → **「采下了 浆果丛（berries+1）」** | ✅ |
+| **产物入包** | 背包 **浆果 0 → 1** | ✅ |
+| 与 Pickup 分离 | 只发了一次 harvest 调用，没有自动接续 pickup | ✅ |
 
-重进后要跑：`node tools/m2_3_verify_harvest.mjs --bridgeDir <Cluster_2\Master\save> [--harvest]`
-（脚本已就绪，逐项 PASS/FAIL/NOT_OBSERVED）。
+> 这一轮证明了完整闭环：观察 → `#N` → `harvest` → 原生 `ACTIONS.PICK` → `canbepicked` 翻转
+> → 产物入包 → 重新观察核对。**不是 Mock。**
+
+### 11.2 真机发现并修掉的一个设计错误（0.17.1）
+
+真机同时暴露了 M2.3 自己的一个设计错误：**被采过的浆果丛会从 `harvestables` 消失**，
+掉进 `resources`（只显示"可铲"），`harvest_ready: false` **从未出现过**。
+
+根因（本机 `scripts/components/pickable.lua` L1-6）：`pickable` **标签**由组件维护，
+语义是 `canbepicked and caninteractwith`（= 现在能采）。我把它当成"候选资格"，
+于是"没熟"的对象直接被判成"不是候选"。
+
+修正（0.17.1）：
+- `IsCandidate` 不再看标签，只看**组件**（+ 白名单 + fire/intense + 有效性）；
+- `IsReady` 负责成熟度（正是那个标签的含义）；
+- `nearby.interesting()` 改为认 `pickable` 组件，避免被采过又没有 workable 的植株彻底看不见；
+- 新增回归 `harvest-29`（无标签 + `canbepicked=false` ⇒ 候选成立、`not_ready`）、
+  `harvest-30`（必须出现在 `harvestables` 且 `harvest_ready: false`，不掉进 `resources`）。
+
+**状态**：0.17.1 需要再重进一次世界才能真机复验这条（当前世界内存是 0.17.0）。
+未复验前，该条只算 UNIT 证据。
 
 **没有用 Fengari 或 Mock 冒充真机通过。**

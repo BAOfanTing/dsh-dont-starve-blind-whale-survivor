@@ -152,6 +152,38 @@ end
 ⇒ **成熟判据 = `CanBePicked()` 为 true**（并附 `not IsStuck()`、`not IsBarren()`、`caninteractwith`）。
 **不伪造成熟度百分比**：原生没有百分比接口，只有布尔。
 
+## 4.1 ★ 真机追加发现：`pickable` 标签就等于"现在能不能采"
+
+0.17.0 真机实测发现：被采过的浆果丛会从 `harvestables` 里消失、掉进 `resources`（只显示"可铲"）。
+回查本机构建，根因在 `scripts/components/pickable.lua` 开头：
+
+```lua
+local function onpickable(self)
+    if self.canbepicked and self.caninteractwith then
+        self.inst:AddTag("pickable")
+    else
+        self.inst:RemoveTag("pickable")
+    end
+end
+-- 组件元方法：
+canbepicked = onpickable,
+caninteractwith = onpickable,
+```
+
+⇒ **`pickable` 标签 = `canbepicked and caninteractwith`**，也就是"现在能采"。
+它**不是**"这是不是一种可收获对象"。
+
+**教训**：我最初把 `HasTag("pickable")` 当成了"候选资格"（因为 componentactions 用它决定是否提供 PICK），
+结果是 `harvest_ready: false` 这个状态**永远不会出现在观察里**，与"Candidate 与 Ready 分离"直接矛盾。
+
+**修正（0.17.1）**：
+- `IsCandidate` = 白名单 + **有 `pickable` 组件** + 有效 + 不在 limbo + 不是 fire/intense（**不再看标签**）；
+- `IsReady` = 原生成熟判据（`canbepicked` / `caninteractwith` / 非 stuck / 非 barren）——正好就是那个标签的含义；
+- `nearby.interesting()` 也改为认 `pickable` **组件**（否则被采过、又没有 workable 的植株会彻底看不见）。
+
+这样：成熟的浆果丛 → `harvestables` + `harvest_ready: true`；
+被采过的 → **仍然在 `harvestables`** + `harvest_ready: false`（模型能看出"这里有株浆果丛，但还没熟"）。
+
 ## 5. 执行入口 / 是否需要 PlayerController / StateGraph
 
 - 执行：`ACTIONS.PICK.fn → pickable:Pick(doer)`；

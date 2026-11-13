@@ -141,6 +141,9 @@ local function interesting(ent)
     if comp(ent, "health") ~= nil then return true end
     if comp(ent, "workable") ~= nil then return true end
     if comp(ent, "harvestable") ~= nil then return true end
+    -- M2.3：可收获植物（浆果丛等）。注意 pickable **标签**只在"现在能采"时才存在，
+    -- 所以这里看组件，否则被采过的植株会从观察里消失。
+    if comp(ent, "pickable") ~= nil then return true end
     if comp(ent, "inventoryitem") ~= nil then return true end
     if comp(ent, "container") ~= nil then return true end
     if comp(ent, "fueled") ~= nil then return true end

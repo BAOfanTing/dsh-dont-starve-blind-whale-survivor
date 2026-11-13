@@ -45,8 +45,13 @@ HarvestRules.NativeRangeLimit(ent) / InNativeRange(actor, ent)
 |---|---|
 | 有效 / 非 actor / 不在 limbo | `entity_gone` / `is_actor` / `in_limbo` |
 | prefab 在白名单 | `prefab_not_allowed` |
-| `HasTag("pickable")` 且不带 `fire`/`intense` | `target_not_harvestable` |
+| 不带 `fire`/`intense` | `target_not_harvestable` |
 | 有 `components.pickable` | `target_not_harvestable` |
+
+> ⚠️ **故意不要求 `pickable` 标签**。真机（0.17.0）发现该标签由组件维护，
+> 含义是 `canbepicked and caninteractwith`，即"现在能采" —— 把它当候选资格会让
+> "被采过的对象"从观察里消失（掉进 resources），使 `harvest_ready: false` 永远不可达。
+> 详见审查文档 §4.1。
 
 `IsReady`（**Candidate 与 Ready 严格分离**）：
 
