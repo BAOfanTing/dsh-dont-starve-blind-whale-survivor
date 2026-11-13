@@ -15,8 +15,8 @@
 | ① | 实际 0.14.3 加载 | ✅ **PASS**（行为证据：ack 去重键带 epoch 生效）；附带发现 `acked_at` 溢出 bug → 已修 0.14.4 |
 | ② | ACK 清理状态验证 | ✅ **PASS**（有效 ack→active / 清除后保持 revoking 或 Lua 立即补写 / 陈旧 ack 全拒） |
 | ③ | 权威副本冲突保护 | ⚠️ **部分**（副本一致性 PASS、伪造副本不被信任 PASS；"篡改 save 后按新值应成功"被 ghost 挡住） |
-| ④ | move_to 真实执行与核对 | **BLOCKED**（角色是 `player_ghost` 灵魂，动作被正确拒绝） |
-| ⑤ | 运行中移动动作的换手中断 | **BLOCKED**（同上） |
+| ④ | move_to 真实执行与核对 | ✅ **PASS**（复活后真机：`succeeded`、位置真变、到达 1 格内） |
+| ⑤ | 运行中移动动作的换手中断 | ⚠️ **部分 PASS**（Abort 生效 + 动作中断已证；"彻底停住"因测量方法与角色二次死亡待复测） |
 
 ---
 
@@ -139,3 +139,66 @@ node tools/m2_0_3_verify_move.mjs
 复活后跟我说一声，我立刻跑 `node tools/m2_0_3_verify_move.mjs` 把 ④⑤ 和 ③-4 补完。
 
 > 注意：本轮我**没有**执行任何成功的游戏动作（全是 `actor_is_ghost` 拒绝），角色位置未变。
+
+
+---
+
+## 8. 复活后的 ④⑤ 实测（第二轮，mod 已升到 0.14.4）
+
+角色状态：`ghost=false, alive=true`，位置 `(-71,87)`，生命 40/200、理智 0/200（危险，所以把远距离从 10 格缩到 6 格）。
+
+### ④ move_to 真实执行 —— PASS
+
+| 用例 | 实测 |
+|---|---|
+| ④-1 `move_to` 成功且位置真的变了 | ✅ `succeeded`，`(-71,87) → (-70,87)` |
+| ④-2 到达目标 1 格内 | ✅ 目标 `(-69,87)`，实际 `(-70,87)`（差 1 格） |
+
+回执原文：`走到了 (-69,87) 附近（还差 1.0 格）`
+
+### ⑤ 移动中换手
+
+| 用例 | 实测 |
+|---|---|
+| ⑤-1 Lua 观察到 `revoking` 并 Abort | ✅ `ack: {job_cleared: true, gen: 2}` |
+| ⑤-2 旧动作被中断（没有走完） | ✅ `status=failed`，回执原文 **"控制权换手：旧动作已安全停止"** |
+| ⑤-3 角色彻底停住 | ⚠️ **上次判定不可信**，见下 |
+
+**为什么 ⑤-3 上次判 FAIL 但很可能是测量误差：**
+上一版在 `move_to` 返回的瞬间读 `whale_state.json` 当基准点。但状态文件**每秒才写一次**，读到的"基准位置"其实是 Abort 前 0~1 秒的旧帧；而角色当时正以约 3 格/秒移动 → 基准点落后 3~4 格，看起来就像"Abort 后又走了 4 格"（实测 `-70 → -66`）。
+
+**已经写好精确复测脚本** `tools/m2_0_3_verify_stop.mjs`：
+- 按状态帧 `seq` **去重逐帧采样**（每 250ms 一次，跨整个动作 + 中断 + 6 秒）
+- 打印完整位置时间线，并标注 `←抢租约` / `←ack` / `←move_to 返回` 三个时刻
+- 判定改为"**最后 4 帧是否同一位置**"，并给出"ack 之后最大位移"
+
+### 代码路径核对（不依赖角色的部分）
+
+`A.Abort(reason)` 的完整动作（`actions.lua:1641`）：
+```lua
+p.components.locomotor:Stop()        -- 服务端停
+p:ClearBufferedAction()              -- 清缓冲动作
+Whale.bridge.Report(false, reason)   -- 回执"被打断"
+client_stop(U.player())              -- RPC walkstop 给客户端
+job = nil; Whale.job = nil           -- 清任务
+```
+客户端 handler（`hud.lua:267`，`AddClientModRPCHandler("walkstop")`）同样 `locomotor:Stop()` + `ClearBufferedAction()`。
+`refresh_client_walk()` 在 `job == nil` 后直接 return，不再补发"要去哪"。
+→ **Abort 的两端都齐**，真机回执也证明它执行了。
+
+### 角色二次死亡（与本轮测试无因果，如实记录）
+
+⑤ 之后角色再次死亡（`server_log`: `Could not find anim [death] in bank [ghost]`），现在 ghost 游荡到 `(-42,94)`。
+本轮**我发出的命令只有两条 `move_to`（+2 格、+6 格）**，`whale_cmd.json` 里最后一条就是 `move_to {x:-64,z:87}`。
+死亡时的 `nearby` 里有**爬行恐惧（暗影生物）**和**发条骑士**，理智 0 → 属于游戏内因素。
+因此 ⑤-3 仍需角色活着再跑一次。
+
+---
+
+## 9. 还差最后一个动作
+
+角色活着时执行：
+```powershell
+node tools/m2_0_3_verify_stop.mjs
+```
+它会自动完成 ⑤-3（逐帧时间线 + 最后 4 帧是否停住），并顺带复核 ⑤-1/⑤-2。
