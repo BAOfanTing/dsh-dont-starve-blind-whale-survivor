@@ -8,11 +8,11 @@
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 0.14.1 载入真实 DST 世界 | **NOT_RUN** | 本轮游戏客户端没在跑；改过 Lua，必须重进世界 |
+| 0.14.1 载入真实 DST 世界 | ✅ 已观察（Cluster_2，状态文件 mod=0.14.1） | 但暴露通道缺陷；0.14.2 修复后需重进世界 |
 | F8 → MCP 真机换手 | **BLOCKED** | `127.0.0.1:18090` 未监听（DSH 插件 MCP 服务没启动） |
 | MCP → F8 真机换手 | **BLOCKED** | 同上 |
 | 旧命令换手后到达（真机） | **NOT_RUN** | 只在 fengari 里验证（C-1/C-10/C-11） |
-| revoking → `A.Abort` → ack → active 的真实时序 | **NOT_RUN** | Lua `server_tick` 0.2s 轮询、确认文件落盘都只在沙箱/文件桥集成检查里看过 |
+| revoking → `A.Abort` → ack → active 的真实时序 | **BLOCKED**（0.14.1 读不到权威 → 没出 ack） | 0.14.2 待复验 |
 | 租约过期 / 游戏重启 / 文件缺失真机 | **NOT_RUN** | 见 `docs/M2_0_2_runtime_manual_checklist.md` |
 
 **没有用 Fengari / Mock / 独立 Node 进程冒充 DST 真机结论。**
@@ -41,9 +41,13 @@
 
 ## 4. 文件桥与平台
 
-- Lua 通过 `GLOBAL.io.open` 读权威文件（`whale_io_lease.json` / `whale_lease.json`）。`TheSim:GetPersistentString` 是**异步回调**，本轮没有用它做同步读取；persist 通道只作为 Node 写的备用副本。
-  - 若某个运行环境里 Lua 的工作目录不是 Node 写副本的目录，Lua 会读不到 → fail-closed（拒所有动作），不会误放行。
-  - 已在 `.runtime/m202-bridge-check.mjs` 做过 Node 写 / 文件存在的集成检查，但**没有在真实 DST Lua 里验证 `io.open` 能读到**（NOT_RUN）。
+- **真机已证：DST 模组沙箱 `GLOBAL.io == nil`**，Lua 只走 `TheSim:GetPersistentString` 持久化字符串通道。
+  0.14.1 曾因用 `io.open` 读权威文件导致**所有命令（含合法命令）被 `authority_unavailable` 拒绝**。
+  0.14.2 改为：`bridge.lua` 每 tick 用 `ps_read(FILES.lease)` 读权威文件 → 严格解析 → 写入
+  `Whale.authority_cache`（带时间戳）；`guard.validate()` 只用**≤5 秒的新鲜缓存**，io 仅作沙箱兜底。
+  Node 写的带 KLEI 头普通文件能被 `GetPersistentString` 读到（命令通道已长期验证）。
+  - 详见 `docs/M2_0_2_runtime_probe_round1.md`。
+  - **0.14.2 的 ps 缓存路径尚未在真机复验**（需重进世界）。
 - Windows `renameSync` 覆盖已验证于 Node 单测；真实游戏进程同时 holding 文件时的行为未验证。
 - 锁用 `process.kill(pid, 0)` 判活 + 5s TTL。**Windows PID 复用**可能导致保守 `lock_busy`（宁可拒绝，不误抢）。
 

@@ -1,6 +1,7 @@
 # M2.0.2 · Control Lease 跨进程安全加固报告
 
-> 基线：0.14.0 / `8e8d394`，354/354 → **0.14.1，378/378**
+> 基线：0.14.0 / `8e8d394`，354/354 → 0.14.1（378/378）→ **0.14.2（384/384）**
+> 0.14.2 是真机暴露的通道缺陷修复，见 `docs/M2_0_2_runtime_probe_round1.md`。
 > 性质：只修安全底座；**没有开放新动作、没有进入 M2.1**。
 > 对应审计：`docs/M2_0_1_lease_security_audit.md`
 
@@ -69,13 +70,14 @@
 |---|---|
 | 唯一写入者 | Node `LeaseManager`（`_persistAll`），Lua **只读** |
 | 主文件 | `.runtime/m2-control.json`（Node 侧真值，锁内原子替换） |
-| Lua 可读副本 | 由 `bridge.leaseDirs()` 给出的目录：`whale_io_lease.json`（纯 JSON）+ `whale_lease.json`（persist 通道带 KLEI 头） |
+| Lua 可读副本 | 由 `bridge.leaseDirs()` 给出的目录：`whale_io_lease.json`（纯 JSON）+ `whale_lease.json`（**persist 通道带 KLEI 头，Lua 实际读这份**） |
 | 文件桥目录 | `commandDirs()` + 所有 io 通道目录（含 `<游戏目录>/bin64`）；`locate()` 已验证真实存在 |
 | 半截 JSON | 写入用 `writeAtomic`（同卷 tmp+rename），读者只会看到完整版本 |
 | 缺失/解析失败 | Node `isVerifiableAuthority()` 判不可用；Lua `parse_authority()` 拒绝，**不回退本地世代** |
 | 丢失后重建 | Node 生成**新 `authority_epoch`** 并从 generation=1 重建；旧命令带旧 epoch → 拒；Lua 在文件缺失期间一律拒绝（D-4） |
 | 游戏重启 | 命令 `runtime_id` 与 Lua `nearby.runtime_id()` 不符 → `runtime_mismatch`；epoch 也随重建变化 |
 | 第二个状态写入者 | 无。Lua 只额外写 `whale_lease_ack.json`（换手确认，不是权威状态） |
+| **Lua 读取通道（0.14.2 修）** | 真机证实 `GLOBAL.io == nil`；改为 `bridge.lua` 每 tick `ps_read(FILES.lease)` → `Whale.authority_cache`（≤5s 新鲜度），`guard.validate` 只用缓存；io 仅沙箱兜底 |
 
 Windows 注意：临时文件与目标**同目录**（`writeAtomic` 已实现），`renameSync` 覆盖同卷目标；写失败即拒绝。
 
