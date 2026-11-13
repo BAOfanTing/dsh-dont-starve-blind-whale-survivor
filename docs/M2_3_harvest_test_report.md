@@ -103,46 +103,55 @@
 `move_to`/`stop`/`pickup` 的参数 Schema 未变；`harvest.requiresSnapshot = true`。
 既有 447 个用例全部保留并通过。
 
-## 11. 真机（RUNTIME）
+## 11. 真机（RUNTIME）—— **14 / 14 PASS**
 
-环境：真实 DST；世界已加载 **0.17.0**；MCP（产品 `apply()`）在 18090。
-工具：`node tools/m2_3_verify_harvest.mjs --bridgeDir <Cluster_2\Master\save> [--harvest]`
+环境：真实 DST；世界已加载 **0.17.1**；MCP（产品 `apply()`）在 18090。
+命令：`node tools/m2_3_verify_harvest.mjs --bridgeDir <Cluster_2\Master\save> --harvest`
 
-### 11.1 0.17.0 实测：**11 / 11 PASS**
+| # | 检查 | 实测 | 判定 |
+|---|---|---|---|
+| 1 | `harvestables` 桶存在 | 九桶齐全，文本段顺序正确（威胁 → 可拾取物 → **可收获** → 食物 → 资源） | ✅ |
+| 2 | 桶里只有批准对象 | 10 株全是 `berrybush` | ✅ |
+| 3 | `harvest_ready` 字段 | 已成熟 8 / 共 10（另 2 株正是前几轮采过的） | ✅ |
+| 4 | 浆果丛不重复跨桶 | 不在 `food`/`resources` | ✅ |
+| 5 | 过期引用 | 旧 `snapshot_id` → `stale_snapshot` | ✅ |
+| 6 | 非白名单目标 | `#sapling` → `prefab_not_allowed` | ✅ |
+| 7 | **未成熟目标** | 采过的浆果丛 → **`not_ready`** | ✅ |
+| 8 | 超出原生距离 | 7 格的成熟浆果丛 → `out_of_range`，**角色没有移动** | ✅ |
+| 9 | **正常收获** | `move_to` 靠近后 → **「采下了 浆果丛（berries+1）」** | ✅ |
+| 10 | **产物入包** | Node 侧独立读到 **浆果 0 → 1** | ✅ |
+| 11 | 与 Pickup 分离 | 只发 harvest 调用，没有自动接续 pickup | ✅ |
+| 12 | **采过的对象仍可见（0.17.1 修复）** | 同一株仍在 `harvestables` 且 `harvest_ready: false` | ✅ |
+| 13 | 刚采过再采 | 同一株再 harvest → **`not_ready`** | ✅ |
+| 14 | 状态核对 | 同一株（prefab+坐标）`harvest_ready: true → false` | ✅ |
 
-| 检查 | 实测 | 判定 |
-|---|---|---|
-| `harvestables` 桶存在 | 九桶齐全，文本段顺序正确（威胁 → 可拾取物 → **可收获** → 食物 → 资源） | ✅ |
-| 附近浆果丛进入可收获桶 | **10 株全部 `harvest_ready: true`**，`cycles_left` 4~5，`product: berries`，`item_kind: food` | ✅ |
-| 桶里只有批准对象 | 全是 `berrybush` | ✅ |
-| 不重复跨桶 | 浆果丛没有同时出现在 `food` | ✅ |
-| 过期引用 | 旧 `snapshot_id` → `stale_snapshot` | ✅ |
-| 非白名单目标 | 对 `#23 sapling` → `拒绝：prefab_not_allowed` | ✅ |
-| 超距 | 对 6.1 格的成熟浆果丛 → `拒绝：out_of_range`，**角色没有移动** | ✅ |
-| **正常收获** | 先 `move_to`（6.1 格 → 1 格），再 `harvest` → **「采下了 浆果丛（berries+1）」** | ✅ |
-| **产物入包** | 背包 **浆果 0 → 1** | ✅ |
-| 与 Pickup 分离 | 只发了一次 harvest 调用，没有自动接续 pickup | ✅ |
+这一轮同时验证了三层：
+**观察**（不成熟对象可见 + 语义字段）、**授权**（成熟度在授权那一刻复判）、**核对**（背包 + 状态翻转 + 不接续 pickup）。
 
-> 这一轮证明了完整闭环：观察 → `#N` → `harvest` → 原生 `ACTIONS.PICK` → `canbepicked` 翻转
-> → 产物入包 → 重新观察核对。**不是 Mock。**
+### 11.1 真机过程中遇到的三个环境性现象（都不是 harvest 的 bug）
 
-### 11.2 真机发现并修掉的一个设计错误（0.17.1）
+1. **`actor_busy` 来自 reflex 模块**
+   模组里的 reflex（独立生存反射）会自己起动作：
+   `A.Start("heal"/"craft"/"add_fuel"/"move_to")`。
+   它在跑的时候 `Whale.job ~= nil`，于是 harvest 正确地回 `actor_busy`。
+   **真实用法就是先 `stop` 再重试** —— 脚本已内置（`harvestCall`），并在日志里说明。
 
-真机同时暴露了 M2.3 自己的一个设计错误：**被采过的浆果丛会从 `harvestables` 消失**，
-掉进 `resources`（只显示"可铲"），`harvest_ready: false` **从未出现过**。
+2. **`result_timeout`：结果文件是单槽，会被 reflex 的报告盖掉**
+   真机上出现过一次 harvest 回执为 `unknown（result_timeout）`，
+   而同期的 `whale_result.json` 里是 reflex 的 `{"id":"reflex","text":"torch 材料不够"}`。
+   ⇒ 单槽结果文件在"多动作源"（模型指令 + reflex）并存时会互相覆盖。
+   这是**桥的既有设计**（M1 起如此），不是 M2.3 引入的；脚本把它记为 NOT_OBSERVED 并重试一次。
 
-根因（本机 `scripts/components/pickable.lua` L1-6）：`pickable` **标签**由组件维护，
-语义是 `canbepicked and caninteractwith`（= 现在能采）。我把它当成"候选资格"，
-于是"没熟"的对象直接被判成"不是候选"。
+3. **角色中途死亡导致背包清空**
+   某次 harvest 回执是 `berries+1`（Lua 的 `count_diff` 亲眼看到入包），
+   但 2 秒后 Node 侧读到 0 —— 随后查到角色已变成**灵魂**（`isGhost: true`），
+   死亡掉落清空了背包。最终一轮（角色复活后）**Node 侧独立确认了 浆果 0 → 1**。
 
-修正（0.17.1）：
-- `IsCandidate` 不再看标签，只看**组件**（+ 白名单 + fire/intense + 有效性）；
-- `IsReady` 负责成熟度（正是那个标签的含义）；
-- `nearby.interesting()` 改为认 `pickable` 组件，避免被采过又没有 workable 的植株彻底看不见；
-- 新增回归 `harvest-29`（无标签 + `canbepicked=false` ⇒ 候选成立、`not_ready`）、
-  `harvest-30`（必须出现在 `harvestables` 且 `harvest_ready: false`，不掉进 `resources`）。
+### 11.2 原生距离与 move_to 的容差同量级
 
-**状态**：0.17.1 需要再重进一次世界才能真机复验这条（当前世界内存是 0.17.0）。
-未复验前，该条只算 UNIT 证据。
+原生上限 ≈1.03 格，而 `move_to` 的到点容差实测是"还差 0.9~1.2 格"。
+所以第一次 harvest **很可能** `out_of_range`，需要再 `move_to` 一次才进得去。
+真机日志里就是这个过程（第 1、2 次 out_of_range，第 3 次成功）。
+**没有放宽原生距离**，只是如实记录这个体验问题。
 
 **没有用 Fengari 或 Mock 冒充真机通过。**

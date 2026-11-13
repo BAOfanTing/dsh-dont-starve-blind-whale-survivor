@@ -88,6 +88,15 @@ harvest 进行中由另一个控制主体请求租约：
 
 ---
 
+## 注意事项（真机踩过的三个坑）
+
+1. **`actor_busy` 多半是 reflex**：模组的独立生存反射会自己起 heal/craft/add_fuel/move_to。
+   先 `stop` 再重试即可（脚本已内置）。
+2. **偶发 `unknown（result_timeout）`**：结果文件是单槽，可能被 reflex 的报告盖掉。
+   不要盲目重发 harvest，先 `get_state` 看目标 `harvest_ready` 是否已经翻转。
+3. **一次 `move_to` 常常不够**：原生上限 ≈1.03 格，和 move_to 的到点容差同量级。
+   第一次 harvest 回 `out_of_range` 是正常的，再靠近一点重试。
+
 ## 结果回报
 
 ```powershell

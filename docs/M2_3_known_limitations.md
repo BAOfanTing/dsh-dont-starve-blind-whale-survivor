@@ -31,6 +31,26 @@
 **仍未真机复验**：0.17.1 需要重进世界加载；"被采过的浆果丛以 `harvest_ready: false` 出现在可收获桶"
 这一条目前只有 UNIT 证据（`harvest-29`/`harvest-30`）。
 
+## 3.2 原生距离与 move_to 的到点容差同量级（真机体验问题）
+
+原生上限 = 物理半径 + 4 ≈ **1.03 格**；`move_to` 的到点容差实测是 **"还差 0.9~1.2 格"**。
+⇒ 靠近一次之后第一次 harvest **很可能**回 `out_of_range`，需要**再走一次**才进得去
+（真机日志：第 1、2 次 out_of_range，第 3 次成功）。
+
+**没有放宽原生距离**（放大会让"隔空采"成立）。使用侧应对办法就是"再靠近一点再试"。
+
+## 3.3 reflex 模块会占用 Actor（`actor_busy` 的正常来源）
+
+模组里的 reflex（独立生存反射）会自己起动作：`heal` / `craft` / `add_fuel` / `move_to`。
+它在跑时 `Whale.job ~= nil`，harvest/pickup 会正确地回 `actor_busy`。
+**这不是 bug**：一个 Actor 同时只允许一个动作。真实用法是先 `stop` 再重试。
+
+## 3.4 结果文件是单槽：多动作源并存时会互相覆盖
+
+`whale_result.json` 只有一格。真机上出现过 harvest 回执 `unknown（result_timeout）`，
+而同期文件里是 reflex 的结果（`{"id":"reflex",...}`）。
+这是桥的既有设计（M1 起），**M2.3 没有改它**；后果是"偶发拿不到回执"⇒ 返回 `unknown`（不重试，先看现状）。
+
 ## 4. 成熟判据只有布尔
 
 原生只给 `CanBePicked()`（真/假），**没有**"还差几秒成熟"的接口。
