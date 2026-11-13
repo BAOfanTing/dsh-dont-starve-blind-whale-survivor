@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：STABILITY-01（0.17.2 真机验收 + guide 与工具表对齐）｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：AGENT-01.1（Nearby 快照 ID 可见性 + Lease 换手有限等待）｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -8,7 +8,7 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.17.2** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.17.3** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
@@ -72,6 +72,8 @@ heal / equip / drop / sleep / say / wait / act / list_actions / list_recipes / s
 | **M2.3** | `harvest`（浆果丛试点，真机 **14/14**） | UNIT + RUNTIME | `archive/milestones/M2/M2_3_*`、`archive/api/M2_3_harvest_api_audit.md`、`archive/security/M2_3_harvest_security.md` |
 | **M2.2.1** | 全项目瘦身：文档归档 104 篇、工具表 37 → 7、A 栈代码归档 | UNIT（本次只有单测复跑） | `REFACTOR_AUDIT.md` |
 | **STABILITY-01** | 0.17.2 真机验收（get_state / nearby / 四个动作 / 安全底座）+ guide 指南与 7 个工具对齐 | UNIT + **RUNTIME**（§4.1）；F8 与端到端 NOT_RUN | 本节 §4.1 / §4.2 |
+| **AGENT-01** | 真实 LLM 闭环（move_to 真走） | RUNTIME（部分）；pickup/harvest 未跑通 | `AGENT_01_report.md` |
+| **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 
 ---
 
@@ -105,6 +107,42 @@ heal / equip / drop / sleep / say / wait / act / list_actions / list_recipes / s
 
 > 说明：真机验证脚本走的就是产品入口（MCP → dispatcher → 文件桥 → Lua guard → 游戏动作 → 回执 → 核对），
 > 所以上表的动作项是 END_TO_END 的执行链，只是"下决定的那一段"由脚本而不是 LLM 扮演。
+
+---
+
+### 4.3 AGENT-01.1：P1 / P2 修复与真机补测
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| **P1** Nearby 快照 ID 可见性 | ✅ **已修（UNIT）** | `get_state` 文本现在同时给出「状态快照序列号 s…」和「Nearby 快照 ID：r…-n…」，并在引用块后点明"调 pickup/harvest 要填后者"；pickup/harvest 的 `snapshot_id` 说明也写清了区别。Lua 渲染（权威）与 Node 兜底两条路径都改了，mod 升到 **0.17.3** |
+| **P2** Lease 换手有限等待 | ✅ **已修（UNIT）** | 新增 `control.acquireWithWait()`：只对 `handover_revoking` / `handover_pending` 等待，默认 **3 秒上限 / 175ms 轮询**；每轮重跑全部校验并尝试用 ACK 收尾；超时只返回真实原因（`timedOut`），**绝不自动放行**。`acquire`/`completeHandover`/`validate` 本身未改 |
+| 提交边界 | ✅ 已确认 | `acquire` 与 dispatcher 的 `validate` 都在 `bridge.call()`（真正写命令文件）**之前**；失败时不产生任何命令文件（有测试 P2-12 守着） |
+| P1 真机补测（0.17.3） | **NOT_RUN** | 需要世界重载到 0.17.3（见下） |
+| Pickup / Harvest 真实 LLM 闭环 | **NOT_RUN** | 同上 |
+
+**为什么真机补测还没做**：P1 改的是**游戏内 Lua 渲染**，只有重新读档进世界才会加载 0.17.3。
+本次收尾时游戏客户端已退出（只剩一个 dedicated server 进程，状态文件 10 分钟未更新），
+世界内存里仍是 0.17.2，所以**没有拿旧版本冒充新版本的结果**。
+
+**复跑方式**（重进世界后）：
+
+```powershell
+# 1) 确认世界已加载 0.17.3
+node -e "..."   # 读 whale_state.json 的 data.mod，应为 0.17.3
+# 2) 用产品 AiRunner 跑真实闭环（预算 20 次工具调用）
+node .runtime/agent01-run.mjs        # 见 TESTING.md §6.6
+```
+
+### 4.4 P3 笔记问题的审计结论（**只审计，未重构**）
+
+| 问题 | 结论 |
+|---|---|
+| 笔记是否有世界隔离 | **没有**。`notes.md` 只有一个文件，路径固定、与具体世界无关 |
+| 有没有可靠的世界标识可用 | **没有**。当前状态里：`cluster_id` = **null**（`cluster_id_source: "unavailable"`）；`session_id` 每次启动都变；`runtime_id` 每次进世界都变；`shard_id` 只区分地表/洞穴。**都不能当"同一个存档"的稳定标识** |
+| 是否可能出现跨世界信息污染 | **会**。AGENT-01 真机就撞到过：角色复活后，第一条 `get_state` 读到的还是上一段"我已死亡"的笔记 |
+| 当前约束 | 模型必须**以最新 `get_state` 为当前游戏事实**，笔记只当历史参考 |
+| 未解决的风险 | ①**没有长度上限**（模型可以写很大的文件）；②**空字符串会清空**（误传就丢笔记）；③覆盖写，没有追加 |
+| 处理 | 标记 **NEEDS_REVIEW**，本阶段**没有**设计第二套笔记系统，也没有清空用户已有 Notes |
 
 ---
 
