@@ -144,6 +144,9 @@ local function interesting(ent)
     -- M2.3：可收获植物（浆果丛等）。注意 pickable **标签**只在"现在能采"时才存在，
     -- 所以这里看组件，否则被采过的植株会从观察里消失。
     if comp(ent, "pickable") ~= nil then return true end
+    -- SURVIVAL-01：白名单里的采集对象一定算"值得看"
+    local gr0 = Whale ~= nil and Whale.gatherrules or nil
+    if gr0 ~= nil and gr0.IsCandidate(ent, nil) then return true end
     if comp(ent, "inventoryitem") ~= nil then return true end
     if comp(ent, "container") ~= nil then return true end
     if comp(ent, "fueled") ~= nil then return true end
@@ -229,6 +232,11 @@ function N.Classify(ent, actor)
     if hr ~= nil and hr.IsCandidate(ent, actor) then
         return "harvestables", base
     end
+    -- SURVIVAL-01：草丛/树苗也放进同一个"可收获"桶（执行侧按 prefab 分流到 gather）
+    local gr = Whale ~= nil and Whale.gatherrules or nil
+    if gr ~= nil and gr.IsCandidate(ent, actor) then
+        return "harvestables", base
+    end
     return base
 end
 
@@ -289,19 +297,36 @@ local function describe(ent, actor, category, item_kind)
     -- M2.2：可拾取物保留它原本的语义类别（不是所有桶都有这个字段）
     if item_kind ~= nil then block.item_kind = item_kind end
 
-    -- M2.3：可收获对象写出"现在成不成熟"（原生 CanBePicked 等），绝不造百分比
+    -- M2.3 / SURVIVAL-01：可收获对象写出"现在成不成熟"和"该用哪个动作"（原生 CanBePicked 等），绝不造百分比
     if category == "harvestables" then
         block.is_harvestable = true
         local hr = Whale ~= nil and Whale.harvestrules or nil
-        if hr ~= nil then
-            local ready = hr.IsReady(ent)
+        local gr = Whale ~= nil and Whale.gatherrules or nil
+        -- 先看它属于哪一类（浆果丛 → harvest；草/树苗 → gather）
+        local is_gather = (gr ~= nil) and gr.IsCandidate(ent, actor) or false
+        local rules = is_gather and gr or hr
+        if is_gather then
+            block.gatherable = true
+            block.use_action = "gather"
+        else
+            block.use_action = "harvest"
+        end
+        if rules ~= nil then
+            local ready = rules.IsReady(ent)
             block.harvest_ready = (ready == true)
-            local st = hr.ReadState(ent)
-            if st ~= nil then
-                if st.cycles_left ~= nil then block.cycles_left = st.cycles_left end
-                if st.product ~= nil then block.product = st.product end
-                if st.is_stuck == true then block.is_stuck = true end
+            -- 产物：浆果丛有 ReadState；草/树苗用 ProductOf
+            local product = nil
+            if is_gather then
+                product = rules.ProductOf(ent)
+            else
+                local st = rules.ReadState(ent)
+                if st ~= nil then
+                    if st.cycles_left ~= nil then block.cycles_left = st.cycles_left end
+                    if st.product ~= nil then product = st.product end
+                    if st.is_stuck == true then block.is_stuck = true end
+                end
             end
+            if product ~= nil then block.product = product end
         end
     end
 

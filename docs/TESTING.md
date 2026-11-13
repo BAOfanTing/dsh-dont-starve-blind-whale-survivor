@@ -196,6 +196,35 @@ node .runtime/agent01-run.mjs
 第一行「状态快照序列号 s…」只是给人看的序号；
 `pickup`/`harvest` 的 `snapshot_id` 要填「附近」段开头那个 **Nearby 快照 ID（r…-n…）**。
 
+### 6.7 SURVIVAL-01：完整基础生存闭环（END_TO_END）
+
+跑法（预算 40 次工具调用）：
+
+```powershell
+$env:SURVIVAL_MAX_CALLS='40'
+node .runtime/survival01-run.mjs
+```
+
+脚本只做这些：启动产品 `AiRunner`、配端点、计数、记录每次工具与前后状态、执行预算。
+**不替模型决定**用哪个工具、选哪个目标。
+
+**逐动作判据**（不能只看回执文字）：
+
+| 动作 | 必须看到 |
+|---|---|
+| `gather` | 背包 `cutgrass`/`twigs` 增加，或同一株从「可收」变成「未成熟」 |
+| `pickup` | 背包对应 prefab +N |
+| `harvest` | 背包 `berries` +N，同一株 `harvest_ready` true → false |
+| `eat` | 饥饿值上涨，**或**该食物数量减少 |
+| `craft` | 材料减少 **且** 成品进背包（`torch`/`axe`/`pickaxe` 数量 +1） |
+| `equip` | 装备栏 hand 真的变成它 |
+
+脚本会把每次动作的"前后"（位置 / 背包 / 手持 / 饥饿）打进日志，并写
+`.runtime/survival01-actions.json` 便于核对。
+
+**注意**：`craft` 和 `equip` 只在**世界加载了 0.18.0 之后**才存在；
+如果状态文件的 `mod` 还是旧版本，说明没重读世界，这时跑出来的结果不算数。
+
 ### 6.4 观察类脚本（不改世界）
 
 ```powershell

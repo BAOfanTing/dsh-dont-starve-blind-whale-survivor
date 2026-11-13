@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：AGENT-01.1（Nearby 快照 ID 可见性 + Lease 换手有限等待）｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：SURVIVAL-01（四个基础生存动作：gather / eat / craft / equip）｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -8,7 +8,7 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.17.3** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.18.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
@@ -22,11 +22,10 @@
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（7 个）
+### 2.1 模型可见的工具（11 个）
 
 > 分类：`get_state` / `get_guide` = **只读**；`update_notes` = **本地写入**（会覆盖写笔记文件）；
-> `move_to` / `stop` / `pickup` / `harvest` = **游戏动作**。
-> 之前把 `update_notes` 也写成"只读"是错的，AGENT-01 审计已更正（见 §5 #13）。
+> `move_to` / `stop` / `pickup` / `harvest` / `gather` / `eat` / `craft` / `equip` = **游戏动作**。
 
 | 工具 | 类型 | 说明 |
 |---|---|---|
@@ -35,12 +34,16 @@
 | `update_notes` | **本地写入** | 写长期笔记（覆盖 `~/.dsh/plugins-data/dsh-dont-starve-blind-whale-survivor/notes.md`），下次 `get_state` 显示在最前 |
 | `move_to` | 动作 R1 | 走到格子坐标，自动绕障，报告还差几格 |
 | `stop` | 动作 R1 | 立刻停下 |
-| `pickup` | 动作 R2 | 捡地上的树枝/草/燧石（`#N` + `snapshot_id`，不自动走） |
+| `pickup` | 动作 R2 | 捡地上的树枝/草/燧石（`#N` + Nearby 快照 ID，不自动走） |
 | `harvest` | 动作 R2 | 采成熟浆果丛（`berrybush`/`berrybush2`，不自动走、不自动捡） |
+| **`gather`** | 动作 R2 | **SURVIVAL-01 新增**：采草丛 `grass`（得 cutgrass）/ 树苗 `sapling`（得 twigs） |
+| **`eat`** | 动作 R1 | **SURVIVAL-01 新增**：吃背包里的白名单食物（不填 = 服务端挑最该吃的） |
+| **`craft`** | 动作 R2 | **SURVIVAL-01 新增**：只做 `torch`(2 草+2 树枝) / `axe`(1 树枝+1 燧石) / `pickaxe`(2 树枝+2 燧石) |
+| **`equip`** | 动作 R1 | **SURVIVAL-01 新增**：把 `torch` / `axe` / `pickaxe` 拿在手里 |
 
 **未开放**（Lua 里有实现、但 guard 不放行、工具表也不暴露）：
-`chop / mine / hammer / dig / attack / pick / eat / cook / craft / build / make_fire / add_fuel /
-heal / equip / drop / sleep / say / wait / act / list_actions / list_recipes / store / take / go_to`
+`chop / mine / hammer / dig / attack / pick / cook / build / make_fire / add_fuel / heal / drop /
+sleep / say / wait / act / list_actions / list_recipes / store / take / go_to`
 以及全部宏（`gather / chop_until / cook_meal / night_watch`）。
 
 ### 2.2 非模型能力（仍然在跑）
@@ -74,6 +77,7 @@ heal / equip / drop / sleep / say / wait / act / list_actions / list_recipes / s
 | **STABILITY-01** | 0.17.2 真机验收（get_state / nearby / 四个动作 / 安全底座）+ guide 指南与 7 个工具对齐 | UNIT + **RUNTIME**（§4.1）；F8 与端到端 NOT_RUN | 本节 §4.1 / §4.2 |
 | **AGENT-01** | 真实 LLM 闭环（move_to 真走） | RUNTIME（部分）；pickup/harvest 未跑通 | `AGENT_01_report.md` |
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
+| **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 
 ---
 
@@ -138,6 +142,44 @@ heal / equip / drop / sleep / say / wait / act / list_actions / list_recipes / s
 | 处理 | 标记 **NEEDS_REVIEW**，本阶段**没有**设计第二套笔记系统，也没有清空用户已有 Notes |
 
 ---
+
+### 4.5 SURVIVAL-01：四个基础生存动作
+
+**能力**（每个动作都走同一条链：`dispatcher` → 租约 → 命令 → `Lua Guard` → 原生动作 → 结果核对）：
+
+| 动作 | 原生实现 | 白名单 | 拒绝码 | 成功判据 |
+|---|---|---|---|---|
+| `gather` | `BufferedAction(ACTIONS.PICK)` | `grass`→cutgrass、`sapling`→twigs | `prefab_not_allowed` / `already_harvested` / `not_ready` / `target_busy` / `out_of_range` / `stale_snapshot` | 背包产物 +N / 目标消失 |
+| `eat` | `BufferedAction(ACTIONS.EAT)` | 13 种基础食物（**不含** monstermeat / rot） | `food_not_allowed` / `not_in_inventory` / `no_food` / `not_hungry` | 饥饿 +>0.5 / 该食物 -N |
+| `craft` | `builder:MakeRecipe` | `torch` / `axe` / `pickaxe`（都是 TECH.NONE） | `recipe_not_allowed` / `ingredients_missing: …` / `recipe_locked` / `no_builder` | 成品进背包 +1 |
+| `equip` | `inventory:Equip(item)` | `torch` / `axe` / `pickaxe` | `item_not_equippable` / `not_in_inventory` | 装备栏 hand 变成它 |
+
+**配方来源（本机 `scripts.zip` 的 `scripts/recipes.lua` 实测，构建 762172）**：
+
+```lua
+Recipe2("axe",     {Ingredient("twigs",1), Ingredient("flint",1)},    TECH.NONE)
+Recipe2("pickaxe", {Ingredient("twigs",2), Ingredient("flint",2)},    TECH.NONE)
+Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
+```
+
+**安全设计**（没有为四个动作新建任何架构）：
+
+1. **统一走现有链路**：`Action Dispatcher` / `Control Lease` / `Lua Guard` / `Command Protocol` /
+   `Actor Provider` / `Nearby` / `Snapshot Resolve` / 结果核对，**一行都没复制**。
+2. **实体类动作（gather）**：和 `pickup`/`harvest` 完全同构 —— 只收 `target_ref` + `snapshot_id`，
+   由 `G.resolve_target` 从**当前快照**解析，模型不能给 prefab / 坐标 / GUID。
+3. **背包类动作（eat / craft / equip）**：模型只能给**白名单名字**，目标由服务端从
+   **角色真实背包**里找（`inventory:ForEachItem`），**不接受 GUID、路径、任意 prefab**。
+4. **craft 不做建筑**：`campfire`/`firepit` 虽然也在 `recipes.lua` 里，但**不在白名单**，
+   而且走的是 `MakeRecipe`（不摆地上），`job_build` 那条路径根本不会被触发。
+5. **饿满不吃**：`not_hungry` 直接拒，避免"吃了没效果"被误报成功，也不浪费食物。
+6. **旧 JOB 全部保留**：`pick`/`eat`/`craft`/`equip` 的旧路径（reflex 在用）语义未变，
+   新路径由 `ctx.survival_*` 分流 —— 和 `pickup_by_ref` 同一套做法。
+
+**观察侧同步**：`nearby` 的「可收获」桶现在同时装浆果丛和草丛/树苗，并给出 `use_action`
+（`harvest` 或 `gather`），文本渲染成 `可收(harvest)` / `可采(gather)` —— 观察与执行共用同一份白名单。
+
+**真机结果**：见下方（本节由真机跑完后补）。
 
 ## 5. 已知问题（都会真实影响体验）
 

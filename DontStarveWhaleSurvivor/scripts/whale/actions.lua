@@ -1612,6 +1612,332 @@ JOBS.take = function(j, p)
     return "done", string.format("从 %s 里拿出 %s", U.pretty(chest), name)
 end
 
+-- ═══════════════════════ SURVIVAL-01：四个基础生存动作 ═══════════════════════
+--
+-- 共同约定（和 pickup_by_ref / harvest_by_ref 完全一致）：
+--   · 目标一律由 guard 从**当前快照**解析好放进 j.ctx.target，动作自己绝不按 prefab 搜替代目标；
+--   · 背包类动作（eat / craft / equip）的"目标"是**角色真实背包**里的东西，模型只能给白名单名字；
+--   · 成功以**真实状态变化**为准（背包数量 / 饥饿值 / 装备栏），不以函数返回值为准。
+
+--- 采集草丛/树苗（按 #N 引用）。产物进背包才算成功。
+local function gather_by_ref(j, p, target)
+    if target == nil or not target:IsValid() then
+        return "fail", "entity_gone: 目标已经不存在了"
+    end
+    local rules = Whale ~= nil and Whale.gatherrules or nil
+    if rules == nil then return "fail", "gather_rules_missing" end
+
+    local pickable = target.components ~= nil and target.components.pickable or nil
+    if pickable == nil then
+        return "fail", "target_not_gatherable: 目标没有 pickable 组件"
+    end
+
+    if j.step == "start" then
+        if target:IsInLimbo() then return "fail", "in_limbo: 目标进入了 limbo" end
+        -- ★ 授权那一刻重新判一次成熟度（Candidate != Ready）
+        local ok_ready, why_ready = rules.IsReady(target)
+        if not ok_ready then
+            return "fail", (why_ready or "not_ready") .. ": 目标当前不能采"
+        end
+        j.data.target = target
+        j.data.prefab = tostring(target.prefab or "?")
+        j.data.label = U.pretty(target)
+        j.data.product = rules.ProductOf(target)
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        push(p, BufferedAction(p, target, ACTIONS.PICK, nil))
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local alive = target:IsValid()
+        local ok_can, can = pcall(function() return pickable:CanBePicked() end)
+        local flipped = (ok_can and can == false)
+
+        if flipped or not alive then
+            local after = snapshot_counts(p)
+            local product = j.data.product
+            local gained = 0
+            if product ~= nil then
+                gained = (after[product] or 0) - (j.data.before[product] or 0)
+            end
+            local label = rules.PRODUCT_LABELS[product] or product or "产物"
+            if gained > 0 then
+                return "done", string.format("采了 %s（%s+%d，%s）", j.data.label or j.data.prefab, product, gained, label)
+            end
+            return "done", string.format("采了 %s（%s 没进背包，可能掉在地上了）", j.data.label or j.data.prefab, product or "产物")
+        end
+
+        if U.now() - j.data.phase_start > 6 then
+            return "fail", "gather_failed: 目标状态没有变化（可能够不着，或已经不可采）"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+JOBS.gather = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.target ~= nil then return gather_by_ref(j, p, ctx.target) end
+    return "fail", "gather 只能按 #N 引用调用（不支持按名字搜索）"
+end
+
+--- 吃东西（背包里的白名单食物）。以饥饿值变化 + 物品数量减少为判据。
+JOBS.eat = function(j, p)
+    local ctx = j.ctx or {}
+    -- 新路径：白名单 + 服务端挑目标（ctx.food = 模型指定的 prefab，可为 nil = 自动挑）
+    if ctx.survival_eat == true then
+        local rules = Whale ~= nil and Whale.eatrules or nil
+        if rules == nil then return "fail", "eat_rules_missing" end
+        local inv = p.components ~= nil and p.components.inventory or nil
+        if inv == nil then return "fail", "no_inventory: 角色没有背包" end
+
+        local item = nil
+        if ctx.food ~= nil and ctx.food ~= "" then
+            local ok_p, why_p = rules.IsAllowedPrefab(tostring(ctx.food))
+            if not ok_p then return "fail", (why_p or "food_not_allowed") .. ": " .. tostring(ctx.food) .. " 不在可吃白名单里" end
+            -- 只从**背包**里找，绝不从地上/世界里找
+            pcall(function()
+                inv:ForEachItem(function(it)
+                    if item ~= nil then return end
+                    if it ~= nil and it:IsValid() and tostring(it.prefab) == tostring(ctx.food) then
+                        local ok_e = rules.IsEdible(it)
+                        if ok_e then item = it end
+                    end
+                end)
+            end)
+            if item == nil then return "fail", "not_in_inventory: 背包里没有可吃的 " .. tostring(ctx.food) end
+        else
+            item = rules.PickBest(inv)
+            if item == nil then return "fail", "no_food: 背包里没有可吃的东西" end
+        end
+
+        if j.step == "start" then
+            j.data.prefab = tostring(item.prefab)
+            j.data.label = rules.FOODS[item.prefab] or tostring(item.prefab)
+            j.data.hunger_before = p.components.hunger ~= nil and p.components.hunger.current or nil
+            j.data.before = snapshot_counts(p)
+            j.data.phase_start = U.now()
+            push(p, BufferedAction(p, nil, ACTIONS.EAT, item))
+            j.step = "acting"
+            return "run"
+        end
+
+        if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
+        local hunger = p.components.hunger ~= nil and p.components.hunger.current or nil
+        local delta = (hunger ~= nil and j.data.hunger_before ~= nil) and (hunger - j.data.hunger_before) or nil
+        local after = snapshot_counts(p)
+        local eaten = (j.data.before[j.data.prefab] or 0) - (after[j.data.prefab] or 0)
+
+        if (delta ~= nil and delta > 0.5) or eaten > 0 then
+            local bits = {}
+            if delta ~= nil and delta > 0.5 then bits[#bits + 1] = string.format("饥饿 +%d", math.floor(delta)) end
+            if eaten > 0 then bits[#bits + 1] = string.format("%s -%d", j.data.prefab, eaten) end
+            return "done", string.format("吃了 %s（%s）", j.data.label, table.concat(bits, "，"))
+        end
+        if U.now() - j.data.phase_start > 20 then
+            return "fail", "eat_failed: 吃了但饥饿和背包都没变化"
+        end
+        return "run"
+    end
+
+    -- ── 以下为 SURVIVAL-01 之前的旧路径（reflex 用），语义保持不变 ──
+    local item = nil
+    if j.args.item ~= nil and j.args.item ~= "" then
+        item = U.find_item(p, j.args.item)
+        if item == nil then return "fail", "背包里没有 " .. tostring(j.args.item) end
+    else
+        item = best_food(p)
+        if item == nil then return "fail", "背包里没有能吃的东西" end
+    end
+    if item.components.edible == nil then
+        return "fail", U.pretty(item) .. " 不能吃"
+    end
+    if busy(p) then
+        if U.now() - j.t0 > 20 then return "fail", "手上正忙着，没吃上" end
+        return "run"
+    end
+    if j.step == "start" then
+        j.data.name = U.describe_item(item)
+        j.data.hunger_before = p.components.hunger ~= nil and p.components.hunger.current or nil
+        push(p, BufferedAction(p, nil, ACTIONS.EAT, item))
+        j.step = "acting"
+        j.data.phase_start = U.now()
+        return "run"
+    end
+    if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
+    local hunger = p.components.hunger ~= nil and p.components.hunger.current or nil
+    local delta = (hunger ~= nil and j.data.hunger_before ~= nil) and (hunger - j.data.hunger_before) or nil
+    if delta ~= nil and delta > 0.5 then
+        return "done", string.format("吃了 %s，饥饿 +%d", j.data.name, math.floor(delta))
+    end
+    return "done", "吃了 " .. j.data.name
+end
+
+--- 制作白名单里的工具（原生 builder）。以材料消耗 + 成品进背包为判据。
+JOBS.craft = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.survival_craft == true then
+        local rules = Whale ~= nil and Whale.craftrules or nil
+        if rules == nil then return "fail", "craft_rules_missing" end
+        local name = tostring(ctx.recipe or "")
+        local ok_r, why_r = rules.IsAllowed(name)
+        if not ok_r then return "fail", (why_r or "recipe_not_allowed") .. ": " .. name .. "（只开放 " .. table.concat(rules.RecipeList(), "/") .. "）" end
+
+        local builder = p.components ~= nil and p.components.builder or nil
+        if builder == nil then return "fail", "no_builder: 角色现在不能制作东西" end
+
+        if j.step == "start" then
+            local recipe = recipe_of(name)
+            if recipe == nil then return "fail", "recipe_unknown: 游戏里没有这个配方" end
+            local ok_k, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
+            if ok_k and knows == false then
+                return "fail", "recipe_locked: 还不会做 " .. name .. "（需要先解锁）"
+            end
+            local missing = rules.MissingIngredients(p, name)
+            if missing ~= nil then
+                return "fail", missing
+            end
+            j.data.name = name
+            j.data.label = rules.RECIPES[name].label
+            j.data.before = snapshot_counts(p)
+            j.data.phase_start = U.now()
+            -- 原生制作：和玩家点制作栏同一条路
+            push(p, BufferedAction(p, nil, ACTIONS.CRAFT, recipe))
+            j.step = "acting"
+            return "run"
+        end
+
+        if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
+        local after = snapshot_counts(p)
+        local made = (after[j.data.name] or 0) - (j.data.before[j.data.name] or 0)
+        if made > 0 then
+            -- 顺便报告材料消耗
+            local used = {}
+            local def = rules.RECIPES[j.data.name]
+            for prefab, need in pairs(def.ingredients) do
+                local spent = (j.data.before[prefab] or 0) - (after[prefab] or 0)
+                if spent > 0 then used[#used + 1] = string.format("%s-%d", prefab, spent) end
+            end
+            table.sort(used)
+            local tail = #used > 0 and ("（" .. table.concat(used, "，") .. "）") or ""
+            return "done", string.format("做好了 %s（%s+%d）%s", j.data.label, j.data.name, made, tail)
+        end
+        if U.now() - j.data.phase_start > 20 then
+            return "fail", "craft_failed: 材料没消耗、成品没进背包"
+        end
+        return "run"
+    end
+
+    -- ── 旧路径（reflex / macros 用），语义不变 ──
+    if j.step == "start" then
+        local recipe, key = recipe_of(j.args.recipe or j.args.name)
+        if recipe == nil then
+            return "fail", "没有这个配方：" .. tostring(j.args.recipe) .. "（用游戏里的配方名，比如 torch、axe、spear、campfire）"
+        end
+        local builder = p.components.builder
+        if builder == nil then return "fail", "你现在不能制作东西" end
+        local ok, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
+        if ok and knows == false then
+            return "fail", string.format("%s 还不会做（要先做科学机器/靠近它解锁）", key)
+        end
+        local missing = missing_ingredients(p, recipe)
+        if missing ~= nil then
+            return "fail", string.format("%s %s", key, missing)
+        end
+        j.data.recipe, j.data.key = recipe, key
+        j.data.placeable = recipe.placer ~= nil
+        j.data.count = tonumber(j.args.count) or 1
+        j.data.done_count = 0
+        j.step = "acting"
+    end
+    if j.data.placeable then
+        return job_build(j, p)
+    end
+    if j.data.pending then
+        if busy(p) then
+            if U.now() - j.t0 > 120 then return "fail", "做东西卡住了" end
+            return "run"
+        end
+        j.data.pending = nil
+    end
+    if j.data.done_count >= j.data.count then
+        return "done", string.format("做了 %d 个 %s", j.data.done_count, j.data.key)
+    end
+    if busy(p) then
+        if U.now() - j.t0 > 180 then return "fail", "手上一直忙着，没做出东西" end
+        return "run"
+    end
+    local builder = p.components.builder
+    -- 注意：MakeRecipeFromMenu / MakeRecipeAtPoint 是客户端菜单用的，服务端调用会因为
+    -- "背包没被打开"直接 return（什么也不做），所以这里必须用 MakeRecipe。
+    local ok, started = pcall(function() return builder:MakeRecipe(j.data.recipe, nil, nil, nil) end)
+    if not ok then return "fail", "制作出错：" .. tostring(started) end
+    if started ~= true then
+        return "fail", string.format("%s 没做出来（材料或状态不允许）", j.data.key)
+    end
+    j.data.pending = true
+    j.data.done_count = j.data.done_count + 1
+    return "run"
+end
+
+--- 装备白名单里的手持物品。以装备栏真实变化为判据。
+JOBS.equip = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.survival_equip == true then
+        local rules = Whale ~= nil and Whale.equiprules or nil
+        if rules == nil then return "fail", "equip_rules_missing" end
+        local name = tostring(ctx.item or "")
+        local ok_p, why_p = rules.IsAllowedPrefab(name)
+        if not ok_p then return "fail", (why_p or "item_not_equippable") .. ": " .. name .. "（只开放 " .. table.concat(rules.ItemList(), "/") .. "）" end
+
+        local inv = p.components ~= nil and p.components.inventory or nil
+        if inv == nil then return "fail", "no_inventory: 角色没有背包" end
+
+        local item = rules.FindInInventory(inv, name)
+        if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. name end
+        local ok_e, why_e = rules.IsEquippable(item)
+        if not ok_e then return "fail", (why_e or "item_not_equippable") end
+
+        if j.step == "start" then
+            j.data.name = name
+            j.data.label = rules.ITEMS[name] or name
+            j.data.hand_before = rules.HandItem(p)
+            j.data.phase_start = U.now()
+            local ok_eq, err = pcall(function() inv:Equip(item) end)
+            if not ok_eq then return "fail", "equip_failed: " .. tostring(err) end
+            j.step = "acting"
+            return "run"
+        end
+
+        local hand = rules.HandItem(p)
+        if hand ~= nil and tostring(hand.prefab) == name then
+            local prev = j.data.hand_before
+            local prev_name = prev ~= nil and tostring(prev.prefab) or nil
+            if prev_name ~= nil and prev_name ~= name then
+                return "done", string.format("换上了 %s（原来的 %s 收回背包）", j.data.label, prev_name)
+            end
+            return "done", string.format("拿在手里了：%s", j.data.label)
+        end
+        if U.now() - j.data.phase_start > 10 then
+            return "fail", "equip_failed: 装备栏没有变化"
+        end
+        return "run"
+    end
+
+    -- ── 旧路径（reflex 用），语义不变 ──
+    local want = j.args.item
+    if want == nil or want == "" then return "fail", "equip 要传 item（要拿在手里的东西）" end
+    local item = U.find_item(p, want)
+    if item == nil then return "fail", "背包里没有 " .. tostring(want) end
+    local inv = p.components.inventory
+    if inv == nil then return "fail", "没有背包" end
+    local ok, err = pcall(function() inv:Equip(item) end)
+    if not ok then return "fail", "装备不上：" .. tostring(err) end
+    return "done", "把 " .. U.describe_item(item) .. " 拿在手里了"
+end
+
 --- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable
 JOBS.harvest = function(j, p)
     -- M2.3：带 ctx.target 时走"按 #N 收获"的新路径（只认 guard 解析出来的真实实体，

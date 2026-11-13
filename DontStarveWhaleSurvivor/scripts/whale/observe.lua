@@ -450,7 +450,14 @@ function O.Render(data)
                         end
                         if item.stack_size ~= nil and item.stack_size > 1 then text = text .. " ×" .. tostring(item.stack_size) end
                         if item.work_action ~= nil then text = text .. " 可" .. tostring(WORK_LABELS[item.work_action] or item.work_action) end
-                        if item.is_harvestable == true then text = text .. " 可收" end
+                        if item.is_harvestable == true then
+                            -- SURVIVAL-01：告诉模型该用哪个动作（浆果丛 harvest / 草与树苗 gather）
+                            if item.use_action == "gather" then
+                                text = text .. " 可采(gather)"
+                            else
+                                text = text .. " 可收(harvest)"
+                            end
+                        end
                         if item.fuel_percent ~= nil then text = text .. " 燃料 " .. tostring(item.fuel_percent) .. "%" end
                         if item.targeting_you then text = text .. " 正在追你" end
                         parts[#parts + 1] = text

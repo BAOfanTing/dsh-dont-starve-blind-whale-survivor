@@ -147,6 +147,40 @@ G.ACTIONS = {
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
+    -- ═══════════════ SURVIVAL-01：四个基础生存动作 ═══════════════
+    -- gather：按 #N 采集草丛/树苗（白名单在 Whale.gatherrules）
+    gather = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
+    -- eat：吃背包里的白名单食物。food 可选（不填 = 服务端挑最该吃的）
+    eat = {
+        risk = "R1",
+        required_components = { "health", "hunger", "inventory" },
+        args = {
+            food = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+        },
+    },
+    -- craft：只做白名单里的 3 个工具。recipe 必填且必须是白名单里的名字
+    craft = {
+        risk = "R2",
+        required_components = { "builder", "inventory" },
+        args = {
+            recipe = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+        },
+    },
+    -- equip：只装备白名单里的手持物品。item 必填
+    equip = {
+        risk = "R1",
+        required_components = { "inventory" },
+        args = {
+            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+        },
+    },
 }
 
 --- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
@@ -482,12 +516,118 @@ function G.validate(cmd)
         target = ent
     end
 
+    -- ═══════════════ SURVIVAL-01 ═══════════════
+    if action == "gather" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+
+        local snapshot_id = tostring(cmd.args.snapshot_id)
+        local ref = tostring(cmd.args.target_ref)
+        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        if ent == nil then return false, why_t or "unknown_ref", nil end
+
+        local gr = Whale ~= nil and Whale.gatherrules or nil
+        if gr == nil then return false, "gather_rules_missing", nil end
+
+        -- 候选资格：与观察侧同一份白名单（草丛/树苗）
+        local ok_cand, why_cand = gr.IsCandidate(ent, actor)
+        if not ok_cand then return false, why_cand or "target_not_gatherable", nil end
+
+        -- ★ 授权那一刻重新判成熟度（采空的不许再采）
+        local ok_ready, why_ready = gr.IsReady(ent)
+        if not ok_ready then return false, why_ready or "not_ready", nil end
+
+        -- ★ 距离照抄原生 PickRangeCheck
+        if not gr.InNativeRange(actor, ent) then return false, "out_of_range", nil end
+
+        target = ent
+    end
+
+    if action == "eat" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local er = Whale ~= nil and Whale.eatrules or nil
+        if er == nil then return false, "eat_rules_missing", nil end
+
+        local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
+        if inv == nil then return false, "missing_component:inventory", nil end
+
+        -- 模型可以指定"吃哪一类"，但必须是白名单里的
+        local food = cmd.args.food
+        if food ~= nil and food ~= "" then
+            local ok_f, why_f = er.IsAllowedPrefab(tostring(food))
+            if not ok_f then return false, why_f or "food_not_allowed", nil end
+            -- 必须真的在背包里
+            local found = false
+            pcall(function()
+                inv:ForEachItem(function(it)
+                    if found then return end
+                    if it ~= nil and it:IsValid() and tostring(it.prefab) == tostring(food) then found = true end
+                end)
+            end)
+            if not found then return false, "not_in_inventory", nil end
+        else
+            -- 不指定就让服务端挑；挑不出来直接拒（不要空跑一次动作）
+            if er.PickBest(inv) == nil then return false, "no_food", nil end
+        end
+
+        -- 饥饿满了就别吃（避免浪费食物，也避免"吃了没效果"被误报成功）
+        local hunger = actor.components.hunger
+        local ok_pct, pct = pcall(function() return hunger:GetPercent() end)
+        if ok_pct and type(pct) == "number" and pct >= 0.99 then
+            return false, "not_hungry", nil
+        end
+    end
+
+    if action == "craft" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local cr = Whale ~= nil and Whale.craftrules or nil
+        if cr == nil then return false, "craft_rules_missing", nil end
+
+        local recipe = tostring(cmd.args.recipe)
+        local ok_r, why_r = cr.IsAllowed(recipe)
+        if not ok_r then return false, why_r or "recipe_not_allowed", nil end
+
+        local builder = actor ~= nil and actor.components ~= nil and actor.components.builder or nil
+        if builder == nil then return false, "missing_component:builder", nil end
+
+        -- 材料不够就明确回 ingredients_missing（不要下发一条注定失败的命令）
+        local missing = cr.MissingIngredients(actor, recipe)
+        if missing ~= nil then
+            if string.sub(missing, 1, 19) == "ingredients_missing" then
+                return false, missing, nil
+            end
+            return false, missing, nil
+        end
+    end
+
+    if action == "equip" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local qr = Whale ~= nil and Whale.equiprules or nil
+        if qr == nil then return false, "equip_rules_missing", nil end
+
+        local item = tostring(cmd.args.item)
+        local ok_i, why_i = qr.IsAllowedPrefab(item)
+        if not ok_i then return false, why_i or "item_not_equippable", nil end
+
+        local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
+        if inv == nil then return false, "missing_component:inventory", nil end
+        if qr.FindInInventory(inv, item) == nil then return false, "not_in_inventory", nil end
+    end
+
     -- 组件
     local ok_comp, why_comp = actor_has_components(actor, spec.required_components)
     if not ok_comp then return false, why_comp, nil end
 
     -- 通过：记世代 + 记 id（注意：记 id 在真正接受时才做，见 accept）
-    return true, nil, { action = action, spec = spec, actor = actor, status = status, target = target }
+    return true, nil, {
+        action = action, spec = spec, actor = actor, status = status, target = target,
+        -- SURVIVAL-01：这四个动作走"白名单 + 服务端解析"的新路径
+        survival_eat = (action == "eat") or nil,
+        survival_craft = (action == "craft") or nil,
+        survival_equip = (action == "equip") or nil,
+        recipe = cmd ~= nil and cmd.args ~= nil and cmd.args.recipe or nil,
+        item = cmd ~= nil and cmd.args ~= nil and cmd.args.item or nil,
+        food = cmd ~= nil and cmd.args ~= nil and cmd.args.food or nil,
+    }
 end
 
 --- 校验通过后调用：只记 command_id 去重 + 诊断信息。

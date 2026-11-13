@@ -288,7 +288,16 @@ local function handle_command(json_text)
         action,
         type(cmd.args) == "table" and cmd.args or {},
         id,
-        { target = detail ~= nil and detail.target or nil }
+        {
+            target = detail ~= nil and detail.target or nil,
+            -- SURVIVAL-01：背包类动作由 guard 从**真实背包**解析，模型只给白名单名字
+            survival_eat = detail ~= nil and detail.survival_eat or nil,
+            survival_craft = detail ~= nil and detail.survival_craft or nil,
+            survival_equip = detail ~= nil and detail.survival_equip or nil,
+            recipe = detail ~= nil and detail.recipe or nil,
+            item = detail ~= nil and detail.item or nil,
+            food = detail ~= nil and detail.food or nil,
+        }
     )
     if not started then
         B.Report(false, err or "动作没能开始", id, "action_start_failed")
