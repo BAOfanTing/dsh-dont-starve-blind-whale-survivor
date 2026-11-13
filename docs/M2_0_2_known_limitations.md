@@ -11,9 +11,9 @@
 | 0.14.1 载入真实 DST 世界 | ✅ 已观察（Cluster_2，状态文件 mod=0.14.1） | 但暴露通道缺陷；0.14.2 修复后需重进世界 |
 | 0.14.2 真机核心链路（stop / 精确 reason / revoking / ack / fail-closed） | ✅ **PASS（第二轮）** | 见 `docs/M2_0_2_runtime_probe_round2.md` |
 | 0.14.3 健壮性修复真机 | **NOT_RUN** | 需再重进一次世界 |
-| F8 → MCP 真机换手 | **BLOCKED** | `127.0.0.1:18090` 未监听（DSH 插件 MCP 服务没启动） |
-| MCP → F8 真机换手 | **BLOCKED** | 同上 |
-| 旧命令换手后到达（真机） | ✅ **PASS（第二轮 T3/T6/T7）** | `stale_generation` / `authority_revoking` |
+| F8 → MCP 真机换手 | ✅ **PASS（第三轮）** | 用产品 `apply()` 启动 18090，真实 HTTP `tools/call`；旧 MCP 命令被 `authority_revoking` 拒，收敛后新租约 active。见 `docs/M2_0_2_runtime_probe_round3.md` |
+| MCP → F8 真机换手 | ✅ **PASS（第三轮）** | 同上（另一控制主体为同协议独立 LeaseManager，未启动 F8 AI 循环） |
+| 旧命令换手后到达（真机） | ✅ **PASS（第二/三轮）** | `stale_generation` / `authority_revoking` / `wrong_owner` |
 | revoking → `A.Abort` → ack → active 的真实时序 | ✅ **PASS（第二轮）** | Lua 写出 ack（job_cleared=true），Node 校验后 active |
 | 租约过期 / 游戏重启 / 文件缺失真机 | **NOT_RUN** | 见 `docs/M2_0_2_runtime_manual_checklist.md` |
 
@@ -24,6 +24,7 @@
 ## 2. 身份粒度
 
 - `owner_instance_id` 在 `lib/index.js` 的 `apply()` 里生成，是**进程内稳定 UUID**。
+- **F8 AI 循环未启动**（第三轮）：换手测试的"另一控制主体"是同协议、同权威租约文件的独立 `LeaseManager`（`owner_type=f8_agent`）。按 F8 会真的让模型自主玩游戏，未获授权，因此没有启动。
 - **MCP 是服务实例级身份**：`lib/mcp-server.js` 不区分单个 TCP 连接/会话，两个 MCP 客户端连同一个服务进程会共享同一个 `owner_instance_id`。本轮**没有**实现连接级隔离，也不声称实现了。
   - 若要连接级：需要 MCP 层把每个 `initialize`/session 映射成独立 id 并传给 dispatcher（M2.1 之后再说）。
 - F8 是"每个插件进程一个实例"；如果将来真跑两个独立插件进程，各自会生成不同 UUID ✓。
