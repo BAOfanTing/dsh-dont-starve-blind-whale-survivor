@@ -6,8 +6,10 @@
 // 修复：去重键 = authority_epoch + ":" + generation，ack 带 lease_id。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { LeaseManager } from '../lib/control.js'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -105,4 +107,35 @@ test('ack-3 静态检查：产品代码用 epoch+generation 去重，ack 带 lea
   assert.ok(bridge.includes('os.time() * 1000.0'), '时间戳用浮点，避免 32 位溢出')
   assert.ok(control.includes('ack.lease_id !== fresh.lease_id'), 'Node 校验 lease_id')
   assert.ok(bridge.includes('if id == last_cmd_id then return end'), '命令单槽去重（不重放）')
+})
+
+
+test('ack-4 revoking 收敛：拿到有效 ack 后 completeHandover 发布 active，旧持有者被拒', () => {
+  // 纯 Node：复现"MCP 每次 tools/call 都尝试 completeHandover"的收敛路径
+  const dir = mkdtempSync(join(tmpdir(), 'bws-ack-converge-'))
+  const file = join(dir, 'm2-control.json')
+  const ENV = { runtimeId: 'r1', sessionId: 's', shardId: '1', actorId: 'player:x' }
+  try {
+    const c = new LeaseManager({ file, now: () => 1000 })
+    c.acquire('mcp_client', ENV, { ownerInstanceId: 'mcp' })
+    const h = c.acquire('f8_agent', ENV, { ownerInstanceId: 'f8' })
+    assert.equal(h.lease.status, 'revoking')
+    assert.equal(c.validate('mcp_client', { ownerInstanceId: 'mcp', env: ENV }).reason, 'authority_revoking')
+    // 第一次尝试（ack 还没写）→ 保持 revoking
+    assert.equal(c.completeHandover(null).reason, 'handover_ack_invalid')
+    assert.equal(c.readAuthority().status, 'revoking')
+    // 下一次调用读到 Lua 的 ack → active
+    const fresh = c.readAuthority()
+    const done = c.completeHandover({ authority_epoch: fresh.authority_epoch, generation: fresh.generation, runtime_id: fresh.runtime_id, lease_id: fresh.lease_id })
+    assert.equal(done.ok, true)
+    assert.equal(done.lease.status, 'active')
+    assert.equal(c.validate('mcp_client', { ownerInstanceId: 'mcp', env: ENV }).reason, 'wrong_owner')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('ack-5 静态检查：MCP/F8 每次调用都尝试完成 revoking（不只 acquire 那一刻）', () => {
+  const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
+  const hits = src.split("fresh?.status === 'revoking'").length - 1
+  assert.ok(hits >= 2, `MCP 与 F8 两处都要收敛，实际 ${hits}`)
+  assert.ok(src.includes('control.completeHandover(bridge.readLeaseAck'), '用 readLeaseAck 拿确认')
 })
