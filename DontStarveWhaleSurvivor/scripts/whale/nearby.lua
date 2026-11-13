@@ -50,6 +50,9 @@ N.SCHEMA = "bws.nearby/1"
 --- 桶顺序 = 展示优先级（同时也是给 #N 编号的顺序，必须确定、可复现）
 N.BUCKETS = {
     { key = "threats", label = "威胁" },
+    -- M2.2：可行动目标（当前 = 拾取候选）单独成桶。
+    -- 放在 threats 之后、food/resources 之前：既不会被植物挤掉，也不会把威胁挤掉。
+    { key = "pickupables", label = "可拾取物" },
     { key = "food", label = "食物" },
     { key = "resources", label = "资源" },
     { key = "containers", label = "容器" },
@@ -79,22 +82,29 @@ local FOOD_SOURCES = {
     dragonfruit = true, durian = true, lichen = true, stonefruit = true,
 }
 
---- 这些 foodtype 虽然"能吃"，但不是 AI 该当食物用的（树枝、种子、齿轮…）
+--- 玩家真正能当食物用的 foodtype（**白名单**：不确定就当"不是食物"，失败要安全）。
+--- 依据本机 scripts/constants.lua 的 FOODTYPE 全表（19 种）+ scripts/components/edible.lua：
+---   · edible 组件默认 foodtype = GENERIC（edible.lua:24），所以真食物不会"读不到类型"；
+---   · 排除的是给动物/特殊生物用的类型（游戏注释已说明）：
+---     ELEMENTAL(燧石/石头/金块) NITRE(硝石) GEARS(齿轮) WOOD(木头) ROUGHAGE(树枝/草)
+---     SEEDS(种子) RAW(需烹饪) BURNT(给 lavae) LUNAR_SHARDS/CORPSE/MIASMA(裂隙生物)
+---     BERRY(注释：只是给小鸟的 hack，浆果本体是 VEGGIE)
+--- 真机 bug（M2.1 发现）：flint 带 edible 且 foodtype=ELEMENTAL，旧逻辑只排除 3 项 → 被判成 food。
 local FOODTYPE = GLOBAL.FOODTYPE
-local NON_FOOD_TYPES = {}
--- 防御：某些构建/测试环境可能没有 FOODTYPE（或只有部分键），缺了就当没有这个排除项
+local PLAYER_FOOD_TYPES = {}
+-- 防御：某些构建/测试环境可能没有 FOODTYPE（或只有部分键），缺了就当"不是这类食物"
 if FOODTYPE ~= nil then
-    for _, key in ipairs({ "ROUGHAGE", "SEEDS", "GEARS" }) do
-        if FOODTYPE[key] ~= nil then NON_FOOD_TYPES[FOODTYPE[key]] = true end
+    for _, key in ipairs({ "GENERIC", "MEAT", "VEGGIE", "HORRIBLE", "INSECT", "GOODIES", "MONSTER" }) do
+        if FOODTYPE[key] ~= nil then PLAYER_FOOD_TYPES[FOODTYPE[key]] = true end
     end
 end
 
 local function is_real_food(edible)
     if edible == nil then return false end
     local foodtype = edible.foodtype
-    if foodtype == nil then return true end
-    if NON_FOOD_TYPES[foodtype] then return false end
-    return true
+    -- 读不到类型：不当食物（旧逻辑在这里默认 true，等于"有 edible 就算食物"）
+    if foodtype == nil then return false end
+    return PLAYER_FOOD_TYPES[foodtype] == true
 end
 
 local function has_tag(ent, tag)
@@ -137,7 +147,7 @@ local function interesting(ent)
 end
 
 --- 分类：一个实体只会得到一个 category（优先级从上到下）
-function N.Classify(ent, actor)
+local function classify_base(ent, actor)
     if ent == nil then return nil end
 
     local h = comp(ent, "health")
@@ -192,6 +202,24 @@ function N.Classify(ent, actor)
     return "other"
 end
 
+--- M2.2：在七类之上加一层"可行动目标"分流。
+--- 返回 (category, item_kind)：
+---   · category 永远是**单一**桶名 —— 一个实体在一个快照里只能出现在一个桶里；
+---   · item_kind 只在 pickupables 时有值，表示它原本的语义类别（food / resources / …），
+---     这样"可拾取"不会丢掉"它是什么东西"的信息。
+--- 威胁优先：能打我们的东西绝不能被"可拾取物"挤掉。
+--- 候选判定与 pickup 执行器共用 Whale.pickuprules（观察-执行一致）。
+function N.Classify(ent, actor)
+    local base = classify_base(ent, actor)
+    if base == nil then return nil end
+    if base == "threats" then return "threats" end
+    local rules = Whale ~= nil and Whale.pickuprules or nil
+    if rules ~= nil and rules.IsCandidate(ent, actor) then
+        return "pickupables", base
+    end
+    return base
+end
+
 -- ─────────────────────────── 实体 → 紧凑字段 ───────────────────────────
 
 --- 高精度计时（毫秒）。用于 measure 单次扫描耗时。
@@ -231,7 +259,7 @@ local function round1(value)
     return math.floor(value * 10 + 0.5) / 10
 end
 
-local function describe(ent, actor, category)
+local function describe(ent, actor, category, item_kind)
     local x, _, z = U.pos(ent)
     if x == nil then return nil end
     local dist = U.dist(actor, ent) / U.TILE
@@ -246,6 +274,8 @@ local function describe(ent, actor, category)
         distance = round1(dist),
         position = { x = round1(tx), z = round1(tz) },
     }
+    -- M2.2：可拾取物保留它原本的语义类别（不是所有桶都有这个字段）
+    if item_kind ~= nil then block.item_kind = item_kind end
 
     if category == "threats" or category == "creatures" then
         local cur, max, dead = health_of(ent)
@@ -308,9 +338,9 @@ local function scan(actor, radius)
     for _, ent in ipairs(ents) do
         if ent ~= nil and ent ~= actor and ent:IsValid() and not ent:HasTag("INLIMBO") then
             if interesting(ent) then
-                local category = N.Classify(ent, actor)
+                local category, item_kind = N.Classify(ent, actor)
                 if category ~= nil then
-                    local block = describe(ent, actor, category)
+                    local block = describe(ent, actor, category, item_kind)
                     if block ~= nil then
                         out[#out + 1] = { block = block, ent = ent, guid = ent.GUID }
                     end
@@ -549,7 +579,7 @@ local function build(actor, info, now, opts, identity)
             scan = { reused = false, timestamp = now, age_ms = 0,
                      duration_ms = nil, duration_source = "unavailable",
                      scan_seconds = opts.scan_seconds },
-            buckets = { threats = {}, food = {}, resources = {}, containers = {}, structures = {}, creatures = {}, other = {} }, -- 出错时为空，读端按"没有数据"处理
+            buckets = { threats = {}, pickupables = {}, food = {}, resources = {}, containers = {}, structures = {}, creatures = {}, other = {} }, -- 出错时为空，读端按"没有数据"处理
             delta = { status = "reset", added_count = 0, removed_count = 0, changed_count = 0,
                       added = {}, removed = {}, changed = {} },
         }

@@ -139,14 +139,9 @@ G.ACTIONS = {
     },
 }
 
---- M2.1 拾取白名单：只放行本构建里**已核实**是普通地面物品的 prefab。
---- 依据（scripts.zip 实测）：三者都 AddComponent("inventoryitem")，掉在地上可被 ACTIONS.PICKUP 捡起。
---- 注意石头物品的 prefab 是 inv_rocks（不是 rocks，rocks.lua 是巨石的脚本），未核实前不放行。
-G.PICKUP_PREFABS = {
-    twigs = true,
-    cutgrass = true,
-    flint = true,
-}
+--- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
+--- 这里只是别名，方便诊断；pickuprules 缺失时是空表 —— 也就是什么都不放行（失败要安全）。
+G.PICKUP_PREFABS = (Whale ~= nil and Whale.pickuprules ~= nil) and Whale.pickuprules.PREFABS or {}
 
 --- M2.1 保守拾取距离（格）。DST 服务端 ACTIONS.PICKUP.fn 本身不校验距离，
 --- 所以必须由我们限制，避免模型隔空捡 16 格外的物品。
@@ -420,16 +415,14 @@ function G.validate(cmd)
         local ref = tostring(cmd.args.target_ref)
         local ent, why_t = G.resolve_target(snapshot_id, ref, {})
         if ent == nil then return false, why_t or "unknown_ref", nil end
-        if ent:IsInLimbo() then return false, "in_limbo", nil end
-        if G.PICKUP_PREFABS[ent.prefab] ~= true then return false, "prefab_not_allowed", nil end
 
-        local c = ent.components
-        if c == nil or c.inventoryitem == nil then return false, "target_not_pickable", nil end
-        local ii = c.inventoryitem
-        local ok_can, can = pcall(function() return ii.canbepickedup end)
-        if not ok_can or can ~= true then return false, "target_not_pickable", nil end
-        local ok_owner, owner = pcall(function() return ii.owner end)
-        if ok_owner and owner ~= nil then return false, "target_not_pickable", nil end
+        -- ★ M2.2：候选判定与观察侧（nearby 的 pickupables 桶）**共用同一份规则**，
+        --   避免"Observer 说能捡、执行器说不行"。这里只判候选资格；
+        --   执行期条件（距离 / 背包容量 / 角色状态 / 租约）仍然在下面各自判。
+        local rules = Whale ~= nil and Whale.pickuprules or nil
+        if rules == nil then return false, "pickup_rules_missing", nil end
+        local ok_cand, why_cand = rules.IsCandidate(ent, actor)
+        if not ok_cand then return false, why_cand or "target_not_pickable", nil end
 
         -- 背包能否接收（用原生 Inventory:CanAcceptCount，别自己拼堆叠逻辑）
         local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil

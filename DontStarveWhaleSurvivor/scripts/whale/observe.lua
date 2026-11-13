@@ -428,6 +428,8 @@ function O.Render(data)
             for _, def in ipairs(defs) do
                 local bucket = nearby.buckets ~= nil and nearby.buckets[def.key] or nil
                 if bucket ~= nil and #bucket > 0 then
+                    -- M2.2：桶满了就明说，别让模型以为"可拾取物一共只有这些"
+                    local bucket_full = nearby.max_per_bucket ~= nil and #bucket >= nearby.max_per_bucket
                     local parts = {}
                     for _, item in ipairs(bucket) do
                         local text = tostring(item.ref) .. " " .. tostring(item.label or item.prefab or "?")
@@ -444,7 +446,8 @@ function O.Render(data)
                         if item.targeting_you then text = text .. " 正在追你" end
                         parts[#parts + 1] = text
                     end
-                    lines[#lines + 1] = "  " .. def.label .. "：" .. table.concat(parts, "；")
+                    local suffix = bucket_full and "（本桶已满，可能还有没列出的）" or ""
+                    lines[#lines + 1] = "  " .. def.label .. "：" .. table.concat(parts, "；") .. suffix
                 end
             end
         end

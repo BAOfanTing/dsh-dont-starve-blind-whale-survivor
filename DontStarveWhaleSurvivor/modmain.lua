@@ -17,7 +17,7 @@ Whale = {
     -- 版本号跟 modinfo.lua 走：状态文件里的 mod 字段要和模组列表里显示的一致，
     -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
     -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
-    version = (type(version) == "string" and version) or "0.15.2",
+    version = (type(version) == "string" and version) or "0.16.0",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -58,6 +58,8 @@ Whale.reflex_on = modconfig("REFLEX", false) and true or false
 
 modimport("scripts/whale/json.lua")
 modimport("scripts/whale/util.lua")
+-- M2.2：拾取候选判定的唯一来源。必须在 nearby / guard 之前（观察侧与执行侧都引用它）。
+modimport("scripts/whale/pickuprules.lua")
 -- 配置出口：把 modinfo 那几项夹到安全区间，作为唯一生效值（M1.1）
 modimport("scripts/whale/config.lua")
 -- 观察对象唯一入口（Actor Provider）：谁来当"我"由它回答（M1.1）
