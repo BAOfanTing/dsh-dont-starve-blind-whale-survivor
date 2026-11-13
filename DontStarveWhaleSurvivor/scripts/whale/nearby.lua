@@ -729,7 +729,12 @@ function N.Observe(actor, info, now, opts)
         radius = radius, max_total = max_total, max_per_bucket = max_per_bucket,
     }, identity)
 
-    local fresh = cache.result ~= nil
+    -- OBSERVATION-01：get_state 可以要求**强制重扫**（opts.force）。
+    -- 为什么需要：快照默认缓存 scan_seconds（4 秒），而真实模型从读到 id 到发出动作要 3~5 秒，
+    -- 于是"刚拿到的 #N + snapshot_id"经常在动作到达时已经过期（真机 8 次失败里 6 次是 stale_snapshot）。
+    -- 强制重扫不改变任何校验规则：只是让模型手里那份 id 从"生成那一刻"开始计时。
+    local fresh = opts.force ~= true
+        and cache.result ~= nil
         and cache.key == key
         and cache.at ~= nil
         and (now - cache.at) < scan_seconds

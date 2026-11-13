@@ -240,25 +240,26 @@ end
 
 --- 附近实体这里只做"取数据"：扫描/分类/上限/引用/delta 全在 Whale.nearby 里。
 --- 这里只负责把配置和身份传进去，拿回一份可直接序列化的结构。
-local function nearby_block(actor, info, now, unavailable, identity)
+local function nearby_block(actor, info, now, unavailable, identity, force_rescan)
     local provider = Whale ~= nil and Whale.nearby or nil
     if provider == nil or provider.Observe == nil then
         unavailable[#unavailable + 1] = "nearby"
-        return { status = "error", radius = cfg("scan_radius", 16), scan_seconds = cfg("scan_seconds", 4),
+        return { status = "error", radius = cfg("scan_radius", 16), scan_seconds = cfg("scan_seconds", 1),
                  buckets = {}, error = "nearby_module_missing",
                  delta = { status = "reset", added = {}, removed = {}, changed = {} } }
     end
 
     local ok, result = pcall(provider.Observe, actor, info, now, {
         radius = cfg("scan_radius", 16),
-        scan_seconds = cfg("scan_seconds", 4),
+        scan_seconds = cfg("scan_seconds", 1),
         max_total = cfg("nearby_max_total", 60),
         max_per_bucket = cfg("nearby_max_per_bucket", 12),
         identity = identity,
+        force = force_rescan == true,
     })
     if not ok or result == nil then
         unavailable[#unavailable + 1] = "nearby"
-        return { status = "error", radius = cfg("scan_radius", 16), scan_seconds = cfg("scan_seconds", 4),
+        return { status = "error", radius = cfg("scan_radius", 16), scan_seconds = cfg("scan_seconds", 1),
                  buckets = {}, error = "nearby_failed: " .. tostring(result),
                  delta = { status = "reset", added = {}, removed = {}, changed = {} } }
     end

@@ -381,7 +381,8 @@ test('M1.1-12 配置绑定：OBSERVER_SCAN_RADIUS 真的影响扫描半径，且
     local actor = Whale.actor.get_actor()
     local text, data = Whale.observe.Build(actor)
     assert(data.nearby.radius == 40, "扫描半径应该来自配置，实际：" .. tostring(data.nearby.radius))
-    assert(data.nearby.scan_seconds == 4, "扫描间隔应该是默认 4")
+    -- OBSERVATION-01：默认扫描缓存从 4 秒降到 1 秒（快照要跟得上模型的思考时间）
+    assert(data.nearby.scan_seconds == 1, "扫描间隔应该是默认 1，实际：" .. tostring(data.nearby.scan_seconds))
     OUT = tostring(data.nearby.radius)
   `, '配置绑定')
   assert.equal(env.get('OUT'), '40')
