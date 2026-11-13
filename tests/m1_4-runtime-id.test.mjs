@@ -83,7 +83,7 @@ async function newVm() {
   }
   run(STUB)
   run('Whale = { verbose = false, version = "0.13.2" }')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end if k == "scan_seconds" then return 4 end return nil end)')

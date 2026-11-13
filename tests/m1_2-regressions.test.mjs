@@ -71,7 +71,7 @@ async function loadLua() {
   }
   run(STUB, '假游戏')
   run('Whale = { verbose = false, version = "0.12.0" }', 'Whale')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const get = (name) => {

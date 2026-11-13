@@ -138,7 +138,7 @@ const FILES = `Whale.files = {
     pause = "whale_pause.json", io_pause = "whale_io_pause.json",
 }`
 
-function loadLua(fengari, { modules = ['json', 'util', 'config', 'actor', 'nearby', 'observe'] } = {}) {
+function loadLua(fengari, { modules = ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe'] } = {}) {
   const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari
   const L = lauxlib.luaL_newstate()
   lualib.luaL_openlibs(L)

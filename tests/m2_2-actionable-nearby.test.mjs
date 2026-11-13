@@ -82,6 +82,18 @@ function mkent(opts)
         end
     end
     if opts.edible then ent.components.edible = { foodtype = opts.edible_type or "VEGGIE" } end
+    -- M2.3：可收获对象要能被 HarvestRules 识别（原生 pickable 组件 + CanBePicked）
+    if opts.pickable then
+        ent.components.pickable = {
+            canbepicked = opts.pickable_ready ~= false,
+            cycles_left = opts.cycles_left or 3,
+            product = opts.product or nil,
+            caninteractwith = true,
+            CanBePicked = function(self) return self.canbepicked end,
+            IsBarren = function(self) return (self.cycles_left or 1) == 0 end,
+            IsStuck = function(self) return false end,
+        }
+    end
     if opts.container then
         ent.components.container = { IsOpen = function() return opts.container_open == true end }
     end
@@ -135,7 +147,7 @@ async function load({ withGuard = false } = {}) {
   const get = (name) => { lua.lua_getglobal(L, to_luastring(name)); try { return to_jsstring(lua.lua_tostring(L, -1)) } catch { return '' } }
   run(STUB, '假游戏')
   run('Whale = { verbose = false, version = "0.16.0" }', 'Whale')
-  const mods = ['json', 'util', 'pickuprules', 'config', 'actor', 'nearby', 'observe']
+  const mods = ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']
   if (withGuard) mods.push('guard')
   for (const n of mods) run(readFileSync(join(MOD, 'scripts', 'whale', n + '.lua'), 'utf8'), n + '.lua')
   const CONFIG_CODE = `Whale.config.build(function(k)
@@ -175,13 +187,13 @@ const whitelisted = (ent) => ent.item && ent.canbepickedup !== false && !ent.own
 
 // ═══════════════════════ 桶结构 / 候选判定 ═══════════════════════
 
-test('M2.2-01 八桶齐全：pickupables 排在 threats 之后、food 之前；空场景不报错', async () => {
+test('M2.2-01 九桶齐全（M2.3 加了 harvestables）：pickupables 排在 threats 之后、food 之前；空场景不报错', async () => {
   const env = await load()
   env.run('NEARBY = {}', '空场景')
   const { nearby } = env.observe()
   // JSON 键序是 Lua 哈希表顺序，不保证稳定（消费方按 BUCKET_LABELS/N.BUCKETS 走）
   const keys = Object.keys(nearby.buckets).sort()
-  assert.deepEqual(keys, ['containers', 'creatures', 'food', 'other', 'pickupables', 'resources', 'structures', 'threats'].sort())
+  assert.deepEqual(keys, ['containers', 'creatures', 'food', 'harvestables', 'other', 'pickupables', 'resources', 'structures', 'threats'].sort())
   for (const k of keys) assert.deepEqual(nearby.buckets[k], [], `${k} 应该是空数组`)
   assert.equal(nearby.status, 'empty')
   assert.equal(nearby.total_found, 0)
@@ -249,13 +261,17 @@ test('M2.2-05 真食物仍然进 food（落地的 VEGGIE、可采的浆果丛）
   const env = await load()
   env.run(`NEARBY = {
     mkent({ prefab = "berries", guid = 41, x = 8, z = 0, item = true, edible = true, edible_type = "VEGGIE" }),
-    mkent({ prefab = "berrybush", guid = 42, x = 16, z = 0, tags = { pickable = true }, harvestable = true }),
+    -- M2.3：浆果丛是批准的可收获对象（带原生 pickable 组件）⇒ 进 harvestables，item_kind 保留 food 语义
+    mkent({ prefab = "berrybush", guid = 42, x = 16, z = 0, tags = { pickable = true }, pickable = true, product = "berries" }),
+    -- 胡萝卜不在 M2.3 白名单里 ⇒ 仍然留在 food
     mkent({ prefab = "carrot_planted", guid = 43, x = 24, z = 0, tags = { pickable = true } }),
   }`, '食物')
   const { nearby } = env.observe()
   const foodPrefabs = nearby.buckets.food.map((f) => f.prefab).sort()
-  assert.deepEqual(foodPrefabs, ['berries', 'berrybush', 'carrot_planted'])
+  assert.deepEqual(foodPrefabs, ['berries', 'carrot_planted'], '食物桶仍然认得真食物（浆果丛已归入可收获桶）')
   assert.equal(nearby.buckets.pickupables.length, 0, 'berries 不在拾取白名单里')
+  assert.deepEqual(nearby.buckets.harvestables.map((h) => h.prefab), ['berrybush'], 'M2.3：浆果丛进可收获桶')
+  assert.equal(nearby.buckets.harvestables[0].item_kind, 'food', '语义仍然是食物来源')
 })
 
 test('M2.2-06 树枝(ROUGHAGE)/种子(SEEDS)/齿轮(GEARS)/木头(WOOD) 都不算食物', async () => {

@@ -85,7 +85,7 @@ async function newVm({ maxPerBucket = 12, maxTotal = 60 } = {}) {
   }
   run(STUB)
   run('Whale = { verbose = false, version = "0.13.3" }')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run(`Whale.config.build(function(k)

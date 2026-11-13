@@ -145,7 +145,7 @@ async function load() {
                        result = "whale_result.json", io_result = "whale_io_result.json",
                        settings = "whale_settings.json", io_settings = "whale_io_settings.json",
                        pause = "whale_pause.json", io_pause = "whale_io_pause.json" }`, '文件名')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   run(`Whale.config.build(function(k)
