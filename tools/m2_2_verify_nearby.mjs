@@ -18,18 +18,12 @@ const pass = (n, d) => { results.push({ n, s: 'PASS', d }); console.log(`  ✅ $
 const fail = (n, d) => { results.push({ n, s: 'FAIL', d }); console.log(`  ❌ ${n}${d ? ' — ' + d : ''}`) }
 const skip = (n, d) => { results.push({ n, s: 'NOT_OBSERVED', d }); console.log(`  ⚠️  ${n}${d ? ' — ' + d : ''}`) }
 
-const bridge = new GameBridge({ log: () => {} })
+// lockDir=true 时 bridge 只认这一个目录（否则它会在多个存档目录里挑，可能挑到过期分片）
+const bridge = new GameBridge({ log: () => {}, bridgeDir: BRIDGE_DIR ?? '', lockDir: Boolean(BRIDGE_DIR) })
 function read() {
-  let st
-  if (BRIDGE_DIR) {
-    const prev = process.env.BWS_BRIDGE_DIR
-    process.env.BWS_BRIDGE_DIR = BRIDGE_DIR
-    try { st = bridge.readState() } finally { if (prev === undefined) delete process.env.BWS_BRIDGE_DIR; else process.env.BWS_BRIDGE_DIR = prev }
-  } else {
-    st = bridge.readState()
-  }
+  const st = bridge.readState()
   if (!st) return null
-  return { raw: st.json, snap: normalizeState(st.json, { ageMs: st.ageMs }), ageMs: st.ageMs }
+  return { raw: st.json, snap: normalizeState(st.json, { ageMs: st.ageMs }), ageMs: st.ageMs, dir: st.dir ?? BRIDGE_DIR ?? '(自动定位)' }
 }
 
 const flat = (nearby) => {
@@ -58,8 +52,19 @@ if (!keys.includes('pickupables')) {
 } else {
   pass('pickupables 桶存在')
   const expect = ['threats', 'pickupables', 'food', 'resources', 'containers', 'structures', 'creatures', 'other']
-  const same = expect.every((k, i) => keys[i] === k)
-  same ? pass('八桶顺序与设计一致', keys.join(' → ')) : fail('八桶顺序与设计一致', keys.join(' → '))
+  const missing = expect.filter((k) => !keys.includes(k))
+  missing.length === 0 ? pass('八桶齐全') : fail('八桶齐全', '缺 ' + missing.join(', '))
+  // ★ 顺序以**渲染文本**为准：JSON 的键序是 Lua 哈希表顺序，不保证稳定（也不该依赖）。
+  //   编号/截断顺序由 N.BUCKETS 决定，文本渲染也按它走。
+  const text = String(raw.text ?? '')
+  const at = (label) => text.indexOf('  ' + label + '：')
+  const order = ['威胁', '可拾取物', '食物', '资源'].map(at)
+  const present = order.filter((i) => i >= 0)
+  const ascending = present.every((v, i) => i === 0 || present[i - 1] < v)
+  present.length < 2
+    ? skip('文本里的桶顺序符合设计（威胁 → 可拾取物 → 食物 → 资源）', '文本里只有 ' + present.length + ' 段')
+    : (ascending ? pass('文本里的桶顺序符合设计（威胁 → 可拾取物 → 食物 → 资源）', '')
+                 : fail('文本里的桶顺序符合设计', JSON.stringify(order)))
   const all = flat(nearby).map((e) => e.ref)
   new Set(all).size === all.length ? pass('ref 全局唯一', `${all.length} 个`) : fail('ref 全局唯一')
   const dupBucket = Object.entries(nearby.buckets).find(([, l]) => {
@@ -138,21 +143,40 @@ if (!DO_PICKUP) {
 } else if (picks.length === 0) {
   skip('pickup 仍能拾取 pickupables 里的目标', '没有可拾取物')
 } else {
-  const target = picks.slice().sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0]
-  if ((target.distance ?? 99) > 2.5) {
-    skip('pickup 仍能拾取 pickupables 里的目标', `最近的目标在 ${target.distance} 格，超出执行距离（先用 move_to）`)
-  } else {
-    console.log(`  → 对 ${target.ref} ${target.prefab}（${target.distance} 格）执行 pickup`)
+  let target = picks.slice().sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0]
+  const callMcp = async (name, args) => {
     const r = await fetch('http://127.0.0.1:18090/mcp', {
-      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pickup', arguments: { target_ref: target.ref, snapshot_id: nearby.snapshot_id } } }),
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
     })
-    const text = await r.text()
-    const raw2 = text.includes('data:') ? text.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('') : text
-    const body = JSON.parse(raw2)
-    const msg = (body.result?.content ?? []).map((c) => c.text).join('\n')
+    const t = await r.text()
+    const j = t.includes('data:') ? t.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('') : t
+    const body = JSON.parse(j)
+    return (body.result?.content ?? []).map((c) => c.text).join('\n') || JSON.stringify(body.error)
+  }
+  // M2.2 的候选不限距离 ⇒ 常见情形是"看得见但离得远"。要回归 pickup，就先 move_to 过去。
+  if ((target.distance ?? 99) > 2.5) {
+    const pos = target.position ?? {}
+    console.log(`  → 最近目标 ${target.ref} ${target.prefab} 在 ${target.distance} 格，先 move_to (${pos.x},${pos.z})`)
+    const mv = await callMcp('move_to', { x: pos.x, z: pos.z, timeout: 25 })
+    console.log('  move_to:', String(mv).slice(0, 120))
+    await new Promise((r) => setTimeout(r, 2500))
+    const again = read()
+    const near = (again?.snap?.nearby?.buckets?.pickupables ?? []).slice().sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0]
+    if (!near) { skip('pickup 仍能拾取 pickupables 里的目标', '靠近后附近没有可拾取物了'); }
+    else { target = near; first.snap.nearby = again.snap.nearby }
+  }
+  if ((target?.distance ?? 99) > 2.5) {
+    skip('pickup 仍能拾取 pickupables 里的目标', `靠近后最近目标仍在 ${target.distance} 格（超出 2.5）`)
+  } else if (target) {
+    const snapId = first.snap?.nearby?.snapshot_id
+    console.log(`  → 对 ${target.ref} ${target.prefab}（${target.distance} 格）执行 pickup @ ${snapId}`)
+    const msg = await callMcp('pickup', { target_ref: target.ref, snapshot_id: snapId })
     console.log('  回执:', String(msg).slice(0, 160))
-    /捡起了|成功/.test(msg) && !/失败/.test(msg)
+    // 注意：行首正则会被 JS 当成除号，必须先存变量
+    const picked = /捡起了|成功/.test(msg) && !/失败/.test(msg)
+    picked
       ? pass('pickup 仍能拾取 pickupables 里的目标', String(msg).slice(0, 80))
       : fail('pickup 仍能拾取 pickupables 里的目标', String(msg).slice(0, 120))
   }
@@ -163,4 +187,6 @@ for (const r of results) console.log(`${r.s.padEnd(14)} ${r.n}${r.d ? '  |  ' + 
 const bad = results.filter((r) => r.s === 'FAIL').length
 const notObs = results.filter((r) => r.s === 'NOT_OBSERVED').length
 console.log(`\n共 ${results.length} 项：PASS ${results.length - bad - notObs} / FAIL ${bad} / NOT_OBSERVED ${notObs}`)
-process.exit(bad === 0 ? 0 : 2)
+// 用 exitCode 而不是 process.exit()：Windows 上直接 exit 有时会触发 libuv 的
+// "!(handle->flags & UV_HANDLE_CLOSING)" 断言噪音，掩盖真实结果。
+process.exitCode = bad === 0 ? 0 : 2

@@ -179,8 +179,9 @@ test('M2.2-01 八桶齐全：pickupables 排在 threats 之后、food 之前；�
   const env = await load()
   env.run('NEARBY = {}', '空场景')
   const { nearby } = env.observe()
-  const keys = Object.keys(nearby.buckets)
-  assert.deepEqual(keys, ['threats', 'pickupables', 'food', 'resources', 'containers', 'structures', 'creatures', 'other'])
+  // JSON 键序是 Lua 哈希表顺序，不保证稳定（消费方按 BUCKET_LABELS/N.BUCKETS 走）
+  const keys = Object.keys(nearby.buckets).sort()
+  assert.deepEqual(keys, ['containers', 'creatures', 'food', 'other', 'pickupables', 'resources', 'structures', 'threats'].sort())
   for (const k of keys) assert.deepEqual(nearby.buckets[k], [], `${k} 应该是空数组`)
   assert.equal(nearby.status, 'empty')
   assert.equal(nearby.total_found, 0)
@@ -625,4 +626,21 @@ test('M2.2-28 出现在 pickupables 里 ≠ 跳过执行侧校验（白名单/�
   // 执行侧的上限仍然独立存在（不是从观察结果里读的）
   env.run('OUT_MAX = tostring(Whale.guard.PICKUP_MAX_TILES)', '执行上限')
   assert.equal(env.get('OUT_MAX'), '2.5')
+})
+
+
+test('M2.2-29 文本渲染顺序由 N.BUCKETS 决定（威胁 → 可拾取物 → 食物 → 资源）', async () => {
+  const env = await load()
+  env.run(`NEARBY = {
+    mkent({ prefab = "spider", guid = 1, x = 16, z = 0, hp = 25, tags = { hostile = true } }),
+    mkent({ prefab = "flint", guid = 2, x = 8, z = 0, item = true, canbepickedup = true }),
+    mkent({ prefab = "berries", guid = 3, x = 24, z = 0, item = true, edible = true, edible_type = "VEGGIE" }),
+    mkent({ prefab = "evergreen", guid = 4, x = 32, z = 0, work = "CHOP" }),
+  }`, '四类')
+  const { text } = env.observe()
+  const at = (label) => text.indexOf(label + '：')
+  const order = ['威胁', '可拾取物', '食物', '资源'].map(at)
+  assert.ok(order.every((i) => i >= 0), '四段都该出现：' + JSON.stringify(order) + '\n' + text)
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), '文本顺序必须是设计顺序\n' + text)
+  assert.match(text, /可拾取物：#\d+ 燧石/)
 })

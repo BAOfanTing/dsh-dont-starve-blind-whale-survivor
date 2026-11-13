@@ -122,27 +122,38 @@ AI 可以"先看见 → `move_to` 靠近 → 再 `pickup`"。执行侧仍严格�
 
 ---
 
-## 5. 真机（RUNTIME）
+## 5. 真机（RUNTIME）—— **14 / 14 PASS**
 
-**状态：PENDING —— 需要重进世界加载 0.16.0 后才能取样本。**
+环境：真实 DST，世界已加载 **0.16.0**；MCP（产品 `apply()`）在 18090。
+工具：`node tools/m2_2_verify_nearby.mjs --bridgeDir <Cluster_2\Master\save> [--pickup]`
 
-已确认（不是 Mock）：
+| 检查 | 实测 | 判定 |
+|---|---|---|
+| `pickupables` 桶存在 | 八桶齐全 | ✅ |
+| 文本里的桶顺序 | 威胁 → **可拾取物** → 食物 → 资源 | ✅ |
+| ref 全局唯一 / 不重复跨桶 | 40 个 ref，无重复 | ✅ |
+| **附近燧石进入 pickupables** | **4 个燧石拿到 #2~#5**，`item_kind=resources` | ✅ |
+| 白名单物品没有同时出现在别的桶 | flint 只在 pickupables | ✅ |
+| **flint 不在 food** | food 桶里是 berrybush/carrot_planted，没有 flint | ✅ |
+| 真食物仍被识别 | food 桶 12 个全是浆果丛/胡萝卜 | ✅ |
+| **被截断时仍拿到 #N** | `total_found=133 / returned=40 / not_returned=93`，`food=12/12`、`resources=12/12` 都满，**燧石照样有 #N** | ✅ |
+| 单桶上限 | food、resources 均达 12（文本带"本桶已满"提示） | ✅ |
+| 扫描耗时 | `scan.duration_ms=1`（os.clock） | ✅ |
+| **Pickup 闭环未破坏** | move_to 靠近 8.2 格 → 1 格，再 pickup → **「捡起了 燧石（背包：flint+1）」** | ✅ |
 
-| 项 | 结果 |
-|---|---|
-| 0.16.0 已装盘，`pickuprules.lua` 已就位 | ✅ |
-| 源码与已装版本一致（`modinfo` = 0.16.0） | ✅ |
-| 体验时世界内存版本 | **0.15.1**（还没有 `pickupables` 桶，实测确认 `桶: other, creatures, food, ...`） |
-| 工具白名单未变 | ✅ `move_to, stop, pickup`；工具数 36 |
-| 管线自检 | ✅ 32/32 |
+真机对照（同一世界，修复前后）：
 
-**重进世界后要跑**（脚本已就绪：`node tools/m2_2_verify_nearby.mjs`）：
+```text
+修复前（0.15.1）：resources = 12/12 全是草/树苗/岩石/兔子洞/花，地面燧石拿不到 #N
+修复后（0.16.0）：可拾取物：#2 燧石 距8.2；#3 燧石 距10.6；#4 燧石 距14.7；#5 燧石 距14.9
+                 食物：…（本桶已满，可能还有没列出的）
+                 资源：#18 萤火虫…#19 树苗…（植物照常返回）
+```
 
-1. 地面燧石/树枝是否进 `pickupables`（应能拿到 `#N`）；
-2. flint 是否不再出现在 `food`；
-3. 12 个草的场景下燧石是否仍能拿到 `#N`；
-4. 用当前 `pickup` 工具是否仍能成功拾取（回归）；
-5. Delta 是否没有误报（跨桶只报 category changed）；
-6. `scan.duration_ms` / JSON 字节数 / `not_returned_count` 实测值。
+**这一条就是 M2.2 要解决的问题**：即使 food/resources 两个桶都满了，
+地面可拾取物依然拿得到 `#N`，而且 8~15 格外的目标也被看见了（观察不限距离，执行时才限 2.5 格）。
 
-**没有用 Fengari 或 Mock 冒充真机通过。**
+真机样本同时证明：Observer 的候选判定与 Pickup 执行器**没有冲突** ——
+`pickupables` 里的目标真的能被执行器接手并成功拾取。
+
+**没有用 Fengari 或 Mock 冒充真机。**
