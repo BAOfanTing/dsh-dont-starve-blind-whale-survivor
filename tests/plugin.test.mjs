@@ -94,7 +94,10 @@ test('设置里有活引用（volatile）时也能取到值', () => {
 
 test('连接说明里有规则和主攻略，help 文本会把攻略摘掉', () => {
   const instructions = buildInstructions({ main: '主攻略正文：先做斧头' })
-  assert.match(instructions, /每次行动前先调 get_state/)
+  // OBSERVATION-01：观察规则从"每次行动前"改成"任务开始时一次 + 按需刷新"
+  assert.match(instructions, /任务开始时.*get_state/, '应该要求任务开始时读一次')
+  assert.match(instructions, /不要每做一个动作就重看/, '应该明确不必每个动作都重看')
+  assert.ok(!/每次行动前先调 get_state/.test(instructions), '不能保留旧的"每次行动前"要求')
   assert.match(instructions, /主攻略正文/)
   const help = helpText(instructions, [
     { name: 'chop', description: '砍树。要有斧头', inputSchema: { type: 'object', properties: { count: { type: 'integer' } }, required: [] } },
