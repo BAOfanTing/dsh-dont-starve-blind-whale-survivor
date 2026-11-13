@@ -151,6 +151,10 @@ end
 --- 服务端每 0.2 秒调一次；内部按 1 秒节流
 local tick = 0
 function R.Tick()
+    -- SURVIVAL-01：除了模组配置（Whale.reflex_on），还支持运行期强制关。
+    -- 真机踩到：reflex 会在"没任务"的空档自己 craft torch / heal，把模型辛苦采的材料吃掉，
+    -- 导致模型 craft 时永远差材料。做真实 LLM 实验时必须能把它彻底关掉。
+    if Whale.reflex_force_off == true then return end
     if Whale.reflex_on == false then return end   -- 模组配置里关掉了
     tick = tick + 1
     if tick % 5 ~= 0 then return end       -- ≈1 秒一次

@@ -55,6 +55,8 @@ end
 Whale.verbose = modconfig("VERBOSE", false) and true or false
 Whale.interval = tonumber(modconfig("INTERVAL", 1)) or 1
 Whale.reflex_on = modconfig("REFLEX", false) and true or false
+-- SURVIVAL-01：运行期强制关（做真实 LLM 实验用；reflex 会抢材料，见 reflex.lua 的说明）
+Whale.reflex_force_off = false
 
 modimport("scripts/whale/json.lua")
 modimport("scripts/whale/util.lua")

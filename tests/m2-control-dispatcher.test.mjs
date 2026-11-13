@@ -228,7 +228,8 @@ test('dispatcher-3 没有控制权：拒绝，且不发命令', async () => {
 test('dispatcher-4 快照过期 / 角色异常：拒绝，且不发命令', async () => {
   const stale = makeHarness({ snapshots: [snap({ stale: true })] })
   try {
-    assert.equal((await dispatch(stale)).reason, 'game_not_ready')
+    // SURVIVAL-01：stale 但还有角色 → 明确报 game_paused（比原来笼统的 game_not_ready 更精确）
+    assert.equal((await dispatch(stale)).reason, 'game_paused')
     assert.equal(stale.commands.length, 0)
   } finally { stale.cleanup() }
 

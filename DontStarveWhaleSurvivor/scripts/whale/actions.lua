@@ -1803,8 +1803,18 @@ JOBS.craft = function(j, p)
             j.data.label = rules.RECIPES[name].label
             j.data.before = snapshot_counts(p)
             j.data.phase_start = U.now()
-            -- 原生制作：和玩家点制作栏同一条路
-            push(p, BufferedAction(p, nil, ACTIONS.CRAFT, recipe))
+            -- ★ 不能用 BufferedAction：它的签名是 (doer, target, action, invobject, pos, recipe, ...)，
+            --   第 4 个参数是 invobject，构造时会读 invobject.replica —— 把 recipe 传进去会崩
+            --   （真机实测：bufferedaction.lua:8 attempt to index field 'replica'）。
+            --   服务端制作走 builder:MakeRecipe（和旧路径一致，也是玩家点制作栏的底层调用）。
+            local builder = p.components.builder
+            local ok_mk, started = pcall(function() return builder:MakeRecipe(recipe, nil, nil, nil) end)
+            if not ok_mk then
+                return "fail", "craft_failed: " .. tostring(started)
+            end
+            if started ~= true then
+                return "fail", "craft_failed: 游戏拒绝了这次制作（材料或状态不允许）"
+            end
             j.step = "acting"
             return "run"
         end

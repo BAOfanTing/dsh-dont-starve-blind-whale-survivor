@@ -235,6 +235,72 @@ test('P2-13：等待期间不阻塞事件循环（其他请求仍能被处理）
   assert.ok(ticks >= 5, `等待期间定时器应该照常触发（实际 ${ticks} 次）`)
 })
 
+test('P2-16：revoking 的发起方已经过期 → 允许**重新发起换手**（仍然要等 ACK）', async () => {
+  const { control, nowRef } = makeControl()
+  toRevoking(control, 'mcp_client', 'inst-mcp')
+  // 把时钟推过 TTL（30 秒）—— 发起换手的那一方早就没资格了（进程退出 / 游戏暂停写不出 ACK）
+  nowRef.t += 40_000
+  // 没有 ACK：仍然拿不到（关键 —— 不能因为过期就直接放行）
+  const noAck = await control.acquireWithWait('f8_agent', ENV, {
+    ownerInstanceId: 'inst-f8', readAck: () => null, maxWaitMs: 300, pollMs: 50, sleep: tickSleep(nowRef),
+  })
+  assert.equal(noAck.ok, false, '过期 revoking 也不能在没有 ACK 的情况下拿到控制权')
+  assert.equal(control.readAuthority().status, 'revoking', '应该停在新的 revoking 上等 ACK')
+  // 有 ACK：能收敛
+  const rec = control.readAuthority()
+  const ok = await control.acquireWithWait('f8_agent', ENV, {
+    ownerInstanceId: 'inst-f8',
+    readAck: () => ackFor(rec),
+    maxWaitMs: 600, pollMs: 50, sleep: tickSleep(nowRef),
+  })
+  assert.equal(ok.ok, true, '拿到有效 ACK 后应该能接手')
+  assert.equal(control.readAuthority().owner_instance_id, 'inst-f8')
+})
+
+test('P2-17：revoking 没过期时仍然拒绝（不能因为超时就抢）', async () => {
+  const { control, nowRef } = makeControl()
+  toRevoking(control, 'mcp_client', 'inst-mcp')
+  const acq = await control.acquireWithWait('f8_agent', ENV, {
+    ownerInstanceId: 'inst-f8', readAck: () => null, maxWaitMs: 300, pollMs: 50, sleep: tickSleep(nowRef),
+  })
+  assert.equal(acq.ok, false, '没过期的 revoking 不能被抢')
+  assert.equal(control.readAuthority().status, 'revoking')
+})
+
+test('P2-18：游戏暂停（isGameAlive 为 false）→ 立刻返回 game_paused，不白等租约', async () => {
+  const { control, nowRef } = makeControl()
+  toRevoking(control, 'mcp_client', 'inst-mcp')
+  const t0 = nowRef.t
+  const acq = await control.acquireWithWait('f8_agent', ENV, {
+    ownerInstanceId: 'inst-f8',
+    readAck: () => null,          // 暂停时 Lua 写不出 ACK
+    isGameAlive: () => false,     // 游戏没在跑
+    maxWaitMs: 3000,
+    pollMs: 100,
+    sleep: tickSleep(nowRef),
+  })
+  assert.equal(acq.ok, false)
+  assert.equal(acq.reason, 'game_paused', '应该明确说"暂停了"，而不是 handover_pending')
+  assert.ok(/暂停/.test(String(acq.message ?? '')), '消息里要讲清楚是暂停')
+  assert.ok(nowRef.t - t0 < 1000, `不该等满 3 秒，实际等了 ${nowRef.t - t0}ms`)
+})
+
+test('P2-19：游戏在跑但迟迟没 ACK → 仍然等到超时（不能因为"活着"就放行）', async () => {
+  const { control, nowRef } = makeControl()
+  toRevoking(control, 'mcp_client', 'inst-mcp')
+  const acq = await control.acquireWithWait('f8_agent', ENV, {
+    ownerInstanceId: 'inst-f8',
+    readAck: () => null,
+    isGameAlive: () => true,
+    maxWaitMs: 400,
+    pollMs: 100,
+    sleep: tickSleep(nowRef),
+  })
+  assert.equal(acq.ok, false)
+  assert.equal(acq.reason, 'handover_pending')
+  assert.equal(control.readAuthority().status, 'revoking', '没 ACK 就不能变成 active')
+})
+
 test('P2-14：坏 owner / 坏实例这类**非临时**原因立即返回，不浪费时间', async () => {
   const { control, nowRef } = makeControl()
   const bad = await control.acquireWithWait('not-an-owner', ENV, { sleep: tickSleep(nowRef) })
