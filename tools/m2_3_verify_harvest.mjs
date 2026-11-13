@@ -46,13 +46,14 @@ console.log('=== M2.3 真机验证（harvest）===')
 let cur = read()
 if (!cur) { console.log('BLOCKED: 读不到状态文件（游戏没开或没进世界）'); process.exit(3) }
 console.log(`mod=${cur.raw.mod} | 年龄=${Math.round(cur.ageMs / 1000)}s | snapshot=${cur.snap.nearby?.snapshot_id}`)
-if (cur.raw.mod !== '0.17.0') console.log(`⚠️  世界内存版本是 ${cur.raw.mod}，不是 0.17.0 —— Lua 还没重载`)
+const NEED = /^0\.17\./
+if (!NEED.test(String(cur.raw.mod))) console.log(`⚠️  世界内存版本是 ${cur.raw.mod}，不是 0.17.x —— Lua 还没重载到 M2.3`)
 
 // ── 1) 桶结构 ──
 console.log('\n[1] 桶结构')
 const keys = Object.keys(cur.snap.nearby?.buckets ?? {})
 if (!keys.includes('harvestables')) {
-  fail('harvestables 桶存在', `世界内存 ${cur.raw.mod}，需要重进世界加载 0.17.0`)
+  fail('harvestables 桶存在', `世界内存 ${cur.raw.mod}，需要重进世界加载 0.17.x`)
 } else {
   pass('harvestables 桶存在')
   const text = String(cur.raw.text ?? '')
@@ -67,8 +68,8 @@ console.log('\n[2] 可收获对象（试点 = 浆果丛）')
 const harvestables = cur.snap.nearby?.buckets?.harvestables ?? []
 console.log('  harvestables:', JSON.stringify(harvestables.map((h) => ({ ref: h.ref, prefab: h.prefab, ready: h.harvest_ready, d: h.distance, cycles: h.cycles_left, product: h.product, item_kind: h.item_kind }))))
 if (!keys.includes('harvestables')) {
-  skip('浆果丛进 harvestables', '需要 0.17.0')
-  skip('harvest_ready 字段存在', '需要 0.17.0')
+  skip('浆果丛进 harvestables', '需要 0.17.x')
+  skip('harvest_ready 字段存在', '需要 0.17.x')
 } else if (harvestables.length === 0) {
   skip('浆果丛进 harvestables', '附近没有浆果丛（NOT_OBSERVED）')
   skip('harvest_ready 字段存在', '附近没有浆果丛')
@@ -96,7 +97,7 @@ staleRejected ? pass('旧 snapshot_id 被拒（stale_snapshot）')
 // ── 4) 负向：非白名单目标（树/草等）──
 console.log('\n[4] 负向：非白名单目标')
 const nonPilot = flat(cur.snap.nearby).find((e) => ['evergreen', 'deciduoustree', 'twiggytree', 'grass', 'sapling', 'rock1'].includes(e.prefab))
-if (!keys.includes('harvestables')) skip('非白名单目标被拒', '需要 0.17.0')
+if (!keys.includes('harvestables')) skip('非白名单目标被拒', '需要 0.17.x')
 else if (!nonPilot) skip('非白名单目标被拒', '附近没有树/草/岩石可试')
 else {
   // 附近每 4 秒刷新一次，必须用**当下**的快照 id，否则会先被 stale_snapshot 拒掉（测不到想测的原因）
@@ -114,7 +115,7 @@ console.log('\n[5] 距离（原生 PickRangeCheck：目标物理半径 + 4 世�
 const farReady = harvestables.filter((h) => h.harvest_ready === true && (h.distance ?? 0) > 1.5)
 const nearReady = harvestables.filter((h) => h.harvest_ready === true && (h.distance ?? 99) <= 1.03)
 console.log(`  已成熟且 >1.5 格的：${farReady.length} 个；已成熟且 ≤1.03 格的：${nearReady.length} 个`)
-if (!keys.includes('harvestables')) skip('超出原生距离 → out_of_range', '需要 0.17.0')
+if (!keys.includes('harvestables')) skip('超出原生距离 → out_of_range', '需要 0.17.x')
 else if (farReady.length === 0) skip('超出原生距离 → out_of_range', '附近没有"已成熟但较远"的浆果丛')
 else {
   const fresh = read()
@@ -130,7 +131,7 @@ else {
 // ── 6) 真采一次（--harvest）──
 console.log('\n[6] 正常收获')
 if (!DO_HARVEST) skip('真机 harvest 成功并核对', '没加 --harvest（不会擅自采）')
-else if (!keys.includes('harvestables')) skip('真机 harvest 成功并核对', '需要 0.17.0')
+else if (!keys.includes('harvestables')) skip('真机 harvest 成功并核对', '需要 0.17.x')
 else {
   const fresh0 = read()
   let ready = (fresh0.snap.nearby?.buckets?.harvestables ?? []).filter((h) => h.harvest_ready === true).sort((a, b) => (a.distance ?? 99) - (b.distance ?? 99))[0]
