@@ -110,15 +110,49 @@ node tools/m2_0_2_start_mcp.mjs        # 默认 18090
 
 | 脚本 | 验证什么 | 支持 `--bridgeDir` |
 |---|---|---|
-| `node tools/m2_0_3_verify_lease.mjs` | 租约获取/换手/ACK | 否（自动定位） |
-| `node tools/m2_0_3_verify_move.mjs` | `move_to` 真实走路 | 否 |
-| `node tools/m2_0_3_verify_stop.mjs` | `stop` 打断 | 否 |
-| `node tools/m2_1_verify_pickup.mjs` | `pickup` 闭环 | **否**（见 `STATUS.md` §5 #8） |
-| `node tools/m2_2_verify_nearby.mjs --bridgeDir "<save>"` | 9 个桶 + `pickupables` | 是 |
+| `node tools/m2_0_3_verify_lease.mjs` | 租约 / 换手 / ACK / 权威副本（**只用 stop，不移动角色**） | 否（自动定位） |
+| `node tools/m2_0_3_verify_move.mjs` | `move_to` 真实走路 + 移动中换手中断 | 否 |
+| `node tools/m2_0_3_verify_stop.mjs` | 换手 Abort 后**逐帧**确认角色停住 | 否 |
+| `node tools/m2_1_verify_pickup.mjs` | `pickup` 闭环（走 MCP 入口，桥目录由 MCP 决定） | 否（不需要） |
+| `node tools/m2_2_verify_nearby.mjs --bridgeDir "<save>"` | 9 个桶 + `pickupables` + 上限 + 性能 | 是 |
 | `node tools/m2_3_verify_harvest.mjs --bridgeDir "<save>"` | 可收获桶 / 未成熟 / 距离 / 不自动捡 | 是 |
 | 上一条加 `--harvest` | 真的采一次（会改变世界！） | 是 |
 
-最近一次 `m2_3_verify_harvest.mjs --harvest` 的结果：**14/14 PASS**（当时版本 0.17.1）。
+**每条命令都实测过**（STABILITY-01，2026-11-13，模组 0.17.2）：
+
+```powershell
+node tools/m2_0_3_verify_lease.mjs                                            # 11/11 PASS
+node tools/m2_1_verify_pickup.mjs                                             # 5/5 PASS
+node tools/m2_3_verify_harvest.mjs --bridgeDir "<save>" --harvest             # 13 PASS / 0 FAIL / 1 NOT_OBSERVED
+node tools/m2_0_3_verify_move.mjs                                             # 4 PASS / 1 FAIL（见下）
+node tools/m2_0_3_verify_stop.mjs                                             # 3/3 PASS
+node tools/m2_2_verify_nearby.mjs --bridgeDir "<save>"                        # 13 PASS / 0 FAIL / 1 NOT_OBSERVED
+```
+
+⚠️ **`verify_move.mjs` 的 ⑤-3 会假报失败**：它"ack 前后各读一次位置"，而状态文件每秒才写一次、
+位置在帧里成段跳变，于是把一次 2 格跳变算成"Abort 后还在走"。
+**以 `verify_stop.mjs` 为准**（逐帧去重采样）：实测 Abort 后 6 帧位置不变 = 真的停住了。
+详见 `STATUS.md` §5 #12。
+
+### 6.3.1 真机跑之前的三步准备（缺一步就会失败）
+
+```powershell
+# 1) 游戏暂停着的话，先解除（窗口失焦会暂停，主机暂停会让命令轮询全停）
+node tools/unpause.mjs
+
+# 2) 确认状态文件在更新（年龄应该是几百毫秒，不是几百秒）
+(Get-Item "<save>\whale_state.json").LastWriteTime
+
+# 3) 改过 lib/ 下的 Node 代码，就必须重启 MCP，否则 tools/list 还是旧的
+node tools/m2_0_2_start_mcp.mjs        # 后台跑；然后 http://127.0.0.1:18090/status 应该 HTTP 200
+```
+
+确认产品入口暴露的工具表（应该是 7 个、名字唯一）：
+
+```powershell
+# JSON-RPC：initialize → tools/list
+node --input-type=module -e "..."      # 或直接用 tests/mcp.test.mjs 里的 rpc() 写法
+```
 
 ### 6.4 观察类脚本（不改世界）
 
@@ -143,14 +177,19 @@ node tools/m12-roundtrip.mjs        # 往返读写一次（会在 tests/artifact
 - 没跑 → 写 **`NOT_RUN`**，不要写"应该没问题"。
 - 换过代码但只跑了旧版本的真机 → 那是旧版本的证据，不能算新版本的。
 
-本次瘦身的诚实结论：
+诚实结论（截至 STABILITY-01，2026-11-13，模组 **0.17.2**）：
 
 | 项 | 结论 |
 |---|---|
 | 单测 479 项 | **UNIT：通过** |
-| 干净检出（把 `mcp-server/dist` 移走）后跑单测 | **通过**（479/479，M2.2.1 专门验过） |
-| 真实游戏（`get_state` / `nearby` / `move_to` / `stop` / `pickup` / `harvest`） | **NOT_RUN**（本次没启动游戏） |
-| 端到端（真实模型） | **NOT_RUN** |
+| 干净检出（没有 `dist`/`bwc_config`/`.runtime`）后跑单测 | **通过**（479/479，M2.2.1 与 STABILITY-01 都验过） |
+| 真实游戏：模组加载（两个分片无 Lua 错误） | **RUNTIME：通过** |
+| 真实游戏：`get_state` / `nearby` | **RUNTIME：通过**（9 桶、`#N` 唯一、上限生效） |
+| 真实游戏：`stop` / `move_to` / `pickup` / `harvest` | **RUNTIME：通过**（pickup 5/5、harvest 13 PASS/0 FAIL、stop 3/3、move 4 PASS） |
+| 真实游戏：安全底座（lease / ACK / 权威副本） | **RUNTIME：通过**（11/11） |
+| 真实游戏：MCP `tools/list` | **RUNTIME：通过**（7 个、唯一） |
+| 真实游戏：**F8 内置 AI** | **NOT_RUN**（HUD 自报「没配 API Key」；无法在不接管键鼠的前提下模拟 F8） |
+| 端到端（真实 LLM 长跑） | **NOT_RUN** |
 
 ---
 
