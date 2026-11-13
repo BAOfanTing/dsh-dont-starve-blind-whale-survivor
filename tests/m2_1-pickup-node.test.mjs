@@ -221,3 +221,11 @@ test('pickup-10 move_to / stop 语义未变（仍只按坐标 / 无参数）', (
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
   assert.equal(ACTION_SPECS.move_to.requiresSnapshot, undefined, 'move_to 不需要快照')
 })
+
+
+test('pickup-11 move_to 也有 verifyWaitMs（避免状态文件延迟造成假 unverified）', () => {
+  assert.equal(ACTION_SPECS.move_to.verifyWaitMs, 2500)
+  assert.equal(ACTION_SPECS.move_to.requiresSnapshot, undefined, 'move_to 仍然不需要快照')
+  // stop 不需要核对等待
+  assert.equal(ACTION_SPECS.stop.verifyWaitMs, undefined)
+})
