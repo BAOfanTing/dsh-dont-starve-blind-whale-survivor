@@ -292,7 +292,7 @@ async function guardVm(files) {
   run(GUARD_STUB)
   run(luaIoFiles(files))
   run('Whale = { verbose = false, version = "0.14.1" }')
-  for (const name of ['json', 'util', 'pickuprules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     run(readFileSync(join(ROOT, 'DontStarveWhaleSurvivor', 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end return nil end)')
@@ -401,13 +401,13 @@ test('C-12 两阶段换手：revoking 无确认 → 保持拒绝；有 Lua 确�
     assert.equal(handover.lease.status, 'revoking')
     assert.equal(c.validate('mcp_client', { ownerInstanceId: 'B', env: ENV }).reason, 'authority_revoking')
     // 没有确认时不能完成
-    assert.equal(c.completeHandover(null).reason, 'handover_ack_invalid')
+    assert.equal(c.completeHandover(null).reason, 'handover_ack_missing')
     assert.equal(c.readAuthority().status, 'revoking', '拿不到确认绝不自动放行')
     // 确认不匹配也不能完成
-    assert.equal(c.completeHandover({ authority_epoch: 'wrong', generation: 2, runtime_id: 'r-repro-0001' }).reason, 'handover_ack_invalid')
+    assert.equal(c.completeHandover({ authority_epoch: 'wrong', generation: 2, runtime_id: 'r-repro-0001' }).reason, 'handover_ack_epoch_mismatch')
     // 有效确认 → active
     const fresh = c.readAuthority()
-    const done = c.completeHandover({ authority_epoch: fresh.authority_epoch, generation: fresh.generation, runtime_id: fresh.runtime_id })
+    const done = c.completeHandover({ authority_epoch: fresh.authority_epoch, generation: fresh.generation, runtime_id: fresh.runtime_id, lease_id: fresh.lease_id, job_cleared: true, acked_at: Date.now() })
     assert.equal(done.ok, true)
     assert.equal(done.lease.status, 'active')
     assert.equal(c.validate('mcp_client', { ownerInstanceId: 'B', env: ENV }).ok, true)

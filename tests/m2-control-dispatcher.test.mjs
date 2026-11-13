@@ -123,7 +123,7 @@ test('lease-8 旧世代校验 → stale_generation', () => {
     c.acquire('mcp_client', ENV, { force: true, ownerInstanceId: 'B' })
     // completeHandover 模拟 Lua 确认
     const fresh = c.readAuthority()
-    assert.equal(c.completeHandover({ authority_epoch: fresh.authority_epoch, generation: fresh.generation, runtime_id: fresh.runtime_id }).ok, true)
+    assert.equal(c.completeHandover({ authority_epoch: fresh.authority_epoch, generation: fresh.generation, runtime_id: fresh.runtime_id, lease_id: fresh.lease_id, job_cleared: true, acked_at: Date.now() }).ok, true)
     const r = c.validate('mcp_client', { ownerInstanceId: 'B', generation: 1, env: ENV })
     assert.equal(r.reason, 'stale_generation')
   } finally { cleanup() }
@@ -317,11 +317,12 @@ test('dispatcher-10 F8 持有租约时，MCP 的请求被拒', async () => {
   } finally { h.cleanup() }
 })
 
-test('dispatcher-11 白名单：move_to/stop 是 R1，pickup 是 R2；规格里有 riskLevel', () => {
-  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['move_to', 'pickup', 'stop'])
+test('dispatcher-11 白名单：move_to/stop 是 R1，pickup/harvest 是 R2；规格里有 riskLevel', () => {
+  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['harvest', 'move_to', 'pickup', 'stop'])
   assert.equal(ACTION_SPECS.move_to.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.stop.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.pickup.riskLevel, 'R2')
+  assert.equal(ACTION_SPECS.harvest.riskLevel, 'R2')
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
   assert.equal(validateArgs(ACTION_SPECS.stop, { x: 1 }).ok, false)
 })

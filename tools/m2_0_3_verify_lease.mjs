@@ -166,7 +166,7 @@ console.log('  待确认租约:', JSON.stringify({ status: pending?.status, gen:
 
 // 2-a 读到有效 ack → 能完成换手
 if (goodAck) {
-  const done = c2.completeHandover({ authority_epoch: goodAck.authority_epoch, generation: goodAck.generation, runtime_id: goodAck.runtime_id, lease_id: goodAck.lease_id })
+  const done = c2.completeHandover({ authority_epoch: goodAck.authority_epoch, generation: goodAck.generation, runtime_id: goodAck.runtime_id, lease_id: goodAck.lease_id, job_cleared: goodAck.job_cleared === true, acked_at: goodAck.acked_at ?? Date.now() })
   if (done.ok && done.lease?.status === 'active') ok('②-1 有效 ack → active', `gen=${done.lease.generation}`)
   else bad('②-1 有效 ack → active', JSON.stringify(done))
 } else bad('②-1 有效 ack → active', '没读到 ack')

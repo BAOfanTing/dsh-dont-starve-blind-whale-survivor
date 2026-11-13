@@ -60,7 +60,7 @@ async function load() {
   run(STUB)
   // 捕获 write_both 写出的 ack 文本（io 通道不可用，ps 通道记录到 IO_WRITES）
   run(`Whale = { verbose=false, version="0.14.3", files={ lease="whale_lease.json", io_lease="whale_io_lease.json", lease_ack="whale_lease_ack.json", io_lease_ack="whale_io_lease_ack.json" } }`)
-  for (const name of ['json', 'util', 'pickuprules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run(`
@@ -122,11 +122,11 @@ test('ack-4 revoking 收敛：拿到有效 ack 后 completeHandover 发布 activ
     assert.equal(h.lease.status, 'revoking')
     assert.equal(c.validate('mcp_client', { ownerInstanceId: 'mcp', env: ENV }).reason, 'authority_revoking')
     // 第一次尝试（ack 还没写）→ 保持 revoking
-    assert.equal(c.completeHandover(null).reason, 'handover_ack_invalid')
+    assert.equal(c.completeHandover(null).reason, 'handover_ack_missing')
     assert.equal(c.readAuthority().status, 'revoking')
     // 下一次调用读到 Lua 的 ack → active
     const fresh = c.readAuthority()
-    const done = c.completeHandover({ authority_epoch: fresh.authority_epoch, generation: fresh.generation, runtime_id: fresh.runtime_id, lease_id: fresh.lease_id })
+    const done = c.completeHandover({ authority_epoch: fresh.authority_epoch, generation: fresh.generation, runtime_id: fresh.runtime_id, lease_id: fresh.lease_id, job_cleared: true, acked_at: Date.now() })
     assert.equal(done.ok, true)
     assert.equal(done.lease.status, 'active')
     assert.equal(c.validate('mcp_client', { ownerInstanceId: 'mcp', env: ENV }).reason, 'wrong_owner')
