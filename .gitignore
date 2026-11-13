@@ -1,8 +1,6 @@
-﻿# macOS/Linux 也能用同样的思路，但脚本是给 Windows 写的
+# macOS/Linux 也能用同样的思路，但脚本是给 Windows 写的
 node_modules/
 tests/node_modules/
-bridge/node_modules/
-bridge/dist/
 *.log
 local.ps1
 
@@ -14,16 +12,12 @@ tmp-*
 .install-mod.mjs
 *.dbg.mjs
 
-game-bridge/node_modules/
-game-bridge/dist/
+# 本机运行期产物 / 生成物
 .runtime/
 DontStarveWhaleSurvivor/bws_config.lua
-mcp-server/node_modules/
-mcp-server/dist/
-agent/node_modules/
-agent/dist/
-survival/node_modules/
-survival/dist/
-# M1.0：归档目录里的构建产物与依赖同样不入库
+
+# 归档目录里的依赖与构建产物一律不入库
+# （M2.2.1：A 栈的 bridge / game-bridge / mcp-server / agent / survival 已移到 archive/legacy-*，
+#   旧的顶层路径规则随之删除；现在统一用下面两条覆盖）
 archive/**/node_modules/
 archive/**/dist/
