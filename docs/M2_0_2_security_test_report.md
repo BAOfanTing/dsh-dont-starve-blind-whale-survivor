@@ -1,6 +1,6 @@
 # M2.0.2 · 安全修复测试报告
 
-> 基线：`8e8d394`，354/354 → 378/378（+24）→ **384/384**（0.14.2 真机通道修复 +6）
+> 基线：`8e8d394`，354/354 → 378/378（+24）→ 384/384（0.14.2 通道修复 +6）→ **387/387**（0.14.3 ack 去重 +3）
 > 命令：`node --test --test-force-exit "tests/*.test.mjs"`
 > 证据类型：**UNIT**（真实独立 Node 进程 / fengari 沙箱 / 临时文件）、**STATIC**（读源码）、**NOT_RUN**（真机）
 > 关键：**M2.0.1 的 16 条"证明漏洞存在"断言已全部反转为"必须拒绝/必须互斥"的安全断言。**
@@ -13,7 +13,8 @@
 |---|---|---|---|
 | M2.0.1 基线 | 354 | 354 | 0 |
 | M2.0.2 修复后 | 378 | 378 | 0 |
-| 0.14.2 通道修复后 | **384** | **384** | 0 |
+| 0.14.2 通道修复后 | 384 | 384 | 0 |
+| 0.14.3 ack 修复后 | **387** | **387** | 0 |
 
 | 文件 | 例数 | 变化 |
 |---|---|---|
@@ -21,6 +22,7 @@
 | `tests/m2-lua-guard.test.mjs` | 27 → **38** | 全部改为"权威租约文件"驱动；新增 11 条权威/generation/身份检查 |
 | `tests/m2-control-dispatcher.test.mjs` | 20 | 全部改用真实临时租约文件 + 实例 id + 新信封字段 |
 | `tests/helpers-m2.mjs` | — | 新增：权威记录工厂、Lua `io.open` 假文件、命令信封工厂 |
+| `tests/m2_0_2_lease_ack.test.mjs` | 3 | 新增：ack 同键只确认一次 / 新 epoch 同 generation 必须写新 ack / 静态检查去重键与 lease_id |
 | `tests/m2_0_2_authority_channel.test.mjs` | 6 | 新增：ps 缓存放行 / 过期 fail-closed / revoking / 精确拒绝 / ps_read 接线 / io 兜底 |
 | 其它 | — | `mcp.test.mjs` 租约文件/实例 id、`plugin.test.mjs` 惰性目录、`tool-parity`/`tool-parity`/`lua-mod` 保持 |
 

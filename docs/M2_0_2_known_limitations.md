@@ -9,10 +9,12 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | 0.14.1 载入真实 DST 世界 | ✅ 已观察（Cluster_2，状态文件 mod=0.14.1） | 但暴露通道缺陷；0.14.2 修复后需重进世界 |
+| 0.14.2 真机核心链路（stop / 精确 reason / revoking / ack / fail-closed） | ✅ **PASS（第二轮）** | 见 `docs/M2_0_2_runtime_probe_round2.md` |
+| 0.14.3 健壮性修复真机 | **NOT_RUN** | 需再重进一次世界 |
 | F8 → MCP 真机换手 | **BLOCKED** | `127.0.0.1:18090` 未监听（DSH 插件 MCP 服务没启动） |
 | MCP → F8 真机换手 | **BLOCKED** | 同上 |
-| 旧命令换手后到达（真机） | **NOT_RUN** | 只在 fengari 里验证（C-1/C-10/C-11） |
-| revoking → `A.Abort` → ack → active 的真实时序 | **BLOCKED**（0.14.1 读不到权威 → 没出 ack） | 0.14.2 待复验 |
+| 旧命令换手后到达（真机） | ✅ **PASS（第二轮 T3/T6/T7）** | `stale_generation` / `authority_revoking` |
+| revoking → `A.Abort` → ack → active 的真实时序 | ✅ **PASS（第二轮）** | Lua 写出 ack（job_cleared=true），Node 校验后 active |
 | 租约过期 / 游戏重启 / 文件缺失真机 | **NOT_RUN** | 见 `docs/M2_0_2_runtime_manual_checklist.md` |
 
 **没有用 Fengari / Mock / 独立 Node 进程冒充 DST 真机结论。**
@@ -47,7 +49,7 @@
   `Whale.authority_cache`（带时间戳）；`guard.validate()` 只用**≤5 秒的新鲜缓存**，io 仅作沙箱兜底。
   Node 写的带 KLEI 头普通文件能被 `GetPersistentString` 读到（命令通道已长期验证）。
   - 详见 `docs/M2_0_2_runtime_probe_round1.md`。
-  - **0.14.2 的 ps 缓存路径尚未在真机复验**（需重进世界）。
+  - **0.14.2 的 ps 缓存路径已在真机复验通过**（第二轮：T2 成功、T8 缓存过期 fail-closed）。
 - Windows `renameSync` 覆盖已验证于 Node 单测；真实游戏进程同时 holding 文件时的行为未验证。
 - 锁用 `process.kill(pid, 0)` 判活 + 5s TTL。**Windows PID 复用**可能导致保守 `lock_busy`（宁可拒绝，不误抢）。
 
