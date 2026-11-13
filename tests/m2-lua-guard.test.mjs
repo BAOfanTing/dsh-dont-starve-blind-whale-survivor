@@ -1,11 +1,13 @@
-// M2.0：Lua 侧安全校验（Whale.guard）——动作执行前的最后一道闸
+// M2.0：Lua 侧安全校验（Whale.guard）—— M2.0.2 改为以权威租约文件为唯一依据
 //
-// 全部是沙箱（fengari）+ 假游戏，属于 UNIT；真机验证见 docs/M2_runtime_manual_checklist.md。
+// 全部是沙箱（fengari）+ 假游戏，属于 UNIT；真机验证见 docs/M2_0_2_runtime_manual_checklist.md。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { authority, command, luaIoFiles } from './helpers-m2.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
@@ -16,12 +18,10 @@ GLOBAL.STRINGS = { NAMES = { WARLY = "沃利", EVERGREEN = "常青树" } }
 GLOBAL.EQUIPSLOTS = { HANDS = "hands", HEAD = "head", BODY = "body" }
 GLOBAL.FOODTYPE = { ROUGHAGE = "ROUGHAGE", SEEDS = "SEEDS", GEARS = "GEARS", VEGGIE = "VEGGIE" }
 GLOBAL.ACTIONS = { CHOP = { id = "CHOP" }, MINE = { id = "MINE" }, DIG = { id = "DIG" }, HAMMER = { id = "HAMMER" } }
-GLOBAL.TheNet = { GetSessionIdentifier = function() return SESSION end }
-GLOBAL.TheShard = { GetShardId = function() return SHARD end }
+GLOBAL.TheNet = { GetSessionIdentifier = function() return "sess-R" end }
+GLOBAL.TheShard = { GetShardId = function() return "1" end }
 NOW = 1000
-SESSION = "sess-A"
-SHARD = "1"
-NOW_MS = 1794500000000     -- 墙钟毫秒（guard 的过期判断用它）
+NOW_MS = 1794500000000
 NEARBY = {}
 GLOBAL.TheSim = { GetTime = function() return NOW end, GetRealTime = function() return NOW * 1000 end,
                   FindEntities = function() return NEARBY end }
@@ -37,8 +37,8 @@ function mkent(opts)
 end
 function mkplaya(opts)
     opts = opts or {}
-    local p = mkent({ prefab = "warly", guid = 999, tags = { player = true }, hp = opts.hp or 100, x = 0, z = 0 })
-    p.userid = opts.userid or "KU_p"
+    local p = mkent({ prefab = "warly", guid = 999, tags = { player = true }, hp = opts.hp or 100 })
+    p.userid = "KU_r"
     p.ghost = opts.ghost == true
     p.components.inventory = { GetNumSlots = function() return 15 end, GetItemInSlot = function() return nil end,
                                GetEquippedItem = function() return nil end }
@@ -61,7 +61,6 @@ GLOBAL.pcall = pcall
 GLOBAL.tonumber = tonumber
 GLOBAL.error = error
 GLOBAL.os = { time = function() return math.floor(NOW_MS / 1000) end, clock = function() return 0 end }
-GLOBAL.io = nil
 pcall = nil
 tonumber = nil
 error = nil
@@ -69,7 +68,7 @@ os = nil
 io = nil
 `
 
-async function load() {
+async function load(files = { 'whale_io_lease.json': authority() }) {
   const fengari = await import('fengari')
   const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari
   const L = lauxlib.luaL_newstate()
@@ -93,152 +92,174 @@ async function load() {
       return ''
     }
   }
-  run(STUB)
-  run('Whale = { verbose = false, version = "0.14.0" }')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'guard', 'observe']) {
-    run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
-  }
-  run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end if k == "scan_seconds" then return 4 end return nil end)')
-  const reset = () => run('Whale.guard.reset(); Whale.guard.forget_ids(); Whale.nearby.Reset()')
-  /** 造一条命令（默认合法） */
-  const cmd = (over = '') => `
-    CMD = {
-      protocol_version = 1,
-      command_id = "cmd-1",
-      action = "move_to",
-      args = { x = 3, z = 4 },
-      requested_by = "f8_agent",
-      lease_generation = 1,
-      lease_expires_at = NOW_MS + 30000,
-      runtime_id = Whale.nearby.runtime_id(),
-      session_id = SESSION,
-      shard_id = SHARD,
-      actor_id = "player:KU_p",
-      snapshot_id = nil,
-      created_at = NOW_MS,
-      expires_at = NOW_MS + 8000,
-    }
-    ${over}
-  `
+  const luaStr = (s) => `[==[${s}]==]`
+  const setAuthority = (filesMap) => run(luaIoFiles(filesMap))
+  const setCommand = (cmd) => run(`CMD = Whale.json.decode(${luaStr(JSON.stringify(cmd))})`)
   const validate = () => {
     run('local ok, why = Whale.guard.validate(CMD); OUT = tostring(ok) .. "|" .. tostring(why)')
     return get('OUT')
   }
-  return { run, get, reset, cmd, validate, observeCmd: cmd }
+
+  run(STUB)
+  run(luaIoFiles(files))
+  run('Whale = { verbose = false, version = "0.14.1" }')
+  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+    run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
+  }
+  run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end if k == "scan_seconds" then return 4 end return nil end)')
+  // 固定运行实例号（salt 随机的部分），让权威租约/命令/Lua 三方一致
+  run('Whale.nearby.runtime_id = function() return "r1794500000-0001" end')
+  const reset = () => run('Whale.guard.reset(); Whale.guard.forget_ids(); Whale.nearby.Reset()')
+  return { run, get, reset, setAuthority, setCommand, validate }
 }
 
-const expectReject = async (over, reason) => {
-  const env = await load()
+const A = authority()
+const cmd = (over = {}, a = A) => command(a, over)
+
+async function check(commandObj, files = { 'whale_io_lease.json': authority() }) {
+  const env = await load(files)
   env.reset()
-  env.run(env.cmd(over))
-  const out = env.validate()
+  env.setCommand(commandObj)
+  return env.validate()
+}
+
+async function expectReject(commandObj, reason, files) {
+  const out = await check(commandObj, files)
   assert.equal(out, `false|${reason}`, `期望拒绝 ${reason}，实际：${out}`)
 }
 
-const expectPass = async (over = '') => {
-  const env = await load()
-  env.reset()
-  env.run(env.cmd(over))
-  const out = env.validate()
-  assert.equal(out, 'true|nil', '应该通过，实际：' + out)
-  return env
-}
+// ─────────────────────────── 权威租约 / 协议 ───────────────────────────
 
-// ─────────────────────────── 协议 / 白名单 / 过期 ───────────────────────────
-
-test('guard-1 合法命令通过', async () => {
-  await expectPass()
+test('guard-1 合法命令通过（权威租约齐全且精确匹配）', async () => {
+  assert.equal(await check(cmd()), 'true|nil')
 })
 
-test('guard-2 协议版本不对 → bad_protocol', () => expectReject('CMD.protocol_version = 2', 'bad_protocol'))
-test('guard-3 没有 command_id → missing_command_id', () => expectReject('CMD.command_id = nil', 'missing_command_id'))
-test('guard-4 动作不在白名单 → action_not_allowed', () => expectReject('CMD.action = "chop"', 'action_not_allowed'))
-test('guard-5 命令过期 → command_expired', () => expectReject('CMD.expires_at = NOW_MS - 1', 'command_expired'))
-test('guard-6 没有有效期 → missing_expiry', () => expectReject('CMD.expires_at = nil', 'missing_expiry'))
-test('guard-7 没有租约世代 → missing_generation', () => expectReject('CMD.lease_generation = nil', 'missing_generation'))
-// 上面那条需要先抬世代，单独写：
-test('guard-8b 低世代命令被拒绝（generation fencing）', async () => {
+test('guard-2 协议版本不对 → bad_protocol', () => expectReject(cmd({ protocol_version: 2 }), 'bad_protocol'))
+test('guard-3 没有 command_id → missing_command_id', () => expectReject(cmd({ command_id: '' }), 'missing_command_id'))
+test('guard-4 动作不在白名单 → action_not_allowed', () => expectReject(cmd({ action: 'chop' }), 'action_not_allowed'))
+test('guard-5 命令过期 → command_expired', () => expectReject(cmd({ expires_at: 1 }), 'command_expired'))
+test('guard-6 没有有效期 → missing_expiry', () => expectReject(cmd({ expires_at: null }), 'missing_expiry'))
+
+test('guard-7 权威文件不存在 → authority_unavailable（fail-closed）', () =>
+  expectReject(cmd(), 'authority_unavailable', {}))
+test('guard-8 权威文件损坏 → authority_corrupt', () =>
+  expectReject(cmd(), 'authority_corrupt', { 'whale_io_lease.json': '{broken' }))
+test('guard-9 权威文件 schema 不对 → authority_schema_mismatch', () =>
+  expectReject(cmd(), 'authority_schema_mismatch', { 'whale_io_lease.json': authority({ schema: 'wrong/1' }) }))
+test('guard-10 权威文件缺 generation → authority_corrupt', () =>
+  expectReject(cmd(), 'authority_corrupt', { 'whale_io_lease.json': (() => { const a = authority(); delete a.generation; return a })() }))
+
+// ─────────────────────────── generation 精确相等 ───────────────────────────
+
+test('guard-11 旧 generation → stale_generation（换手后旧命令必拒）', () =>
+  expectReject(cmd({ lease_generation: 11 }), 'stale_generation'))
+test('guard-12 未来 generation → future_generation（伪造被拒、不污染状态）', () =>
+  expectReject(cmd({ lease_generation: 999 }), 'future_generation'))
+test('guard-13 缺 generation → missing_generation', () =>
+  expectReject(cmd({ lease_generation: null }), 'missing_generation'))
+test('guard-14 generation 非整数 → bad_generation', () =>
+  expectReject(cmd({ lease_generation: 12.5 }), 'bad_generation'))
+
+// ─────────────────────────── 身份 / 环境 ───────────────────────────
+
+test('guard-15 authority_epoch 不匹配 → authority_epoch_mismatch', () =>
+  expectReject(cmd({ authority_epoch: 'epoch-OLD' }), 'authority_epoch_mismatch'))
+test('guard-16 lease_id 不匹配 → stale_lease', () =>
+  expectReject(cmd({ lease_id: 'lease-OLD' }), 'stale_lease'))
+test('guard-17 owner_type 不匹配 → wrong_owner', () =>
+  expectReject(cmd({ owner_type: 'mcp_client' }), 'wrong_owner'))
+test('guard-18 owner_instance_id 不匹配 → wrong_instance', () =>
+  expectReject(cmd({ owner_instance_id: 'instance-B' }), 'wrong_instance'))
+test('guard-19 runtime 不匹配 → runtime_mismatch', () =>
+  expectReject(cmd({ runtime_id: 'r-old-0001' }), 'runtime_mismatch'))
+test('guard-20 session 不匹配 → session_mismatch', () =>
+  expectReject(cmd({ session_id: 'sess-OTHER' }), 'session_mismatch'))
+test('guard-21 shard 不匹配 → shard_mismatch', () =>
+  expectReject(cmd({ shard_id: '2' }), 'shard_mismatch'))
+test('guard-22 actor 不匹配 → actor_mismatch', () =>
+  expectReject(cmd({ actor_id: 'player:KU_other' }), 'actor_mismatch'))
+
+// ─────────────────────────── 角色 ───────────────────────────
+
+test('guard-23 角色是 ghost → actor_is_ghost', async () => {
   const env = await load()
   env.reset()
-  env.run(env.cmd('CMD.lease_generation = 5'))
-  assert.equal(env.validate(), 'true|nil')
-  env.run('Whale.guard.accept(CMD)')
-  env.run('CMD2 = { protocol_version = 1, command_id = "cmd-old", action = "move_to", args = { x = 1, z = 1 }, lease_generation = 4, expires_at = NOW_MS + 8000 }')
-  env.run('local ok, why = Whale.guard.validate(CMD2); OUT = tostring(ok) .. "|" .. tostring(why)')
-  assert.equal(env.get('OUT'), 'false|stale_generation', '旧世代必须拒绝')
-})
-
-test('guard-9 重复 command_id → duplicate_command（不重复执行）', async () => {
-  const env = await load()
-  env.reset()
-  env.run(env.cmd())
-  assert.equal(env.validate(), 'true|nil')
-  env.run('Whale.guard.accept(CMD)')
-  env.run('local ok, why = Whale.guard.validate(CMD); OUT = tostring(ok) .. "|" .. tostring(why)')
-  assert.equal(env.get('OUT'), 'false|duplicate_command')
-})
-
-// ─────────────────────────── 环境 / 角色 ───────────────────────────
-
-test('guard-10 session 不匹配 → session_mismatch', () => expectReject('CMD.session_id = "sess-OTHER"', 'session_mismatch'))
-test('guard-11 shard 不匹配 → shard_mismatch', () => expectReject('CMD.shard_id = "2"', 'shard_mismatch'))
-test('guard-12 runtime 不匹配（游戏重启）→ runtime_mismatch', () => expectReject('CMD.runtime_id = "r-old-0001"', 'runtime_mismatch'))
-test('guard-13 actor 不匹配 → actor_mismatch', () => expectReject('CMD.actor_id = "player:KU_other"', 'actor_mismatch'))
-
-test('guard-14 角色是 ghost → actor_is_ghost，且不执行', async () => {
-  const env = await load()
-  env.reset()
+  env.setCommand(cmd())
   env.run('PLAYER.ghost = true')
-  env.run(env.cmd())
   assert.equal(env.validate(), 'false|actor_is_ghost')
 })
 
-test('guard-15 角色死亡 → actor_dead', async () => {
+test('guard-24 角色死亡 → actor_dead', async () => {
   const env = await load()
   env.reset()
+  env.setCommand(cmd())
   env.run('PLAYER.components.health.currenthealth = 0')
-  env.run(env.cmd())
   assert.equal(env.validate(), 'false|actor_dead')
 })
 
-test('guard-16 观察兜底到非玩家实体时，绝不允许执行动作', async () => {
+test('guard-25 观察兜底到非玩家实体 → actor_not_player', async () => {
   const env = await load()
   env.reset()
-  // 玩家不在，只剩一只"有效实体"——Actor Provider 会兜底选它（为了观察）
+  env.setCommand(cmd())
   env.run('GLOBAL.AllPlayers = { mkent({ prefab = "spider", guid = 5, tags = { hostile = true }, hp = 25 }) }')
-  env.run(env.cmd())
-  assert.equal(env.validate(), 'false|actor_not_player', '兜底实体不能当可操作角色')
+  assert.equal(env.validate(), 'false|actor_not_player')
 })
 
-test('guard-17 世界不是权威模拟端 → not_authoritative', async () => {
+test('guard-26 非权威环境 → not_authoritative', async () => {
   const env = await load()
   env.reset()
+  env.setCommand(cmd())
   env.run('WORLD.ismastersim = false')
-  env.run(env.cmd())
   assert.equal(env.validate(), 'false|not_authoritative')
 })
 
-test('guard-18 缺组件（没有 locomotor）→ missing_component:locomotor', async () => {
+test('guard-27 缺组件 → missing_component:locomotor', async () => {
   const env = await load()
   env.reset()
+  env.setCommand(cmd())
   env.run('PLAYER.components.locomotor = nil')
-  env.run(env.cmd())
   assert.equal(env.validate(), 'false|missing_component:locomotor')
 })
 
 // ─────────────────────────── 参数 ───────────────────────────
 
-test('guard-19 未知参数 → unknown_arg', () => expectReject('CMD.args = { x = 1, z = 2, fly = true }', 'unknown_arg:fly'))
-test('guard-20 缺必填 → missing_arg', () => expectReject('CMD.args = { x = 1 }', 'missing_arg:z'))
-test('guard-21 NaN → nan', () => expectReject('CMD.args = { x = 0/0, z = 1 }', 'nan:x'))
-test('guard-22 无穷 → infinite', () => expectReject('CMD.args = { x = math.huge, z = 1 }', 'infinite:x'))
-test('guard-23 超范围 → out_of_range', () => expectReject('CMD.args = { x = 99999, z = 1 }', 'out_of_range:x'))
-test('guard-24 非整数坐标 → not_integer', () => expectReject('CMD.args = { x = 1.5, z = 1 }', 'not_integer:x'))
-test('guard-25 类型错误 → bad_type', () => expectReject('CMD.args = { x = "3", z = 1 }', 'bad_type:x'))
+test('guard-28 未知参数 → unknown_arg', () => expectReject(cmd({ args: { x: 1, z: 2, fly: true } }), 'unknown_arg:fly'))
+test('guard-29 缺必填 → missing_arg', () => expectReject(cmd({ args: { x: 1 } }), 'missing_arg:z'))
+test('guard-30 NaN → nan（Lua 侧真实 NaN，不走 JSON 序列化）', async () => {
+  const env = await load()
+  env.reset()
+  env.setCommand(cmd({ args: { x: 1, z: 1 } }))
+  env.run('CMD.args.x = 0/0')
+  assert.equal(env.validate(), 'false|nan:x')
+})
+test('guard-31 无穷 → infinite（Lua 侧真实 math.huge）', async () => {
+  const env = await load()
+  env.reset()
+  env.setCommand(cmd({ args: { x: 1, z: 1 } }))
+  env.run('CMD.args.x = math.huge')
+  assert.equal(env.validate(), 'false|infinite:x')
+})
+test('guard-32 超范围 → out_of_range', () => expectReject(cmd({ args: { x: 99999, z: 1 } }), 'out_of_range:x'))
+test('guard-33 非整数 → not_integer', () => expectReject(cmd({ args: { x: 1.5, z: 1 } }), 'not_integer:x'))
+test('guard-34 类型错误 → bad_type', () => expectReject(cmd({ args: { x: '3', z: 1 } }), 'bad_type:x'))
+
+// ─────────────────────────── revoking / 去重 ───────────────────────────
+
+test('guard-35 revoking 状态：拒绝所有动作', () =>
+  expectReject(cmd(), 'authority_revoking', { 'whale_io_lease.json': authority({ status: 'revoking', generation: 13 }) }))
+
+test('guard-36 重复 command_id → duplicate_command（accept 只记去重）', async () => {
+  const env = await load()
+  env.reset()
+  env.setCommand(cmd())
+  assert.equal(env.validate(), 'true|nil')
+  env.run('Whale.guard.accept(CMD)')
+  assert.equal(env.validate(), 'false|duplicate_command')
+})
 
 // ─────────────────────────── 目标引用 #N ───────────────────────────
 
-test('guard-26 目标解析：当前快照的 #1 能解析；旧快照 / 未知 / 失效 / limbo 都拒绝', async () => {
+test('guard-37 目标解析：当前快照 #1 可用；旧快照/未知/失效/limbo/分类/距离 全拒', async () => {
   const env = await load()
   env.reset()
   env.run('NEARBY = { mkent({ prefab = "evergreen", x = 4, z = 0, guid = 11, work = "CHOP" }) }')
@@ -257,32 +278,24 @@ test('guard-26 目标解析：当前快照的 #1 能解析；旧快照 / 未知 
   ]
   for (const [code, expected] of cases) {
     env.run(code)
-    assert.equal(env.get('OUT'), expected, `期望 ${expected}`)
+    assert.equal(env.get('OUT'), expected)
   }
 })
 
-test('guard-27 目标实体失效 / 进 limbo → entity_gone / in_limbo', async () => {
-  const env = await load()
-  env.reset()
-  env.run('TARGET = mkent({ prefab = "evergreen", x = 4, z = 0, guid = 12, work = "CHOP" }); NEARBY = { TARGET }')
-  env.run(`
-    local actor = Whale.actor.get_actor()
-    local data = Whale.observe.BuildData(actor, { seq = 1, now = NOW })
-    SNAP = data.nearby.snapshot_id
-  `)
-  env.run('TARGET.valid = false')
-  env.run('local e,w = Whale.guard.resolve_target(SNAP, "#1") OUT = e ~= nil and "hit" or ("reject:" .. tostring(w))')
-  assert.equal(env.get('OUT'), 'reject:entity_gone')
-
-  const env2 = await load()
-  env2.reset()
-  env2.run('TARGET = mkent({ prefab = "evergreen", x = 4, z = 0, guid = 13, work = "CHOP" }); NEARBY = { TARGET }')
-  env2.run(`
-    local actor = Whale.actor.get_actor()
-    local data = Whale.observe.BuildData(actor, { seq = 1, now = NOW })
-    SNAP = data.nearby.snapshot_id
-  `)
-  env2.run('TARGET.limbo = true')
-  env2.run('local e,w = Whale.guard.resolve_target(SNAP, "#1") OUT = e ~= nil and "hit" or ("reject:" .. tostring(w))')
-  assert.equal(env2.get('OUT'), 'reject:in_limbo')
+test('guard-38 目标实体失效 / 进 limbo → entity_gone / in_limbo', async () => {
+  const mk = async (mutate) => {
+    const env = await load()
+    env.reset()
+    env.run('TARGET = mkent({ prefab = "evergreen", x = 4, z = 0, guid = 12, work = "CHOP" }); NEARBY = { TARGET }')
+    env.run(`
+      local actor = Whale.actor.get_actor()
+      local data = Whale.observe.BuildData(actor, { seq = 1, now = NOW })
+      SNAP = data.nearby.snapshot_id
+    `)
+    env.run(mutate)
+    env.run('local e,w = Whale.guard.resolve_target(SNAP, "#1") OUT = e ~= nil and "hit" or ("reject:" .. tostring(w))')
+    return env.get('OUT')
+  }
+  assert.equal(await mk('TARGET.valid = false'), 'reject:entity_gone')
+  assert.equal(await mk('TARGET.limbo = true'), 'reject:in_limbo')
 })

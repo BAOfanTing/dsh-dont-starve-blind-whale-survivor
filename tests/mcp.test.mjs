@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { GameBridge, stripKleiHeader } from '../lib/bridge.js'
 import { createMcpServer } from '../lib/mcp-server.js'
 import { executeTool, toolList, BUNDLED_GUIDES } from '../lib/tools.js'
+import { join } from 'node:path'
 import { FakeGame, tempDir } from './helpers.mjs'
 import { LeaseManager } from '../lib/control.js'
 import { readSnapshot } from '../lib/tools.js'
@@ -21,7 +22,7 @@ function settingsStub() {
 
 async function makeServer(dir, { owner = 'mcp_client' } = {}) {
   const bridge = new GameBridge({ bridgeDir: dir, lockDir: true, pollMs: 20 })
-  const control = new LeaseManager({ file: '', now: () => Date.now() })
+  const control = new LeaseManager({ file: join(dir, 'm2-control.json'), now: () => Date.now() })
   // M2.0：动作必须有租约。先用当前快照的环境指纹拿一次。
   const env = (() => {
     const s = readSnapshot({ bridge })
@@ -32,7 +33,7 @@ async function makeServer(dir, { owner = 'mcp_client' } = {}) {
       actorId: s?.actor?.actorId ?? null,
     }
   })()
-  control.acquire(owner, env)
+  control.acquire(owner, env, { ownerInstanceId: 'mcp-test-instance' })
   let notes = ''
   const settings = settingsStub()
   const server = createMcpServer({
@@ -45,6 +46,7 @@ async function makeServer(dir, { owner = 'mcp_client' } = {}) {
       bridge,
       control,
       owner,
+      ownerInstanceId: 'mcp-test-instance',
       notes: { read: () => notes, write: (text) => { notes = text } },
       guides: BUNDLED_GUIDES,
       extraInstructions: settings.extraInstructions,
