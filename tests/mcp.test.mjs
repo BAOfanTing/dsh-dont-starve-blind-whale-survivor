@@ -82,15 +82,20 @@ test('initialize 会返回工具能力和说明', async () => {
   await server.stop()
 })
 
-test('tools/list 里有 get_state 和主要动作', async () => {
+test('tools/list 只暴露 3 个只读工具 + 4 个白名单动作，且名字唯一', async () => {
   const dir = tempDir()
   const { server, url } = await makeServer(dir)
   const body = await rpc(url, 'tools/list', {})
   const names = body.result.tools.map((tool) => tool.name)
-  for (const want of ['get_state', 'get_guide', 'move_to', 'chop', 'mine', 'attack', 'eat', 'craft', 'build', 'sleep', 'say', 'stop']) {
+  for (const want of ['get_state', 'get_guide', 'update_notes', 'move_to', 'stop', 'pickup', 'harvest']) {
     assert.ok(names.includes(want), `缺少工具 ${want}`)
   }
   assert.equal(names.length, toolList().length)
+  assert.equal(new Set(names).size, names.length, '工具名不能重复（M2.2.1 修过 pickup/harvest 重复注册）')
+  // 未开放的动作不再出现在工具表里（M2.2.1：模型只看见 dispatcher 白名单里的动作）
+  for (const gone of ['chop', 'mine', 'attack', 'craft', 'gather', 'night_watch']) {
+    assert.ok(!names.includes(gone), `${gone} 没开放，不该出现在工具表里`)
+  }
   await server.stop()
 })
 
@@ -116,7 +121,7 @@ test('get_state 会带上笔记和额外要求', async () => {
   await server.stop()
 })
 
-test('动作会被转给游戏，结果原样返回（走 SSE）；未开放的动作一律拒绝', async () => {
+test('动作会被转给游戏，结果原样返回（走 SSE）；未开放的动作直接拒绝', async () => {
   const dir = tempDir()
   const game = new FakeGame(dir).start()
   game.modern = true
@@ -128,10 +133,10 @@ test('动作会被转给游戏，结果原样返回（走 SSE）；未开放的�
   const ok = await rpc(url, 'tools/call', { name: 'stop', arguments: {} })
   assert.match(ok.result.content[0].text, /停了（stop）/)
 
-  // 未开放动作：不许进游戏
+  // 未开放动作：工具表里没有它，调用直接被拒，而且绝不许进游戏
   const before = game.commands.length
   const closed = await rpc(url, 'tools/call', { name: 'chop', arguments: { count: 1 } })
-  assert.match(closed.result.content[0].text, /还没开放/)
+  assert.match(closed.result.content[0].text, /没有这个工具/)
   assert.equal(game.commands.length, before, '被拒的动作不该写进游戏命令')
 
   game.stop()
