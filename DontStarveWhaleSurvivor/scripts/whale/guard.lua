@@ -431,6 +431,14 @@ function G.validate(cmd)
         local ok_owner, owner = pcall(function() return ii.owner end)
         if ok_owner and owner ~= nil then return false, "target_not_pickable", nil end
 
+        -- 背包能否接收（用原生 Inventory:CanAcceptCount，别自己拼堆叠逻辑）
+        local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
+        if inv == nil then return false, "missing_component:inventory", nil end
+        local ok_acc, can = pcall(function() return inv:CanAcceptCount(ent, 1) end)
+        if ok_acc and type(can) == "number" and can <= 0 then
+            return false, "inventory_full", nil
+        end
+
         -- 距离：只允许手边（不触发任何自动移动）
         local ax, _, az = U.pos(actor)
         local ex, _, ez = U.pos(ent)

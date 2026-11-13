@@ -361,3 +361,14 @@ test('pickup-L14 真机回归：捡起后目标进 limbo 且 parent=玩家 → �
   assert.match(out, /^true\|/, '回执必须是成功：' + out)
   assert.match(out, /捡起了/, '文案要说捡到了什么：' + out)
 })
+
+
+test('pickup-L15 背包接收不了（原生 CanAcceptCount<=0）→ inventory_full，且不提交动作', async () => {
+  const env = await withNearby('mkitem({ prefab = "twigs", x = 4, z = 0, guid = 50 })')
+  env.run('PLAYER.components.inventory.CanAcceptCount = function() return 0 end')
+  env.setCmd(pickupCmd())
+  env.run('CMD.args.snapshot_id = SNAP')
+  assert.equal(env.validate(), 'false|inventory_full|false')
+  env.run('PUSHED_TOTAL = #PUSHED')
+  assert.equal(env.get('PUSHED_TOTAL'), '0', '背包满时不能提交任何动作')
+})

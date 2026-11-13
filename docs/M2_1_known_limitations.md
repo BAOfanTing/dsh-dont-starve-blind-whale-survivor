@@ -57,6 +57,29 @@ MCP 每次 `tools/call` 都是 `acquire → 执行 → release`；0.15.0 的 `ac
 直接发新 generation 的 `active`；只有"从活着的持有者手里抢（force/不同实例）"和"过期"才走 revoking。
 回归用例 `ack-8`。
 
+## 7.2 真机发现：桶容量会把地面物品截掉（**影响 pickup 可用性**）
+
+真机样本（0.15.1）：`total_found=108 / total_returned=25 / not_returned=83`，
+`resources` 桶 12/12 全被植物占满（grass×6、sapling、rock1、rabbithole×2、flower）。
+
+后果：地面上的树枝/燧石如果排不进最近的 12 个 resources，就**没有 `#N`**，
+模型看不到、也就无法拾取。这不是 pickup 的 bug，是 M1.4 的桶容量与 M2.1 引用机制的交互问题。
+
+可行的缓解（都超出 M2.1 范围，未实施）：
+1. 给"可拾取物品"单独的桶或优先级（改 Observer）；
+2. 增加 `pickup_nearest`（按白名单在附近找最近可拾取物），但这与"禁止 prefab 搜索"冲突，需要单独批准；
+3. 使用侧规避：站到物品 2.5 格内，让它成为最近的 resources 之一（本次真机就是这么过的）。
+
+## 7.3 真机发现：燧石被分到 `food` 桶
+
+真机里 `flint` 出现在 `food` 桶（且带 `edible: true`）。拾取不受影响（白名单按 prefab 判定），
+但分类不准确 —— 属于 M1.4 分类问题，记录待修，不在 M2.1 范围。
+
+## 7.4 背包满（D）尚未真机验证
+
+0.15.2 已加回原生 `Inventory:CanAcceptCount` 预判（`inventory_full`），
+但只在 UNIT（pickup-L15）里验证过；真机"塞满背包再捡"**未执行**。
+
 ## 8. 信任边界（继承）
 
 - 能写 `Cluster_N/<分片>/save/whale_lease.json` 的人就能改控制权（文件系统权限范畴）；
