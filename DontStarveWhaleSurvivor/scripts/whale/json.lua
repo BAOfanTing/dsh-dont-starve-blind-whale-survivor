@@ -101,7 +101,9 @@ encode_value = function(v, out)
         if v ~= v or v == math.huge or v == -math.huge then
             out[#out + 1] = 'null'
         elseif v == math.floor(v) and math.abs(v) < 1e15 then
-            out[#out + 1] = string.format('%d', math.floor(v))
+            -- 不能用 %d：DST 的 Lua 5.1 里 %d 只认 int32，
+            -- 墙钟毫秒（1.79e12）会被截成 -2147483648（真机 acked_at 就是这么坏的）。
+            out[#out + 1] = string.format('%.0f', math.floor(v))
         else
             local s = string.format('%.4f', v)
             s = s:gsub('0+$', ''):gsub('%.$', '')
