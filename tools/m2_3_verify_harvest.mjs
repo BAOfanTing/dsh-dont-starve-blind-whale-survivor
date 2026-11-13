@@ -110,6 +110,24 @@ else {
            : fail('非白名单目标被拒', String(r).slice(0, 120))
 }
 
+// ── 4.5) 负向：未成熟对象 → not_ready（真机 checklist 的测试 B）──
+console.log('\n[4.5] 负向：未成熟（被采过）的浆果丛')
+if (!keys.includes('harvestables')) {
+  skip('未成熟目标被拒', '需要 0.17.x')
+} else {
+  const freshN = read()
+  const t0 = (freshN.snap.nearby?.buckets?.harvestables ?? []).find((h) => h.harvest_ready === false)
+  if (!t0) {
+    skip('未成熟目标被拒（not_ready）', '附近没有"已采过"的浆果丛（NOT_OBSERVED）')
+  } else {
+    const r = await callMcp('harvest', { target_ref: t0.ref, snapshot_id: freshN.snap.nearby?.snapshot_id })
+    console.log('  → 对 ' + t0.ref + '（harvest_ready=false，' + t0.distance + ' 格）：' + String(r).slice(0, 120))
+    const good = /not_ready|already_harvested|out_of_range|target_busy/.test(r)
+    if (good) pass('未成熟目标被拒', String(r).slice(0, 80))
+    else fail('未成熟目标被拒', String(r).slice(0, 120))
+  }
+}
+
 // ── 5) 距离：原生上限（物理半径 + 4）──
 console.log('\n[5] 距离（原生 PickRangeCheck：目标物理半径 + 4 世界单位 ≈1.03 格）')
 const farReady = harvestables.filter((h) => h.harvest_ready === true && (h.distance ?? 0) > 1.5)
