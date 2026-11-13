@@ -42,9 +42,10 @@
 
 ## 7. 真机验证状态
 
-见 `docs/M2_1_pickup_test_report.md` §6 与本轮记录：
-- 若本轮未完成真机，则 ④ A/B/C/D/E 均为 **NOT_RUN**，不得声称通过；
-- `Fengari`/假 bridge 的通过项一律只算 `UNIT`。
+- **已完成（RUNTIME）**：新 MCP 注册了 pickup、Node 层放行、角色不合法时正确拒绝、**零副作用**。
+- **未完成（NOT_RUN/BLOCKED）**：正常拾取、不该捡、背包满、距离 —— 因为世界还停在 0.14.4、
+  角色是 ghost、附近没有白名单物品。
+- `Fengari`/假 bridge 的通过项一律只算 `UNIT`，**不冒充真机**。
 
 ## 8. 信任边界（继承）
 
