@@ -179,7 +179,35 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 **观察侧同步**：`nearby` 的「可收获」桶现在同时装浆果丛和草丛/树苗，并给出 `use_action`
 （`harvest` 或 `gather`），文本渲染成 `可收(harvest)` / `可采(gather)` —— 观察与执行共用同一份白名单。
 
-**真机结果**：见下方（本节由真机跑完后补）。
+**真机结果（0.18.0，真实 deepseek-v4.1-flash，40 次调用预算）**：
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 世界加载 0.18.0 | ✅ | 状态文件 `mod=0.18.0`；Master 日志 4 个新 rules 全部 modimport 成功、无 Lua 错误 |
+| `gather` | ✅ **RUNTIME / END_TO_END** | 模型自主采了 **5 株**：`cutgrass 0→2`、`twigs 0→2`（每株都用对了 `#N` + Nearby 快照 ID） |
+| `pickup` | ✅ **RUNTIME / END_TO_END** | `flint 0→2` |
+| `move_to` | ✅ | 4/4 成功，位置真的变 |
+| `craft` 校验链 | ✅ **RUNTIME** | `ingredients_missing: twigs 1/2`（精确到差几个）、`ingredients_missing: cutgrass 0/2, twigs 0/2`、`recipe_not_allowed`（campfire） |
+| `equip` 校验链 | ✅ **RUNTIME** | `not_in_inventory`（背包没有 torch）、`item_not_equippable`（grass） |
+| `eat` 校验链 | ✅ **RUNTIME** | `food_not_allowed`（monstermonster）、`no_food`（背包没吃的） |
+| `craft` **成功产出** | ⚠️ **NOT_OBSERVED** | 见下 |
+| `equip` **成功装备** | ⚠️ **NOT_OBSERVED** | 同上 |
+| `eat` **成功进食** | ⚠️ **NOT_OBSERVED** | 模型没到饥饿线（饥饿一直 160+），也没被逼到非吃不可 |
+
+**为什么 craft/equip 的成功路径没验到**：两轮真机里角色都**在黄昏/夜晚死亡**（第 1 天、第 2 天各一次），
+死亡会掉落全部物品 → 材料清零，craft 永远差材料。这不是 craft 的问题，是**角色活不下来**
+（本阶段明确不做自动生存/战斗，模组的 reflex 只会在"没任务"时帮忙，模型一思考它就插不上手）。
+
+**顺带发现两个真问题（只记录，未修）**：
+
+1. **`gather` 宏重名覆盖（已修）**：`macros.lua` 的 `A.register("gather", …)` 把新增的原子动作
+   `JOBS.gather` 直接盖掉了，于是模型调 `gather` 收到的是"要传 resource"（宏的文案）。
+   修法：`A.register` 加防覆盖保护（宏不许覆盖同名原子动作）+ 宏改名 `gather_macro`。
+   **这是真机第一轮 18 次 gather 全失败的根因。**
+2. **reflex 的旧 craft 路径会白扣材料（未修）**：reflex 黄昏时调 `A.Start("craft", {recipe="torch"})`
+   走旧路径，`HasIngredients` 只判"有没有"不判"够不够"，`MakeRecipe` 失败时材料已经扣掉。
+   现场看到 `cutgrass×2 + twigs×1` 凭空消失（结果文件里是 `{"id":"reflex","text":"torch 材料不够"}`）。
+   属于 reflex 范围，本阶段**只记录**。
 
 ## 5. 已知问题（都会真实影响体验）
 

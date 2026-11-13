@@ -2003,8 +2003,23 @@ end
 -- ─────────────────────────── 对外 ───────────────────────────
 
 --- 给宏（macros.lua）用：注册动作、推进子动作、数背包
+--- 注册一个宏（任务级动作）。
+--- SURVIVAL-01：加一道防覆盖保护 —— 宏**不许**覆盖同名的原子动作。
+--- 真机踩到：macros.lua 里的 "gather" 宏把 actions.lua 的 JOBS.gather 直接盖掉了，
+--- 于是模型调 gather 时收到的是"gather 要传 resource"（宏的文案），原子动作根本没跑。
+--- 现在重名时保留原子动作，并记一条日志（宏自己失效，但不会静默改变原子动作的语义）。
+local atomic_jobs = {}
+for k in pairs(JOBS) do atomic_jobs[k] = true end
+
 function A.register(name, fn)
+    if atomic_jobs[name] == true and JOBS[name] ~= nil then
+        if Whale ~= nil and Whale.util ~= nil and Whale.util.log ~= nil then
+            Whale.util.log("宏 " .. tostring(name) .. " 与原子动作重名，已忽略（保留原子动作）")
+        end
+        return false
+    end
     JOBS[name] = fn
+    return true
 end
 
 A.find_by_name = find_by_name
