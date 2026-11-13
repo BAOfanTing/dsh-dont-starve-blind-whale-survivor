@@ -48,7 +48,7 @@ node --test --test-force-exit "tests/m2_*.test.mjs"    # 只跑 M2 系列
 
 | 主题 | 文件 | 盯的是什么 |
 |---|---|---|
-| 工具表一致性 | `tool-parity.test.mjs` | 工具名唯一、可见动作 === dispatcher 白名单、reflex/macros 用到的 Lua 动作没被删、只读工具不走 dispatcher |
+| 工具表一致性 | `tool-parity.test.mjs` | 工具名唯一、可见动作 === dispatcher 白名单、reflex/macros 用到的 Lua 动作没被删、本地工具（含 `update_notes`）不走 dispatcher |
 | 插件入口 | `plugin.test.mjs`、`client.test.mjs`、`install.test.mjs` | 配置项、预设、装模组、`dst` 入口工具 |
 | 模组自身 | `lua-mod.test.mjs`、`lua.test.mjs` | `modmain` 能加载、14 个 `modimport`、所有 Lua 语法、版本号一致 |
 | 状态与观察 | `m1_1-actor-observer`、`m1_2-regressions`、`m1_4-*`（5）、`m14-watch-counters` | Actor Provider、字段契约、Delta、截断、扫描计时 |

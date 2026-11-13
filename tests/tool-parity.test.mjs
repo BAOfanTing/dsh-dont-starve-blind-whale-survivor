@@ -7,7 +7,8 @@
 //   1) 工具名唯一 —— 曾经 pickup / harvest 各被重复注册过一次；
 //   2) 模型可见的动作 === dispatcher 白名单（不多不少）；
 //   3) 每个可见动作在模组里真的有实现；被 reflex / macros 用到的动作不能被精简带走；
-//   4) 只读工具（get_state / get_guide / update_notes）走本地分支，不进 dispatcher。
+//   4) 本地工具（get_state / get_guide / update_notes）走本地分支，不进 dispatcher。
+//      注意：update_notes 是**写**工具（覆盖写 notes.md），只是不经过 dispatcher，不是只读。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -77,9 +78,9 @@ test('reflex / macros 用到的模组动作不能被精简带走（它们在后�
     `reflex/macros 内部动作不该出现在工具表里：${exposedButInternal.join('、')}`)
 })
 
-test('只读工具走本地分支：不进 dispatcher，也不需要能用的 bridge', async () => {
+test('本地工具走本地分支：不进 dispatcher，也不需要能用的 bridge（update_notes 是写工具）', async () => {
   assert.deepEqual([...LOCAL_NAMES].sort(), ['get_guide', 'get_state', 'update_notes'])
-  const boom = { call: async () => { throw new Error('只读工具不该走到 dispatcher/bridge') } }
+  const boom = { call: async () => { throw new Error('本地工具不该走到 dispatcher/bridge') } }
   const guide = await executeTool('get_guide', {}, { bridge: boom, guides: {} })
   assert.equal(typeof guide, 'string')
   assert.ok(guide.length > 0, 'get_guide 应该返回内容')

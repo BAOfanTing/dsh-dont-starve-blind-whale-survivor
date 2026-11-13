@@ -24,11 +24,15 @@
 
 ### 2.1 模型可见的工具（7 个）
 
+> 分类：`get_state` / `get_guide` = **只读**；`update_notes` = **本地写入**（会覆盖写笔记文件）；
+> `move_to` / `stop` / `pickup` / `harvest` = **游戏动作**。
+> 之前把 `update_notes` 也写成"只读"是错的，AGENT-01 审计已更正（见 §5 #13）。
+
 | 工具 | 类型 | 说明 |
 |---|---|---|
 | `get_state` | 只读 | 时间/位置/三维/背包/附近/威胁；`format=json` 给结构化数据 |
 | `get_guide` | 只读 | 攻略四篇：主攻略 / 生存 / 战斗 / 烹饪（玩家可覆盖） |
-| `update_notes` | 只读 | 长期笔记，下次 `get_state` 显示在最前 |
+| `update_notes` | **本地写入** | 写长期笔记（覆盖 `~/.dsh/plugins-data/dsh-dont-starve-blind-whale-survivor/notes.md`），下次 `get_state` 显示在最前 |
 | `move_to` | 动作 R1 | 走到格子坐标，自动绕障，报告还差几格 |
 | `stop` | 动作 R1 | 立刻停下 |
 | `pickup` | 动作 R2 | 捡地上的树枝/草/燧石（`#N` + `snapshot_id`，不自动走） |
@@ -120,6 +124,8 @@ heal / equip / drop / sleep / say / wait / act / list_actions / list_recipes / s
 | 10 | 世界内版本要重读才更新 | 升级模组后状态文件里的版本号还是旧的 | 重新读档即可；已实测 0.17.2 正确加载 |
 | 11 | **HUD 写入偶发 `EPERM`** | `whale_hud.json` 的 temp→rename 偶尔失败（Windows/OneDrive 抢占），小窗短暂不刷新 | **间歇、自愈**（实测 1922 行日志里 1 次，下一周期成功）。属桥/ HUD 范围，本阶段只记录不改 |
 | 12 | **`m2_0_3_verify_move.mjs` 的 ⑤-3 会假报失败** | 它"ack 前后各读一次位置"，把状态帧里的一次 2 格跳变算成"Abort 后还在走" | **测量方式问题，不是产品问题**：`m2_0_3_verify_stop.mjs` 用逐帧去重采样，实测 Abort 后 6 帧位置不变 → **真的停住了**。本阶段**未改脚本** |
+| 13 | **`update_notes` 曾被归类为"只读"** | 文档误导：它是**覆盖写** `~/.dsh/plugins-data/…/notes.md` | **AGENT-01 已更正**（STATUS/ARCHITECTURE/TESTING + 测试注释）；实现未改 |
+| 14 | **`get_state` 只印 `快照 s<seq>`，不印 `nearby.snapshot_id`** | 真实模型照抄 `s1622` → `harvest` 必然 `stale_snapshot` | **AGENT-01 发现，未修**（属渲染层，见 `AGENT_01_report.md` §6 P1） |
 
 ### 4.2 guide 一致性审计结论（STABILITY-01）
 

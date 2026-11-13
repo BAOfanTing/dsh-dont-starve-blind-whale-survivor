@@ -28,7 +28,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 ┌──────────────────────────── DSH 插件进程（Node，lib/）────────────────────────────────────┐
 │                                                                                          │
 │  tools.js  executeTool()                                                                 │
-│     ├─ 只读工具 → 直接读快照（get_state / get_guide / update_notes）                       │
+│     ├─ 本地工具 → 读快照/写笔记（get_state / get_guide / update_notes）                       │
 │     └─ 动作      → dispatcher.dispatch()  ────────────────┐                               │
 │                                                            │                               │
 │  dispatcher.js  ①参数与快照校验 ②拿控制租约 ③写命令 ④等结果 ⑤核对真实状态  ◄── 唯一允许    │
@@ -130,10 +130,12 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 ## 7. 工具表面（7 个）与共用链路
 
 ```
-TOOLS = [get_state, get_guide, update_notes]        ← 只读，直接读快照
+TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写笔记
       + [move_to, stop, pickup, harvest]            ← 动作，必须过 dispatcher
 ```
 
+- 这 3 个**本地工具**不进 dispatcher：`get_state` / `get_guide` 只读快照与攻略；
+  **`update_notes` 会写本地文件**（覆盖 `~/.dsh/plugins-data/…/notes.md`，空字符串 = 清空）。
 - F8 的 `agent.js` 和 MCP 的 `mcp-server.js` 都调**同一个** `executeTool()` 和**同一份** `TOOLS`。
 - 所以"F8 能做的事"和"MCP 能做的事"必然一致，不存在两条链路。
 - dispatcher 的白名单 `OPEN_ACTIONS` 是唯一开关：工具表里有的动作，这里不放行也会被拒；
