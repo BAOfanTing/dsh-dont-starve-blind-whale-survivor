@@ -1,0 +1,77 @@
+# M2.0.2 · 已知限制与未验证边界
+
+> 诚实清单：**代码级修复完成（378/378 UNIT/STATIC），但不等于完整安全验收通过。**
+
+---
+
+## 1. 真机（最大缺口）
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 0.14.1 载入真实 DST 世界 | **NOT_RUN** | 本轮游戏客户端没在跑；改过 Lua，必须重进世界 |
+| F8 → MCP 真机换手 | **BLOCKED** | `127.0.0.1:18090` 未监听（DSH 插件 MCP 服务没启动） |
+| MCP → F8 真机换手 | **BLOCKED** | 同上 |
+| 旧命令换手后到达（真机） | **NOT_RUN** | 只在 fengari 里验证（C-1/C-10/C-11） |
+| revoking → `A.Abort` → ack → active 的真实时序 | **NOT_RUN** | Lua `server_tick` 0.2s 轮询、确认文件落盘都只在沙箱/文件桥集成检查里看过 |
+| 租约过期 / 游戏重启 / 文件缺失真机 | **NOT_RUN** | 见 `docs/M2_0_2_runtime_manual_checklist.md` |
+
+**没有用 Fengari / Mock / 独立 Node 进程冒充 DST 真机结论。**
+
+---
+
+## 2. 身份粒度
+
+- `owner_instance_id` 在 `lib/index.js` 的 `apply()` 里生成，是**进程内稳定 UUID**。
+- **MCP 是服务实例级身份**：`lib/mcp-server.js` 不区分单个 TCP 连接/会话，两个 MCP 客户端连同一个服务进程会共享同一个 `owner_instance_id`。本轮**没有**实现连接级隔离，也不声称实现了。
+  - 若要连接级：需要 MCP 层把每个 `initialize`/session 映射成独立 id 并传给 dispatcher（M2.1 之后再说）。
+- F8 是"每个插件进程一个实例"；如果将来真跑两个独立插件进程，各自会生成不同 UUID ✓。
+- 模型**不能**通过 Function Calling 指定 `owner_instance_id`（命令字段取自权威租约，B-5 静态钉住）。
+
+---
+
+## 3. 两阶段换手的严格边界
+
+- `revoking` 期间 Lua 拒所有新动作、Node `validate` 也拒；但：
+  1. Lua 只在 `server_tick`（0.2s）或收到命令时才观察 revoking，**不是事件驱动即时**。窗口内旧命令若已被 `validate` 通过并进入 `actions.Start`，理论上仍可能开始执行（C-11 验证的是 validate 阶段重读；`actions.Start` 之后没有第二次权威检查）。
+  2. `Whale.actions.Abort()` 是既有已验证的安全停止（`locomotor:Stop` + `ClearBufferedAction`），但**没有逐一验证所有长动作**（`sleep`、4 个宏、跨 tick 的 `move_to`）能否瞬时中断。确认文件里的 `job_cleared` 只是写确认那一刻的 `Whale.job == nil` 快照，不保证动作内部没有后续效果。
+  3. 因此本实现是**保守版**：宁可保持 `revoking` 拒绝一切，也不超时自动放行。要"严格即时 fencing"需要在 `A.Tick()` 每一步重新核对权威 generation——本轮没改动作执行器（禁止大规模重构）。
+- `completeHandover()` 只校验 `epoch + generation + runtime_id`，**没有校验 `job_cleared`**；如果 Lua 写的确认里 `job_cleared=false`，Node 仍会放行。理由：本轮开放的动作只有 `move_to`/`stop`，Abort 后风险可控；M2.1 开放长动作前必须把 `job_cleared` 纳入校验。
+
+---
+
+## 4. 文件桥与平台
+
+- Lua 通过 `GLOBAL.io.open` 读权威文件（`whale_io_lease.json` / `whale_lease.json`）。`TheSim:GetPersistentString` 是**异步回调**，本轮没有用它做同步读取；persist 通道只作为 Node 写的备用副本。
+  - 若某个运行环境里 Lua 的工作目录不是 Node 写副本的目录，Lua 会读不到 → fail-closed（拒所有动作），不会误放行。
+  - 已在 `.runtime/m202-bridge-check.mjs` 做过 Node 写 / 文件存在的集成检查，但**没有在真实 DST Lua 里验证 `io.open` 能读到**（NOT_RUN）。
+- Windows `renameSync` 覆盖已验证于 Node 单测；真实游戏进程同时 holding 文件时的行为未验证。
+- 锁用 `process.kill(pid, 0)` 判活 + 5s TTL。**Windows PID 复用**可能导致保守 `lock_busy`（宁可拒绝，不误抢）。
+
+---
+
+## 5. 协议与兼容
+
+- 旧格式命令（缺 `authority_epoch` / `lease_id` / `owner_type` / `owner_instance_id`）**一律拒绝**，没有兼容回退（任务书要求）。
+- `.runtime/m2-control.json` 若是 M2.0 的旧结构（无 `schema`/`authority_epoch`），`isVerifiableAuthority()` 判不可用 → 换新 epoch 重建；旧命令带旧 epoch 全拒。
+- `whale_cmd.json` / `whale_result.json` 结构未变，只增字段；M1.4 Observer、F8/MCP 共用 `readSnapshot()` 未动。
+
+---
+
+## 6. 本轮明确没做的事
+
+- 没开放任何新动作（白名单仍是 `move_to`、`stop`）。
+- 没进 M2.1、没做采集/战斗/制作/建造、没写自动生存循环。
+- 没新增 Node 微服务、没有第二套 Control Lease、没有绕过 Dispatcher 的路径。
+- 没改 `m12-watch.mjs`、没改用户存档、没改 API Key / 模型默认配置、没改 `modsettings.lua`。
+- 没删除或跳过任何既有测试（354 → 378）。
+
+---
+
+## 7. 放行建议
+
+- **M2.0 安全底座：代码级可验收**（A/B/C 全部反转断言通过、378/378）。
+- **M2.1 仍建议暂缓**，直到：
+  1. 按 `docs/M2_0_2_runtime_manual_checklist.md` 完成至少一次 F8→MCP 与 MCP→F8 真机换手；
+  2. 场景 C（旧命令换手后到达）真机确认 `stale_generation`；
+  3. 决定是否在 `A.Tick()` 里加"每 tick 复核权威 generation"（严格即时 fencing）；
+  4. 把 `job_cleared` 纳入 `completeHandover`（开放长动作前）。
