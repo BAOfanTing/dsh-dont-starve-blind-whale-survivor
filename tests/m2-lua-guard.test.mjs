@@ -1,6 +1,6 @@
 // M2.0：Lua 侧安全校验（Whale.guard）—— M2.0.2 改为以权威租约文件为唯一依据
 //
-// 全部是沙箱（fengari）+ 假游戏，属于 UNIT；真机验证见 docs/M2_0_2_runtime_manual_checklist.md。
+// 全部是沙箱（fengari）+ 假游戏，属于 UNIT；真机验证见 docs/archive/security/M2_0_2_runtime_manual_checklist.md。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

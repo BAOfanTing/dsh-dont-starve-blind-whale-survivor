@@ -737,7 +737,7 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
   assert.equal(status, lua.LUA_OK, 'modmain.lua 加载失败（游戏里就是这句会让启动崩溃）：' + fail())
 
   lauxlib.luaL_loadstring(L, to_luastring(`
-    -- M1.0：模块数从 28 降到 8（A 栈的 19 个 + bws_config 已归档，见 docs/M1_0_migration_report.md）
+    -- M1.0：模块数从 28 降到 8（A 栈的 19 个 + bws_config 已归档，见 docs/archive/milestones/M1/M1_0_migration_report.md）
     -- 用「相对顺序」断言：以后再加模块不用改一串下标
     local function idx(name)
         for i, v in ipairs(MODIMPORTS) do

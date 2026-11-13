@@ -1,7 +1,7 @@
 // M1.4：附近实体结构化观察的测试
 //
 // 用 fengari 真跑模组的 nearby/observe 代码（假 GLOBAL，但走的是真正会进游戏的逻辑）。
-// 这些全部是 UNIT（沙箱），**不是** DST 真机；真机结果见 docs/M1_2_runtime_test_report.md 与
+// 这些全部是 UNIT（沙箱），**不是** DST 真机；真机结果见 docs/archive/milestones/M1/M1_2_runtime_test_report.md 与
 // tools/m12-watch.mjs 的采样。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

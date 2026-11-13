@@ -108,7 +108,7 @@ F8 开/停 · F7 停手
 ## Phase 6：高级生存智能（威胁 / 战斗 / 规避 / 四季 / Boss）
 
 除了上面那套给模型用的 25 个动作，仓库里还有一条更完整的**生存智能层**（MCP Server + Bridge，
-和 Phase 1~5 同一套链路，文档在 [`docs/phase6/`](docs/phase6/00-index.md)）：
+和 Phase 1~5 同一套链路，文档在 [`docs/phase6/`](docs/archive/legacy/phase6/00-index.md)）：
 
 | 能回答什么 | 工具 |
 |---|---|

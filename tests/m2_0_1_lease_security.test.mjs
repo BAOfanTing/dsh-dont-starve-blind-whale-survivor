@@ -1,7 +1,7 @@
 // M2.0.2 · 跨进程 / owner 粒度 / generation fencing 修复后的安全回归测试
 //
 // 这些用例在 M2.0.1 里是"证明漏洞存在"的复现；本轮全部**反转成安全断言**并补充新场景。
-// 证据类型：UNIT（真实独立 Node 进程 + fengari 沙箱）；真机结论见 docs/M2_0_2_security_test_report.md
+// 证据类型：UNIT（真实独立 Node 进程 + fengari 沙箱）；真机结论见 docs/archive/security/M2_0_2_security_test_report.md
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
