@@ -803,6 +803,70 @@ local function pickup_by_ref(j, p, target)
     return "run"
 end
 
+--- M2.3：按 #N 引用收获**已解析好的**试点对象（本阶段 = 成熟浆果丛）。
+--- 原生动作是 ACTIONS.PICK（依据：scripts/actions.lua:366 + componentactions 的 pickable 处理器）。
+---
+--- 成功判据（不只看 fn 返回值 —— 原生的 Pick 在成功时会把 canbepicked 翻成 false）：
+---   ① 执行前 canbepicked == true 且执行后 == false ⇒ 真的采到了；
+---   ② 产物可能直接进背包（普通浆果丛），也可能掉在地上（背包满时 GiveItem 会 DropItem），
+---      所以回执必须区分"已入包"和"已收获但产物落地"。
+local function harvest_by_ref(j, p, target)
+    if target == nil or not target:IsValid() then
+        return "fail", "entity_gone: 目标已经不存在了"
+    end
+    local pickable = target.components ~= nil and target.components.pickable or nil
+    if pickable == nil then
+        return "fail", "target_not_harvestable: 目标没有 pickable 组件"
+    end
+
+    if j.step == "start" then
+        if target:IsInLimbo() then
+            return "fail", "in_limbo: 目标进入了 limbo"
+        end
+        local ok_ready, ready = pcall(function() return pickable:CanBePicked() end)
+        if not ok_ready or ready ~= true then
+            return "fail", "not_ready: 目标当前不可采"
+        end
+        local rules = Whale ~= nil and Whale.harvestrules or nil
+        j.data.target = target
+        j.data.prefab = tostring(target.prefab or "?")
+        j.data.label = U.pretty(target)
+        j.data.product = rules ~= nil and rules.ProductOf(target) or nil
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        push(p, BufferedAction(p, target, ACTIONS.PICK, nil))
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local alive = target:IsValid()
+        local ok_can, can = pcall(function() return pickable:CanBePicked() end)
+        local flipped = (ok_can and can == false)
+
+        if flipped or not alive then
+            local after = snapshot_counts(p)
+            local product = j.data.product
+            local gained = 0
+            if product ~= nil then
+                gained = (after[product] or 0) - (j.data.before[product] or 0)
+            end
+            if gained > 0 then
+                return "done", string.format("采下了 %s（%s+%d）", j.data.label or j.data.prefab, product, gained)
+            end
+            -- 收获确实发生了，但产物没进背包：要么背包满被丢回地面，要么本来就会落地
+            local where = product ~= nil and string.format("（%s 没进背包，应该掉在地上了）", product) or "（产物没进背包）"
+            return "done", string.format("采下了 %s%s", j.data.label or j.data.prefab, where)
+        end
+
+        if U.now() - j.data.phase_start > 6 then
+            return "fail", "harvest_failed: 目标状态没有变化（可能够不着，或已经不可采）"
+        end
+        return "run"
+    end
+    return "run"
+end
+
 JOBS.pickup = function(j, p)
     -- M2.1：带 ctx.target 时走"按 #N 引用拾取"的新路径（不搜 prefab、不乱走）；
     -- 老调用方（args.item）仍然走下面的原逻辑，语义不变。
@@ -1550,6 +1614,13 @@ end
 
 --- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable
 JOBS.harvest = function(j, p)
+    -- M2.3：带 ctx.target 时走"按 #N 收获"的新路径（只认 guard 解析出来的真实实体，
+    -- 绝不按 prefab 搜替代目标，也不自动接续 pickup）；
+    -- 老调用方（args.target，锅/晾肉架那套）仍然走下面的原逻辑，语义不变。
+    local ctx = j.ctx or {}
+    if ctx.target ~= nil then
+        return harvest_by_ref(j, p, ctx.target)
+    end
     local want = j.args.target
     local thing = U.find_nearest(p, tonumber(j.args.radius) or 12, nil, nil, function(e)
         if want ~= nil and want ~= "" then

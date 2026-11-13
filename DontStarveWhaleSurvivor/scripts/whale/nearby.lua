@@ -53,6 +53,10 @@ N.BUCKETS = {
     -- M2.2：可行动目标（当前 = 拾取候选）单独成桶。
     -- 放在 threats 之后、food/resources 之前：既不会被植物挤掉，也不会把威胁挤掉。
     { key = "pickupables", label = "可拾取物" },
+    -- M2.3：可收获对象（本阶段 = 成熟浆果丛）单独成桶。
+    -- 理由：浆果丛原本落在 food 桶，真机上 food 已经 12/12 满过（会被挤掉），
+    -- 而且旧 Schema 根本没有"现在成不成熟"的字段 —— 模型看不出能不能采。
+    { key = "harvestables", label = "可收获" },
     { key = "food", label = "食物" },
     { key = "resources", label = "资源" },
     { key = "containers", label = "容器" },
@@ -217,6 +221,11 @@ function N.Classify(ent, actor)
     if rules ~= nil and rules.IsCandidate(ent, actor) then
         return "pickupables", base
     end
+    -- M2.3：可收获对象（与 pickup 一样：只看候选资格，不看成熟度和距离）
+    local hr = Whale ~= nil and Whale.harvestrules or nil
+    if hr ~= nil and hr.IsCandidate(ent, actor) then
+        return "harvestables", base
+    end
     return base
 end
 
@@ -276,6 +285,22 @@ local function describe(ent, actor, category, item_kind)
     }
     -- M2.2：可拾取物保留它原本的语义类别（不是所有桶都有这个字段）
     if item_kind ~= nil then block.item_kind = item_kind end
+
+    -- M2.3：可收获对象写出"现在成不成熟"（原生 CanBePicked 等），绝不造百分比
+    if category == "harvestables" then
+        block.is_harvestable = true
+        local hr = Whale ~= nil and Whale.harvestrules or nil
+        if hr ~= nil then
+            local ready = hr.IsReady(ent)
+            block.harvest_ready = (ready == true)
+            local st = hr.ReadState(ent)
+            if st ~= nil then
+                if st.cycles_left ~= nil then block.cycles_left = st.cycles_left end
+                if st.product ~= nil then block.product = st.product end
+                if st.is_stuck == true then block.is_stuck = true end
+            end
+        end
+    end
 
     if category == "threats" or category == "creatures" then
         local cur, max, dead = health_of(ent)
@@ -579,7 +604,7 @@ local function build(actor, info, now, opts, identity)
             scan = { reused = false, timestamp = now, age_ms = 0,
                      duration_ms = nil, duration_source = "unavailable",
                      scan_seconds = opts.scan_seconds },
-            buckets = { threats = {}, pickupables = {}, food = {}, resources = {}, containers = {}, structures = {}, creatures = {}, other = {} }, -- 出错时为空，读端按"没有数据"处理
+            buckets = { threats = {}, pickupables = {}, harvestables = {}, food = {}, resources = {}, containers = {}, structures = {}, creatures = {}, other = {} }, -- 出错时为空，读端按"没有数据"处理
             delta = { status = "reset", added_count = 0, removed_count = 0, changed_count = 0,
                       added = {}, removed = {}, changed = {} },
         }

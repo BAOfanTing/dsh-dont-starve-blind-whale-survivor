@@ -137,6 +137,16 @@ G.ACTIONS = {
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
+    -- M2.3：按 #N 收获**已成熟**的试点对象（本阶段只有普通浆果丛）。
+    -- 底层原生动作是 ACTIONS.PICK（不是 ACTIONS.HARVEST —— 那是 crop/harvestable 那一类）。
+    harvest = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
 }
 
 --- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
@@ -441,6 +451,34 @@ function G.validate(cmd)
         if tiles > G.PICKUP_MAX_TILES then
             return false, "out_of_range", nil
         end
+        target = ent
+    end
+
+    -- ★ M2.3：harvest 也要把 #N 解析成真实实体，并且**在授权的这一刻重新确认成熟度与距离**
+    --   （观察结果可能已经过期：别人先采了、或者快照之后状态变了）
+    if action == "harvest" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+
+        local snapshot_id = tostring(cmd.args.snapshot_id)
+        local ref = tostring(cmd.args.target_ref)
+        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        if ent == nil then return false, why_t or "unknown_ref", nil end
+
+        local hr = Whale ~= nil and Whale.harvestrules or nil
+        if hr == nil then return false, "harvest_rules_missing", nil end
+
+        -- 候选资格：与观察侧同一份规则（杜绝"观察说能采、执行说不行"）
+        local ok_cand, why_cand = hr.IsCandidate(ent, actor)
+        if not ok_cand then return false, why_cand or "target_not_harvestable", nil end
+
+        -- ★ 成熟度必须在执行前重新判：Candidate != Ready
+        local ok_ready, why_ready = hr.IsReady(ent)
+        if not ok_ready then return false, why_ready or "not_ready", nil end
+
+        -- ★ 距离照抄原生 PickRangeCheck：物理半径 + 4（世界单位）。服务端原生不校验，必须我们限。
+        local in_range = hr.InNativeRange(actor, ent)
+        if not in_range then return false, "out_of_range", nil end
+
         target = ent
     end
 
