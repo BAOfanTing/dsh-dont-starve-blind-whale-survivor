@@ -101,12 +101,12 @@ else console.log(`  ℹ 未精确到达（可接受：走路被打断/绕路）�
 // ═══════════ ⑤ 移动中换手 ═══════════
 console.log('\n=== ⑤ 运行中移动动作的换手中断 ===')
 const startPos = posOf(snapNow().snap)
-// 发一个较远的目标（10 格），让动作持续一段时间
-const far = { x: startPos.x + 10, z: startPos.z }
+// 发一个较远的目标（6 格），让动作持续一段时间
+const far = { x: startPos.x + 6, z: startPos.z } // 6 格足够让动作持续，又不会走太远（角色状态差时更安全）
 console.log('发远距离 move_to:', JSON.stringify(startPos), '→', far.x, far.z)
 const inflight = dispatcher.dispatch({ tool: 'move_to', args: { x: far.x, z: far.z, timeout: 60 }, owner: OWNER, ownerInstanceId: INST })
 // 1.5 秒后（角色应该正在走）抢租约 → 触发 revoking
-await new Promise((r) => setTimeout(r, 1500))
+await new Promise((r) => setTimeout(r, 1200))
 const midPos = posOf(snapNow().snap)
 const handover = control.acquire('mcp_client', env, { force: true, ownerInstanceId: 'm203-interrupter' })
 console.log('  抢租约:', handover.reason, 'gen=', handover.lease?.generation, 'status=', handover.lease?.status)
