@@ -139,3 +139,34 @@ test('ack-5 静态检查：MCP/F8 每次调用都尝试完成 revoking（不只 
   assert.ok(hits >= 2, `MCP 与 F8 两处都要收敛，实际 ${hits}`)
   assert.ok(src.includes('control.completeHandover(bridge.readLeaseAck'), '用 readLeaseAck 拿确认')
 })
+
+
+test('ack-6 json.lua 能编码墙钟毫秒（>2^31），不能用 %d 溢出成 INT32_MIN', async () => {
+  const fengari = await import('fengari')
+  const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari
+  const L = lauxlib.luaL_newstate()
+  lualib.luaL_openlibs(L)
+  const run = (c) => {
+    const st = lauxlib.luaL_dostring(L, to_luastring(c))
+    if (st !== lua.LUA_OK) {
+      let m = ''
+      try { m = to_jsstring(lua.lua_tostring(L, -1)) } catch {}
+      throw new Error('Lua: ' + m)
+    }
+  }
+  const get = (n) => { lua.lua_getglobal(L, to_luastring(n)); try { return to_jsstring(lua.lua_tostring(L, -1)) } catch { return '' } }
+  run('GLOBAL = { pcall = pcall, tonumber = tonumber, error = error, setmetatable = setmetatable, getmetatable = getmetatable }')
+  run('Whale = { verbose = false }')
+  run(readFileSync(join(MOD, 'scripts', 'whale', 'json.lua'), 'utf8'))
+  run('OUT = Whale.json.encode({ acked_at = 1794551954000, gen = 12, ratio = 0.5 })')
+  const out = JSON.parse(get('OUT'))
+  assert.equal(out.acked_at, 1794551954000, '墙钟毫秒必须原样编码（%d 会溢出成 -2147483648）')
+  assert.equal(out.gen, 12)
+  assert.equal(out.ratio, 0.5)
+})
+
+test('ack-7 静态检查：json.lua 不用 %d 编整数', () => {
+  const src = readFileSync(join(MOD, 'scripts', 'whale', 'json.lua'), 'utf8')
+  assert.ok(!/string\.format\('%d'/.test(src), '整数编码不能用 %d（Lua 5.1 只认 int32）')
+  assert.ok(src.includes("string.format('%.0f'"), '应该用 %.0f')
+})
