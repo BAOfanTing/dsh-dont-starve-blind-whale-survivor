@@ -133,11 +133,20 @@ test('ack-4 revoking 收敛：拿到有效 ack 后 completeHandover 发布 activ
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('ack-5 静态检查：MCP/F8 每次调用都尝试完成 revoking（不只 acquire 那一刻）', () => {
+test('ack-5 静态检查：MCP/F8 都通过 acquireWithWait 反复收敛 revoking（不只 acquire 那一刻）', () => {
   const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
-  const hits = src.split("fresh?.status === 'revoking'").length - 1
-  assert.ok(hits >= 2, `MCP 与 F8 两处都要收敛，实际 ${hits}`)
-  assert.ok(src.includes('control.completeHandover(bridge.readLeaseAck'), '用 readLeaseAck 拿确认')
+  // M2.2.2/P2：收敛逻辑从调用点搬进了 control.acquireWithWait（每轮都尝试 completeHandover），
+  // 所以这里检查"两处都用 acquireWithWait 且都传了 readAck"，而不是旧的行内写法。
+  const waits = src.split('acquireWithWait(').length - 1
+  assert.ok(waits >= 2, `MCP 与 F8 两处都要走有限等待，实际 ${waits}`)
+  const acks = src.split('readAck:').length - 1
+  assert.ok(acks >= 2, `两处都要把 readLeaseAck 传进去，实际 ${acks}`)
+  assert.ok(src.includes('bridge.readLeaseAck'), '用 readLeaseAck 拿确认')
+
+  // 并且确认收敛动作确实还在实现里（不能被搬丢了）
+  const ctl = readFileSync(join(ROOT, 'lib', 'control.js'), 'utf8')
+  assert.ok(ctl.includes('completeHandover(readAck())'), 'acquireWithWait 内部每轮都要尝试用 ACK 收尾')
+  assert.ok(ctl.includes('acquireWithWait('), 'LeaseManager 要提供有限等待版本')
 })
 
 
