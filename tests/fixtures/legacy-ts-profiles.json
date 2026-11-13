@@ -1,0 +1,29 @@
+{
+  "_note": "M2.2.1 / Q3：从已归档的 A 栈 mcp-server 提取的**静态历史名单**。",
+  "_why": "tests/phase6-lua.test.mjs 原本 import('../mcp-server/dist/src/survival/profiles.js')，但 dist 是编译产物、被 .gitignore 忽略 —— 干净检出时那个目录不存在，测试必红。这里改成读这份 fixture，只保留测试真正需要的数据。",
+  "_source": "mcp-server/src/survival/profiles.ts（A 栈）@ commit 5cc59ce；取值方式：ENEMY_LIST 里 auto_engage_allowed 为 true 的 prefab，以及 BOSS_LIST 的 prefab",
+  "_archived_to": "docs/archive/legacy/（mcp-server 目录本身也已归档，见 docs/REFACTOR_AUDIT.md R5）",
+  "auto_engage_list": [
+    "frog",
+    "hound",
+    "killerbee",
+    "merm",
+    "mosquito",
+    "spider",
+    "spider_warrior"
+  ],
+  "boss_list": [
+    "antlion",
+    "bearger",
+    "beequeen",
+    "crabking",
+    "deerclops",
+    "dragonfly",
+    "klaus",
+    "malbatross",
+    "moose",
+    "spiderqueen",
+    "stalker",
+    "toadstool"
+  ]
+}

@@ -22,6 +22,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
 const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
+// M2.2.1 / Q3：这两份名单原来是从 mcp-server/dist（编译产物，未入库）里 import 的。
+// 现在读最小静态 fixture —— 测试验的是"归档的 Lua 白名单 == 归档的 TS 名单"，只需要这份数据。
+const LEGACY_TS_PROFILES = JSON.parse(readFileSync(join(ROOT, 'tests', 'fixtures', 'legacy-ts-profiles.json'), 'utf8'))
+
 const STUB = `
 CLOCK = 1000
 ATTACKS = 0
@@ -433,15 +437,14 @@ function luaTableKeys(source, tableName) {
 test('P6：Lua 的自动交战白名单与 TS 档案一致（防两边漂移）', async () => {
   const luaSource = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'combat_executor.lua'), 'utf8')
   const luaAuto = luaTableKeys(luaSource, 'AUTONOMOUS_ENEMIES')
-  const profiles = await import('../mcp-server/dist/src/survival/profiles.js')
-  assert.deepEqual(luaAuto, profiles.autoEngageList(), 'Lua AUTONOMOUS_ENEMIES 必须等于 TS autoEngageList')
+  assert.deepEqual(luaAuto, LEGACY_TS_PROFILES.auto_engage_list,
+    'Lua AUTONOMOUS_ENEMIES 必须等于归档的 TS autoEngageList')
 })
 
 test('P6：Lua 与 TS 的 Boss 名单一致', async () => {
   const luaThreat = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'threat_observer.lua'), 'utf8')
   const luaCombat = readFileSync(join(LEGACY_HOME, 'scripts', 'main', 'combat_executor.lua'), 'utf8')
-  const profiles = await import('../mcp-server/dist/src/survival/profiles.js')
-  const tsBosses = profiles.bossList()
+  const tsBosses = LEGACY_TS_PROFILES.boss_list
   assert.deepEqual(luaTableKeys(luaThreat, 'BOSS_PREFABS'), tsBosses, 'threat_observer 的 Boss 名单要和 TS 一致')
   assert.deepEqual(luaTableKeys(luaCombat, 'BOSS_PREFABS'), tsBosses, 'combat_executor 的 Boss 名单要和 TS 一致')
 })
