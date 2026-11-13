@@ -204,7 +204,9 @@ if (staleAllRejected) ok('②-3 陈旧 ack 全部被拒', '错 epoch/lease_id/ru
 
 // 2-d 清理后动作必须被拒（Lua 看不到 active 权威就不放行）
 const fenced = await sendStop({ ...envelope, lease_generation: c2.readAuthority()?.generation, created_at: Date.now(), expires_at: Date.now() + 8000 }, '②-4 清理后发命令')
-if (fenced && fenced.ok === false && ['authority_revoking', 'stale_generation', 'authority_unavailable', 'stale_lease'].includes(fenced.reason)) {
+// 这些都是"租约层"拒绝，说明清理后确实被挡住了（不是角色原因才通过）
+const LEASE_REJECTS = ['authority_revoking', 'stale_generation', 'authority_unavailable', 'stale_lease', 'authority_epoch_mismatch', 'wrong_owner', 'wrong_instance', 'lease_expired']
+if (fenced && fenced.ok === false && LEASE_REJECTS.includes(fenced.reason)) {
   ok('②-4 清理后动作被拒', `reason=${fenced.reason}`)
 } else bad('②-4 清理后动作被拒', JSON.stringify(fenced))
 

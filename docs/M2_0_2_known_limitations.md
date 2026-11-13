@@ -44,6 +44,10 @@
 
 ## 4. 文件桥与平台
 
+- **③-5 已真机确认（M2.0.3）**：Lua 只读 `Cluster_N/<分片>/save/whale_lease.json` 这一份。
+  篡改 bin64/bin 的副本完全无效（安全）；但反过来，**能写 save 目录该文件的人就能直接改控制权** ——
+  `authority_epoch`/`runtime_id` 只挡"换手前的旧命令"，挡不住"本地进程改写权威文件"。
+  这是文件桥架构的固有边界（文件系统权限范畴），不在本架构能防的范围内。
 - **真机已证：DST 模组沙箱 `GLOBAL.io == nil`**，Lua 只走 `TheSim:GetPersistentString` 持久化字符串通道。
   0.14.1 曾因用 `io.open` 读权威文件导致**所有命令（含合法命令）被 `authority_unavailable` 拒绝**。
   0.14.2 改为：`bridge.lua` 每 tick 用 `ps_read(FILES.lease)` 读权威文件 → 严格解析 → 写入
