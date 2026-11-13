@@ -587,3 +587,42 @@ test('M2.2-26 Node：八桶都在时按固定顺序渲染（威胁 → 可拾取
   assert.ok(order.every((i) => i >= 0), '四类都要在：' + JSON.stringify(order))
   assert.deepEqual(order, [...order].sort((a, b) => a - b), '顺序必须固定')
 })
+
+
+// ═══════════════════════ 与 M2.1 Pickup 的集成（新桶不能把执行链打断） ═══════════════════════
+
+test('M2.2-27 pickup 的核对逻辑能从 pickupables 桶解析 #N（新桶不会打断执行链）', async () => {
+  const { ACTION_SPECS } = await import('../lib/dispatcher.js')
+  const before = {
+    nearby: {
+      snapshot_id: 'r1-n9',
+      buckets: {
+        threats: [],
+        pickupables: [{ ref: '#1', prefab: 'flint', label: '燧石', distance: 0.9, item_kind: 'resources' }],
+        food: [], resources: [], containers: [], structures: [], creatures: [], other: [],
+      },
+    },
+    player: { inventory: { used: 0, items: [] } },
+  }
+  const after = { ...before, player: { inventory: { used: 1, items: [{ prefab: 'flint', count: 1 }] } } }
+  const v = ACTION_SPECS.pickup.verify(before, after, { target_ref: '#1' })
+  assert.equal(v.ok, true, '必须能从 pickupables 桶里找到目标 prefab')
+  assert.equal(v.prefab, 'flint')
+  // 背包没变就不能算成功（不能因为"目标在 pickupables 里"就放行）
+  const nochange = ACTION_SPECS.pickup.verify(before, before, { target_ref: '#1' })
+  assert.equal(nochange.ok, false)
+  assert.equal(nochange.reason, 'inventory_unchanged')
+})
+
+test('M2.2-28 出现在 pickupables 里 ≠ 跳过执行侧校验（白名单/距离/背包仍在 guard 里判）', async () => {
+  const env = await load({ withGuard: true })
+  // 远处（8 格）的燧石：观察侧是候选，执行侧应当 out_of_range
+  env.run(`NEARBY = { mkent({ prefab = "flint", guid = 999, x = 8 * 4, z = 0, item = true, canbepickedup = true }) }`, '远处燧石')
+  const { nearby } = env.observe()
+  assert.equal(nearby.buckets.pickupables.length, 1, '观察侧不限距离')
+  const d = nearby.buckets.pickupables[0].distance
+  assert.ok(d > 2.5, '确实超出执行距离')
+  // 执行侧的上限仍然独立存在（不是从观察结果里读的）
+  env.run('OUT_MAX = tostring(Whale.guard.PICKUP_MAX_TILES)', '执行上限')
+  assert.equal(env.get('OUT_MAX'), '2.5')
+})
