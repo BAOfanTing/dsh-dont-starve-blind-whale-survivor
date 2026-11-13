@@ -724,7 +724,81 @@ JOBS.pick = function(j, p)
 end
 
 -- 捡起地上的东西（Phase 5 M3 补遗 / M4 开放：真机确认 ACTIONS.PICKUP 存在后才加的）
+--- 背包/物品计数（pickup 与动作收尾都要用；必须定义在调用者之前）
+local function snapshot_counts(p)
+    local out = {}
+    local inv = p ~= nil and p.components.inventory or nil
+    if inv == nil then return out end
+    inv:ForEachItem(function(item)
+        local key = item.prefab or "?"
+        out[key] = (out[key] or 0) + U.count(item)
+    end)
+    return out
+end
+
+--- M2.1：按 #N 引用拾取**已解析好的**实体。
+--- 与 JOBS.pickup 的区别：绝不按 prefab 搜目标，也不通知客户端走路/不触发寻路。
+--- 成功判据只看真实状态：目标进了玩家背包（parent/owner），或目标被原生堆叠合并且背包该 prefab 总数增加。
+--- 依据：scripts.zip/scripts/actions.lua 的 ACTIONS.PICKUP.fn → inventory:GiveItem(target, nil, pos)；
+--- 注意 GiveItem 失败时会把物品丢回地面，而 PICKUP.fn 仍然 return true，所以不能只看"动作没报错"。
+local function pickup_by_ref(j, p, target)
+    if target == nil or not target:IsValid() then
+        return "fail", "entity_gone: 目标已经不存在了"
+    end
+    if target:IsInLimbo() then
+        return "fail", "in_limbo: 目标进入了 limbo"
+    end
+    local inv = p.components.inventory
+    if inv == nil then return "fail", "missing_component:inventory" end
+
+    if j.step == "start" then
+        j.data.target = target
+        j.data.prefab = tostring(target.prefab or "?")
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        push(p, BufferedAction(p, target, ACTIONS.PICKUP, nil))
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local t = j.data.target
+        local alive = t ~= nil and t:IsValid()
+        local owned = false
+        if alive then
+            local okp, parent = pcall(function() return t:GetParent() end)
+            if okp and parent == p then owned = true end
+            local oki, owner = pcall(function()
+                return t.components.inventoryitem ~= nil and t.components.inventoryitem.owner or nil
+            end)
+            if oki and owner == p then owned = true end
+        end
+        if owned then
+            return "done", string.format("捡起了 %s", U.pretty(t))
+        end
+        local after = snapshot_counts(p)
+        local gained = (after[j.data.prefab] or 0) - (j.data.before[j.data.prefab] or 0)
+        if not alive and gained > 0 then
+            return "done", string.format("捡起了 %s（合并进已有的那一堆）", j.data.prefab)
+        end
+        if U.now() - j.data.phase_start > 6 then
+            if not alive then
+                return "fail", "result_unverified: 目标消失了，但背包里没见到对应物品"
+            end
+            return "fail", "pickup_failed: 目标还在地上（够不着，或背包满了）"
+        end
+        return "run"
+    end
+    return "run"
+end
+
 JOBS.pickup = function(j, p)
+    -- M2.1：带 ctx.target 时走"按 #N 引用拾取"的新路径（不搜 prefab、不乱走）；
+    -- 老调用方（args.item）仍然走下面的原逻辑，语义不变。
+    local ctx = j.ctx or {}
+    if ctx.target ~= nil then
+        return pickup_by_ref(j, p, ctx.target)
+    end
     if j.step == "start" then
         j.data.count = tonumber(j.args.count) or 1
         j.data.done_count = 0
@@ -1575,16 +1649,6 @@ end
 -- ── 结果校验：背包净变化 ──
 -- 只回"干了 N 下"没有用：模型不知道到底拿到了什么，就会开始编造（phase5 的 M7 就是被这条坑到的）。
 -- 每个动作开始前拍一张背包快照，成功结束时把差值附在后面："（背包：log+4）"。
-local function snapshot_counts(p)
-    local out = {}
-    local inv = p ~= nil and p.components.inventory or nil
-    if inv == nil then return out end
-    inv:ForEachItem(function(item)
-        local key = item.prefab or "?"
-        out[key] = (out[key] or 0) + U.count(item)
-    end)
-    return out
-end
 
 local function count_diff(before, after)
     if before == nil or after == nil then return nil end
@@ -1602,7 +1666,7 @@ local function count_diff(before, after)
     return table.concat(parts, "，")
 end
 
-function A.Start(name, args, cmd_id)
+function A.Start(name, args, cmd_id, ctx)
     local fn = JOBS[name]
     if fn == nil then
         local known = {}
@@ -1630,6 +1694,9 @@ function A.Start(name, args, cmd_id)
         cmd_id = cmd_id,
         step = "start",
         data = {},
+        -- M2.1：pickup 这类"目标已由 guard 解析好"的动作，通过 ctx 传真实实体，
+        -- 不允许执行函数自己按 prefab 去搜目标。
+        ctx = ctx or {},
         t0 = U.now(),
     }
     -- 动作开始前拍背包快照（结束时用来算净变化）

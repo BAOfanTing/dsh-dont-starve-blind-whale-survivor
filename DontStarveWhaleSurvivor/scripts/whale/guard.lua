@@ -128,7 +128,29 @@ G.ACTIONS = {
         required_components = { "locomotor" },
         args = {},
     },
+    -- M2.1：按 #N 引用拾取地面普通资源（不准传 prefab、不准传坐标）
+    pickup = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
 }
+
+--- M2.1 拾取白名单：只放行本构建里**已核实**是普通地面物品的 prefab。
+--- 依据（scripts.zip 实测）：三者都 AddComponent("inventoryitem")，掉在地上可被 ACTIONS.PICKUP 捡起。
+--- 注意石头物品的 prefab 是 inv_rocks（不是 rocks，rocks.lua 是巨石的脚本），未核实前不放行。
+G.PICKUP_PREFABS = {
+    twigs = true,
+    cutgrass = true,
+    flint = true,
+}
+
+--- M2.1 保守拾取距离（格）。DST 服务端 ACTIONS.PICKUP.fn 本身不校验距离，
+--- 所以必须由我们限制，避免模型隔空捡 16 格外的物品。
+G.PICKUP_MAX_TILES = 2.5
 
 function G.is_action_allowed(name)
     return type(name) == "string" and G.ACTIONS[name] ~= nil
@@ -233,6 +255,11 @@ local function check_value(rule, name, value)
         if rule.max ~= nil and value > rule.max then return false, "out_of_range:" .. name end
     elseif rule.type == "string" then
         if type(value) ~= "string" then return false, "bad_type:" .. name end
+        if value == "" then return false, "empty_string:" .. name end
+        if rule.max_len ~= nil and #value > rule.max_len then return false, "too_long:" .. name end
+        if rule.pattern ~= nil and string.match(value, rule.pattern) == nil then
+            return false, "bad_format:" .. name
+        end
     end
     return true, nil
 end
@@ -376,18 +403,52 @@ function G.validate(cmd)
     local ok_args, why = validate_args(spec, type(cmd.args) == "table" and cmd.args or {})
     if not ok_args then return false, why, nil end
 
-    -- 组件
     local provider = Whale ~= nil and Whale.actor or nil
     local actor = nil
     if provider ~= nil and provider.get_actor ~= nil then
         local ok_get, got = pcall(provider.get_actor)
         if ok_get then actor = got end
     end
+
+    -- ★ M2.1：pickup 必须把 #N 解析成**真实实体**（禁止 prefab 搜索），并做前置校验
+    local target = nil
+    if action == "pickup" then
+        -- 一个 Actor 同时只允许一个动作（pickup 不做静默替换）
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+
+        local snapshot_id = tostring(cmd.args.snapshot_id)
+        local ref = tostring(cmd.args.target_ref)
+        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        if ent == nil then return false, why_t or "unknown_ref", nil end
+        if ent:IsInLimbo() then return false, "in_limbo", nil end
+        if G.PICKUP_PREFABS[ent.prefab] ~= true then return false, "prefab_not_allowed", nil end
+
+        local c = ent.components
+        if c == nil or c.inventoryitem == nil then return false, "target_not_pickable", nil end
+        local ii = c.inventoryitem
+        local ok_can, can = pcall(function() return ii.canbepickedup end)
+        if not ok_can or can ~= true then return false, "target_not_pickable", nil end
+        local ok_owner, owner = pcall(function() return ii.owner end)
+        if ok_owner and owner ~= nil then return false, "target_not_pickable", nil end
+
+        -- 距离：只允许手边（不触发任何自动移动）
+        local ax, _, az = U.pos(actor)
+        local ex, _, ez = U.pos(ent)
+        if ax == nil or ex == nil then return false, "target_not_pickable", nil end
+        local dx, dz = ax - ex, az - ez
+        local tiles = math.sqrt(dx * dx + dz * dz) / U.TILE
+        if tiles > G.PICKUP_MAX_TILES then
+            return false, "out_of_range", nil
+        end
+        target = ent
+    end
+
+    -- 组件
     local ok_comp, why_comp = actor_has_components(actor, spec.required_components)
     if not ok_comp then return false, why_comp, nil end
 
     -- 通过：记世代 + 记 id（注意：记 id 在真正接受时才做，见 accept）
-    return true, nil, { action = action, spec = spec, actor = actor, status = status }
+    return true, nil, { action = action, spec = spec, actor = actor, status = status, target = target }
 end
 
 --- 校验通过后调用：只记 command_id 去重 + 诊断信息。

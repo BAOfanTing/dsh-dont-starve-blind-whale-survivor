@@ -275,7 +275,7 @@ local function handle_command(json_text)
         B.Report(false, "安全校验层缺失，拒绝执行", id, "guard_missing")
         return
     end
-    local ok_cmd, reason = guard.validate(cmd)
+    local ok_cmd, reason, detail = guard.validate(cmd)
     if not ok_cmd then
         log("拒绝指令 " .. id .. "：" .. tostring(reason))
         B.Report(false, "拒绝：" .. tostring(reason), id, tostring(reason))
@@ -283,7 +283,13 @@ local function handle_command(json_text)
     end
     guard.accept(cmd)
 
-    local started, err = Whale.actions.Start(action, type(cmd.args) == "table" and cmd.args or {}, id)
+    -- M2.1：guard 已把 #N 解析成真实实体（detail.target），这里只负责传下去
+    local started, err = Whale.actions.Start(
+        action,
+        type(cmd.args) == "table" and cmd.args or {},
+        id,
+        { target = detail ~= nil and detail.target or nil }
+    )
     if not started then
         B.Report(false, err or "动作没能开始", id, "action_start_failed")
     end
