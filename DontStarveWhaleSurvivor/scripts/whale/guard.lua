@@ -16,8 +16,64 @@ local tonumber = GLOBAL.tonumber
 local type = type
 
 local os = GLOBAL.os or { time = function() return 0 end }
+local io = GLOBAL.io
 local U = Whale.util
 local G = {}
+
+G.LEASE_SCHEMA = "bws.control-lease/1"
+
+--- M2.0.2：Lua 只读权威租约文件（Node LeaseManager 是唯一写入者）。
+--- 两个文件名都试：io 通道（游戏工作目录）和持久化通道名；都带/不带 KLEI 头都能解析。
+local function io_read(name)
+    if io == nil or io.open == nil then return nil end
+    local ok, file = pcall(io.open, name, "r")
+    if not ok or file == nil then return nil end
+    local content = nil
+    pcall(function() content = file:read("*a"); file:close() end)
+    return content
+end
+
+--- 解析一份权威租约文本；任何结构缺失都判不可用（fail-closed）
+local function parse_authority(text)
+    if type(text) ~= "string" or text == "" then return nil, "authority_unavailable" end
+    local ok, data = pcall(Whale.json.decode, U.strip_header(text))
+    if not ok or type(data) ~= "table" then return nil, "authority_corrupt" end
+    if data.schema ~= G.LEASE_SCHEMA then return nil, "authority_schema_mismatch" end
+    if type(data.authority_epoch) ~= "string" or data.authority_epoch == "" then return nil, "authority_corrupt" end
+    if type(data.generation) ~= "number" or data.generation < 0 or data.generation ~= math.floor(data.generation) then
+        return nil, "authority_corrupt"
+    end
+    if type(data.lease_id) ~= "string" or data.lease_id == "" then return nil, "authority_corrupt" end
+    if type(data.owner_type) ~= "string" or data.owner_type == "" then return nil, "authority_corrupt" end
+    if type(data.owner_instance_id) ~= "string" or data.owner_instance_id == "" then return nil, "authority_corrupt" end
+    if type(data.expires_at) ~= "number" then return nil, "authority_corrupt" end
+    if type(data.runtime_id) ~= "string" or type(data.session_id) ~= "string"
+        or type(data.shard_id) ~= "string" or type(data.actor_id) ~= "string" then
+        return nil, "authority_corrupt"
+    end
+    if data.status ~= "active" and data.status ~= "revoking" and data.status ~= "released" and data.status ~= "expired" then
+        return nil, "authority_corrupt"
+    end
+    return data, nil
+end
+
+--- 每次动作前都重新读（不缓存）：文件不存在/损坏 → 拒绝一切动作
+function G.read_authority()
+    local files = Whale ~= nil and Whale.files or {}
+    local names = { "whale_io_lease.json", "whale_lease.json" }
+    if files.io_lease ~= nil then names[1] = files.io_lease end
+    if files.lease ~= nil then names[2] = files.lease end
+    local first_err = "authority_unavailable"
+    for _, name in ipairs(names) do
+        local text = io_read(name)
+        if text ~= nil and text ~= "" then
+            local a, err = parse_authority(text)
+            if a ~= nil then return a, nil end
+            first_err = err or first_err
+        end
+    end
+    return nil, first_err
+end
 
 --- 墙钟毫秒（和 Node 的 Date.now() 同一坐标系；命令的 created_at / expires_at 都用它）
 local function now_ms()
@@ -176,8 +232,8 @@ end
 
 -- ─────────────────────────── 租约 / generation fencing ───────────────────────────
 
---- Lua 只记"见过的最高世代"：任何人拿更低世代来，一律拒绝。
---- 这样即使 Node 侧两个进程抢租约，旧的那个也进不来。
+--- M2.0.2：Lua **不再**自行决定 generation。这里只保留诊断信息，绝不用于放行。
+--- 权威 generation 只在 Node LeaseManager 的权威租约文件里。
 local lease_state = { generation = 0, owner = nil, actor_id = nil, updated = 0 }
 
 function G.lease_state()
@@ -216,6 +272,21 @@ end
 --- @return ok(boolean), reason_code(string|nil), detail(table|nil)
 function G.validate(cmd)
     if type(cmd) ~= "table" then return false, "bad_command", nil end
+
+    -- ★ M2.0.2：权威租约是唯一可信来源；读不到/损坏/不完整 → 一律 fail-closed
+    local authority, why_auth = G.read_authority()
+    if authority == nil then return false, why_auth or "authority_unavailable", nil end
+    if authority.status == "revoking" then
+        -- 观察换手：安全停掉旧动作并写确认（确认由 bridge.lua 提供，复用既有 A.Abort）
+        pcall(function()
+            if Whale ~= nil and Whale.bridge ~= nil and Whale.bridge.WriteLeaseAck ~= nil then
+                Whale.bridge.WriteLeaseAck(authority)
+            end
+        end)
+        return false, "authority_revoking", nil
+    end
+    if authority.status ~= "active" then return false, "stale_lease", nil end
+    if authority.expires_at <= now_ms() then return false, "lease_expired", nil end
 
     local version = tonumber(cmd.protocol_version)
     if version ~= G.PROTOCOL_VERSION then return false, "bad_protocol", nil end
@@ -261,10 +332,21 @@ function G.validate(cmd)
         return false, "actor_mismatch", nil
     end
 
-    -- 租约 / generation
-    local gen = tonumber(cmd.lease_generation)
-    if gen == nil then return false, "missing_generation", nil end
-    if gen < lease_state.generation then return false, "stale_generation", nil end
+    -- ★ M2.0.2：所有身份字段都必须与**权威文件**精确相等；不信任命令自己声明的身份
+    if tostring(cmd.authority_epoch or "") ~= authority.authority_epoch then
+        return false, "authority_epoch_mismatch", nil
+    end
+    -- generation 先判：换手后旧命令必须明确报 stale_generation（而不是先撞 lease_id）
+    if tostring(cmd.lease_generation or "") ~= tostring(authority.generation) then
+        local gen = tonumber(cmd.lease_generation)
+        if gen == nil then return false, "missing_generation", nil end
+        if gen ~= math.floor(gen) then return false, "bad_generation", nil end
+        if gen > authority.generation then return false, "future_generation", nil end
+        return false, "stale_generation", nil
+    end
+    if tostring(cmd.lease_id or "") ~= authority.lease_id then return false, "stale_lease", nil end
+    if tostring(cmd.owner_type or "") ~= authority.owner_type then return false, "wrong_owner", nil end
+    if tostring(cmd.owner_instance_id or "") ~= authority.owner_instance_id then return false, "wrong_instance", nil end
     local lease_expires = tonumber(cmd.lease_expires_at)
     if lease_expires ~= nil and lease_expires <= now then return false, "lease_expired", nil end
     local created = tonumber(cmd.created_at)
@@ -288,15 +370,12 @@ function G.validate(cmd)
     return true, nil, { action = action, spec = spec, actor = actor, status = status }
 end
 
---- 校验通过后调用：记账（世代提升 / 去重记录）
+--- 校验通过后调用：只记 command_id 去重 + 诊断信息。
+--- ★ 绝不因为看见较大的数字就提升 generation（世代只由 Node LeaseManager 管理）
 function G.accept(cmd)
-    local gen = tonumber(cmd.lease_generation) or 0
-    if gen > lease_state.generation then
-        lease_state.generation = gen
-        lease_state.owner = cmd.requested_by ~= nil and tostring(cmd.requested_by) or nil
-        lease_state.actor_id = cmd.actor_id ~= nil and tostring(cmd.actor_id) or nil
-        lease_state.updated = U.now()
-    end
+    lease_state.owner = cmd.owner_type ~= nil and tostring(cmd.owner_type) or nil
+    lease_state.actor_id = cmd.actor_id ~= nil and tostring(cmd.actor_id) or nil
+    lease_state.updated = U.now()
     local id = cmd.command_id ~= nil and tostring(cmd.command_id) or nil
     if id ~= nil then remember_id(id) end
 end

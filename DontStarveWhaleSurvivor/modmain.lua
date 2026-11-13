@@ -17,7 +17,7 @@ Whale = {
     -- 版本号跟 modinfo.lua 走：状态文件里的 mod 字段要和模组列表里显示的一致，
     -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
     -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
-    version = (type(version) == "string" and version) or "0.14.0",
+    version = (type(version) == "string" and version) or "0.14.1",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -30,6 +30,10 @@ Whale = {
         io_result = "whale_io_result.json",    -- 模组 -> 外面：执行结果（文件通道，备用）
         settings = "whale_settings.json",      -- 外面 -> 模组：设置
         io_settings = "whale_io_settings.json",
+        lease = "whale_lease.json",            -- M2.0.2：Node -> Lua 权威租约（持久化通道名）
+        io_lease = "whale_io_lease.json",      -- M2.0.2：Node -> Lua 权威租约（io 通道名）
+        lease_ack = "whale_lease_ack.json",    -- M2.0.2：Lua -> Node 换手确认
+        io_lease_ack = "whale_io_lease_ack.json",
         pause = "whale_pause.json",            -- 外面 -> 客户端：要不要暂停世界
         io_pause = "whale_io_pause.json",
     },

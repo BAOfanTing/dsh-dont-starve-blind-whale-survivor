@@ -192,6 +192,45 @@ function B.Report(ok, text, cmd_id, reason)
     log("结果 " .. tostring(id) .. " " .. tostring(ok) .. "：" .. tostring(text))
 end
 
+-- ─────────────────── M2.0.2：换手确认 ───────────────────
+--- Node LeaseManager 是权威租约的唯一写入者；Lua 只写这份"撤销确认"。
+--- 看到 revoking 时：先用已有的 A.Abort 安全停掉旧动作，再写确认。
+local last_ack_generation = nil
+
+function B.WriteLeaseAck(authority)
+    if authority == nil then return false end
+    -- 只确认一次（同一代）
+    if last_ack_generation == authority.generation then return true end
+    pcall(function()
+        if Whale ~= nil and Whale.actions ~= nil and Whale.actions.Abort ~= nil then
+            Whale.actions.Abort("控制权换手：旧动作已安全停止")
+        end
+    end)
+    local ack = {
+        schema = "bws.control-lease-ack/1",
+        authority_epoch = authority.authority_epoch,
+        generation = authority.generation,
+        runtime_id = authority.runtime_id,
+        acked_at = os.time() * 1000,
+        job_cleared = (Whale == nil or Whale.job == nil),
+    }
+    local ok, text = pcall(Whale.json.encode, ack)
+    if not ok then return false end
+    last_ack_generation = authority.generation
+    return write_both(FILES.lease_ack or "whale_lease_ack.json",
+                      FILES.io_lease_ack or "whale_io_lease_ack.json", text)
+end
+
+--- 每个 tick 主动看一眼权威租约：revoking → 停旧动作 + 写确认（不等旧命令到达才收敛）
+local function poll_lease()
+    local guard = Whale ~= nil and Whale.guard or nil
+    if guard == nil or guard.read_authority == nil then return end
+    local a = guard.read_authority()
+    if a ~= nil and a.status == "revoking" then
+        B.WriteLeaseAck(a)
+    end
+end
+
 -- ─────────────────── 指令 ───────────────────
 
 local function handle_command(json_text)
@@ -315,6 +354,7 @@ local function server_tick()
     tick_count = tick_count + 1
     server_last_tick_at = bridge_now()
     step("读设置", poll_settings)
+    step("看权威租约", poll_lease)
     step("读指令", poll_command)
     step("跑动作", function() Whale.actions.Tick() end)
     -- 保命反射：只在没有任务在跑的时候动手（血见底/入夜没光/火要灭/被贴脸）
