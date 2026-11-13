@@ -114,24 +114,17 @@ heal / equip / drop / sleep / say / wait / act / list_actions / list_recipes / s
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| **P1** Nearby 快照 ID 可见性 | ✅ **已修（UNIT）** | `get_state` 文本现在同时给出「状态快照序列号 s…」和「Nearby 快照 ID：r…-n…」，并在引用块后点明"调 pickup/harvest 要填后者"；pickup/harvest 的 `snapshot_id` 说明也写清了区别。Lua 渲染（权威）与 Node 兜底两条路径都改了，mod 升到 **0.17.3** |
-| **P2** Lease 换手有限等待 | ✅ **已修（UNIT）** | 新增 `control.acquireWithWait()`：只对 `handover_revoking` / `handover_pending` 等待，默认 **3 秒上限 / 175ms 轮询**；每轮重跑全部校验并尝试用 ACK 收尾；超时只返回真实原因（`timedOut`），**绝不自动放行**。`acquire`/`completeHandover`/`validate` 本身未改 |
-| 提交边界 | ✅ 已确认 | `acquire` 与 dispatcher 的 `validate` 都在 `bridge.call()`（真正写命令文件）**之前**；失败时不产生任何命令文件（有测试 P2-12 守着） |
-| P1 真机补测（0.17.3） | **NOT_RUN** | 需要世界重载到 0.17.3（见下） |
-| Pickup / Harvest 真实 LLM 闭环 | **NOT_RUN** | 同上 |
+| **P1** Nearby 快照 ID 可见性 | ✅ **已修 + 真机验证（RUNTIME）** | `get_state` 现在同时给出「状态快照序列号 s…」和「Nearby 快照 ID：r…-n…」，并在引用块后点明"调 pickup/harvest 要填后者"。**真机 20 次调用里，模型 5 次 harvest 全部填了 `r…-n…`，一次都没再填序列号** |
+| **P2** Lease 换手有限等待 | ✅ **已修 + 真机验证（RUNTIME）** | 新增 `acquireWithWait()`（3 秒上限 / 175ms 轮询）。真机 **9 次租约等待共 559ms，0 次 `control_denied`**（AGENT-01 时是连续 2 次失败） |
+| **Harvest 真实 LLM 闭环** | ✅ **达成（END_TO_END）** | 模型自主采下 2 株浆果丛：背包 **浆果 0 → 1 → 2**（独立进程读快照复核过） |
+| **Pickup 真实 LLM 闭环** | ❌ **NOT_RUN** | 20 次预算内模型全用于移动+采浆果，从未调 `pickup`（工具本身在 STABILITY-01 已真机 5/5） |
+| P1 真机补测（0.17.3） | ✅ 已完成 | 世界重载到 0.17.3 后跑的，不是拿 0.17.2 冒充 |
+| 提交边界 | ✅ 已确认 | `acquire`/dispatcher 的 `validate` 都在 `bridge.call()`（写命令文件）之前；失败不产生命令文件（测试 P2-12 守着） |
 
-**为什么真机补测还没做**：P1 改的是**游戏内 Lua 渲染**，只有重新读档进世界才会加载 0.17.3。
-本次收尾时游戏客户端已退出（只剩一个 dedicated server 进程，状态文件 10 分钟未更新），
-世界内存里仍是 0.17.2，所以**没有拿旧版本冒充新版本的结果**。
+真机细节、逐次调用记录、失败分层见 [`AGENT_01_1_report.md`](AGENT_01_1_report.md)。
 
-**复跑方式**（重进世界后）：
-
-```powershell
-# 1) 确认世界已加载 0.17.3
-node -e "..."   # 读 whale_state.json 的 data.mod，应为 0.17.3
-# 2) 用产品 AiRunner 跑真实闭环（预算 20 次工具调用）
-node .runtime/agent01-run.mjs        # 见 TESTING.md §6.6
-```
+**真机又撞到 P3**：第 1 次 `get_state` 读到的还是**上一局"我已死亡"**的笔记，而角色其实满血 200/200。
+模型自己发现了并写下"旧笔记作废"。
 
 ### 4.4 P3 笔记问题的审计结论（**只审计，未重构**）
 
@@ -163,6 +156,7 @@ node .runtime/agent01-run.mjs        # 见 TESTING.md §6.6
 | 11 | **HUD 写入偶发 `EPERM`** | `whale_hud.json` 的 temp→rename 偶尔失败（Windows/OneDrive 抢占），小窗短暂不刷新 | **间歇、自愈**（实测 1922 行日志里 1 次，下一周期成功）。属桥/ HUD 范围，本阶段只记录不改 |
 | 12 | **`m2_0_3_verify_move.mjs` 的 ⑤-3 会假报失败** | 它"ack 前后各读一次位置"，把状态帧里的一次 2 格跳变算成"Abort 后还在走" | **测量方式问题，不是产品问题**：`m2_0_3_verify_stop.mjs` 用逐帧去重采样，实测 Abort 后 6 帧位置不变 → **真的停住了**。本阶段**未改脚本** |
 | 13 | **`update_notes` 曾被归类为"只读"** | 文档误导：它是**覆盖写** `~/.dsh/plugins-data/…/notes.md` | **AGENT-01 已更正**（STATUS/ARCHITECTURE/TESTING + 测试注释）；实现未改 |
+| 15 | **`stale_snapshot` 的固有竞争** | 模型思考 3~5 秒、nearby 2 秒一刷，拿"刚看过的那一帧"时它往往已经过期 | 真机 20 次里发生 2 次（第 6、10 次 harvest）。**这是信息时效问题，不是 id 拿错**；`scan.age_ms` 已有但没渲染，见 `AGENT_01_1_report.md` §12 |
 | 14 | **`get_state` 只印 `快照 s<seq>`，不印 `nearby.snapshot_id`** | 真实模型照抄 `s1622` → `harvest` 必然 `stale_snapshot` | **AGENT-01 发现，未修**（属渲染层，见 `AGENT_01_report.md` §6 P1） |
 
 ### 4.2 guide 一致性审计结论（STABILITY-01）
