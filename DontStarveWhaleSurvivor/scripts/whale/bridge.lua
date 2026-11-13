@@ -195,12 +195,14 @@ end
 -- ─────────────────── M2.0.2：换手确认 ───────────────────
 --- Node LeaseManager 是权威租约的唯一写入者；Lua 只写这份"撤销确认"。
 --- 看到 revoking 时：先用已有的 A.Abort 安全停掉旧动作，再写确认。
-local last_ack_generation = nil
+local last_ack_key = nil
 
 function B.WriteLeaseAck(authority)
     if authority == nil then return false end
-    -- 只确认一次（同一代）
-    if last_ack_generation == authority.generation then return true end
+    -- 去重键必须带 epoch：新权威状态可能复用同一 generation（例如插件重启后从磁盘重建），
+    -- 只按 generation 去重会残留旧 ack，导致换手永远拿不到有效确认。
+    local ack_key = tostring(authority.authority_epoch or "") .. ":" .. tostring(authority.generation)
+    if last_ack_key == ack_key then return true end
     pcall(function()
         if Whale ~= nil and Whale.actions ~= nil and Whale.actions.Abort ~= nil then
             Whale.actions.Abort("控制权换手：旧动作已安全停止")
@@ -210,13 +212,14 @@ function B.WriteLeaseAck(authority)
         schema = "bws.control-lease-ack/1",
         authority_epoch = authority.authority_epoch,
         generation = authority.generation,
+        lease_id = authority.lease_id,
         runtime_id = authority.runtime_id,
-        acked_at = os.time() * 1000,
+        acked_at = os.time() * 1000.0,
         job_cleared = (Whale == nil or Whale.job == nil),
     }
     local ok, text = pcall(Whale.json.encode, ack)
     if not ok then return false end
-    last_ack_generation = authority.generation
+    last_ack_key = ack_key
     return write_both(FILES.lease_ack or "whale_lease_ack.json",
                       FILES.io_lease_ack or "whale_io_lease_ack.json", text)
 end
@@ -256,6 +259,8 @@ local function handle_command(json_text)
     end
     local id = cmd.id ~= nil and tostring(cmd.id) or nil
     if id == nil then return end
+    -- poll_command 每 0.3s 重读同一个命令文件（Lua 不删它）；同一 id 只处理一次
+    if id == last_cmd_id then return end
     last_cmd_id = id
     local action = tostring(cmd.action or "")
     log("收到指令 " .. id .. "：" .. action)

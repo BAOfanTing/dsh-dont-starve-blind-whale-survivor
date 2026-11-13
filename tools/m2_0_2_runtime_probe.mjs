@@ -22,6 +22,12 @@ const dirs = bridge.leaseDirs()
 console.log('leaseDirs:', JSON.stringify(dirs.map((d) => d.dir)))
 
 const leaseFile = `${ROOT}/.runtime/m2-control.json`
+// 清掉上一轮残留的确认文件（否则 completeHandover 会读到旧 epoch 的 ack）
+for (const { dir } of dirs) {
+  for (const name of ['whale_lease_ack.json', 'whale_io_lease_ack.json']) {
+    try { unlinkSync(`${dir}/${name}`) } catch {}
+  }
+}
 const control = new LeaseManager({ file: leaseFile, authorityDirs: () => dirs, now: () => Date.now() })
 
 /** 发一条命令并等结果；返回 {ok, text, reason, id} */
@@ -36,6 +42,12 @@ async function send(label, envelopeOverride, args = {}) {
     ...(envelopeOverride ?? {}),
   }
   const text = JSON.stringify({ v: 1, id, action: 'stop', args, ts: Date.now(), ...envelope })
+  // 清掉两个通道的旧命令文件，避免 poll_command 反复读到上一条
+  for (const { dir } of bridge.commandDirs()) {
+    for (const name of ['whale_cmd.json', 'whale_io_cmd.json']) {
+      try { unlinkSync(`${dir}/${name}`) } catch {}
+    }
+  }
   // 直接用产品的写命令通道
   const wrote = bridge.writeToAll((channel) => (channel === 'io' ? 'whale_io_cmd.json' : 'whale_cmd.json'), text, bridge.commandDirs())
   console.log(`[${label}] 写入 ${wrote} 个目录，id=${id}`)
@@ -126,7 +138,8 @@ for (const { dir } of dirs) {
   }
 }
 try { unlinkSync(leaseFile) } catch {}
-console.log('[删除] 权威文件已移除')
+console.log('[删除] 权威文件已移除，等 6 秒让 Lua 的 ps 缓存过期（AUTHORITY_CACHE_MAX_AGE=5）')
+await new Promise((r) => setTimeout(r, 6000))
 results.push(await send('T8 权威文件缺失', okEnvelope))
 
 const after = actorPos()
