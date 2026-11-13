@@ -60,7 +60,7 @@ async function load() {
   run(STUB)
   // 捕获 write_both 写出的 ack 文本（io 通道不可用，ps 通道记录到 IO_WRITES）
   run(`Whale = { verbose=false, version="0.14.3", files={ lease="whale_lease.json", io_lease="whale_io_lease.json", lease_ack="whale_lease_ack.json", io_lease_ack="whale_io_lease_ack.json" } }`)
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run(`

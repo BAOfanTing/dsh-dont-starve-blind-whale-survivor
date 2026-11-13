@@ -103,7 +103,7 @@ async function load(files = { 'whale_io_lease.json': authority() }) {
   run(STUB)
   run(luaIoFiles(files))
   run('Whale = { verbose = false, version = "0.14.1" }')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end if k == "scan_seconds" then return 4 end return nil end)')

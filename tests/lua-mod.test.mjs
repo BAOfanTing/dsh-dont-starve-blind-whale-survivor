@@ -212,7 +212,7 @@ function loadMod(fengari) {
   run(STUB, '假游戏环境')
   run('Whale = { verbose = false, version = "0.1.0", files = {} }', 'Whale 表')
   run(FILES, '文件名')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'observe', 'actions']) {
+  for (const name of ['json', 'util', 'pickuprules', 'config', 'actor', 'nearby', 'observe', 'actions']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const global = (name) => {
@@ -765,8 +765,11 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
         assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
     end
-    assert(#MODIMPORTS == 12, "只该 modimport 12 个 B 栈模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 13, "只该 modimport 13 个 B 栈模块（M2.2 起多了 pickuprules），实际 " .. #MODIMPORTS)
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
+assert(idx("scripts/whale/util.lua") < idx("scripts/whale/pickuprules.lua"), "pickuprules 要在 util 之后")
+assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/nearby.lua"), "pickuprules 必须在 nearby 之前（观察侧要用）")
+assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/guard.lua"), "pickuprules 必须在 guard 之前（执行侧要用）")
     assert(idx("scripts/whale/config.lua") < idx("scripts/whale/actor.lua"), "actor 要在 config 之后")
     assert(idx("scripts/whale/actor.lua") < idx("scripts/whale/observe.lua"), "观察器要在 Actor Provider 之后")
     assert(idx("scripts/whale/nearby.lua") < idx("scripts/whale/observe.lua"), "附近实体模块要在观察器之前")

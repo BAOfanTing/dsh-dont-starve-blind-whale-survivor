@@ -292,7 +292,7 @@ async function guardVm(files) {
   run(GUARD_STUB)
   run(luaIoFiles(files))
   run('Whale = { verbose = false, version = "0.14.1" }')
-  for (const name of ['json', 'util', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     run(readFileSync(join(ROOT, 'DontStarveWhaleSurvivor', 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end return nil end)')
