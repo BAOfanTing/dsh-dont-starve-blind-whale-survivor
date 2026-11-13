@@ -336,7 +336,9 @@ function O.Render(data)
     local world = data.world or {}
 
     -- 头：快照号 + 世界 + 状态（状态不是 ok 时第一行就说清楚）
-    local head = "# 快照 " .. tostring(obs.snapshot_id or "?")
+    -- M2.2.2：这里的 snapshot_id 是**状态快照序列号**（s123），不是 nearby 的扫描 id（r…-n123）。
+    -- 两者含义不同，模型调 pickup/harvest 时要用的是**后者**，所以标签必须写清楚，不能混称"快照"。
+    local head = "# 状态快照序列号 " .. tostring(obs.snapshot_id or "?")
     local world_bits = {}
     if world.day ~= nil then world_bits[#world_bits + 1] = "第" .. num(world.day) .. "天" end
     if world.phase_name ~= nil then world_bits[#world_bits + 1] = world.phase_name end
@@ -409,6 +411,13 @@ function O.Render(data)
     local nearby = data.nearby
     if nearby ~= nil then
         local head = "附近（" .. tostring(nearby.radius) .. " 格内"
+        -- M2.2.2：nearby 的扫描 id 必须出现在文本里 —— 模型调 pickup/harvest 要填的就是它。
+        -- 只在该快照可用时打印；error/缺失时绝不回显历史 id（见下面的分支）。
+        local nearby_sid = nil
+        if nearby.status ~= "error" and nearby.snapshot_id ~= nil and nearby.snapshot_id ~= "" then
+            nearby_sid = tostring(nearby.snapshot_id)
+            head = head .. "，Nearby 快照 ID：" .. nearby_sid
+        end
         local scan = nearby.scan or {}
         if scan.reused then
             head = head .. "，沿用 " .. tostring(math.floor((scan.age_ms or 0) / 100) / 10) .. " 秒前的扫描"
@@ -449,6 +458,11 @@ function O.Render(data)
                     local suffix = bucket_full and "（本桶已满，可能还有没列出的）" or ""
                     lines[#lines + 1] = "  " .. def.label .. "：" .. table.concat(parts, "；") .. suffix
                 end
+            end
+            -- M2.2.2：把"这些 #N 属于哪一份 nearby 快照"写在引用旁边，避免模型拿状态序列号去填
+            if nearby_sid ~= nil then
+                lines[#lines + 1] = "  ↑ 以上 #N 引用属于 Nearby 快照 ID：" .. nearby_sid
+                    .. "；调 pickup/harvest 时 snapshot_id 必须填这个（不要填上面的状态快照序列号）"
             end
         end
 

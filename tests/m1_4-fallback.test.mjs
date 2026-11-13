@@ -71,7 +71,8 @@ const newNearby = (over = {}) => ({
 
 test('fallback-1 新版对象结构：状态/半径/总数/截断/桶/#N/Delta/未列出 都要有', () => {
   const text = renderFallbackText(snapOf(newNearby()))
-  assert.match(text, /附近（16 格内，只显示 3\/157 个）：/)
+  // M2.2.2：nearby 段头现在带自己的扫描 id（模型调 pickup/harvest 要填它）
+  assert.match(text, /附近（16 格内，Nearby 快照 ID：r1-0001-n5，只显示 3\/157 个）：/)
   assert.match(text, /威胁：#1 青蛙/)
   assert.match(text, /资源：#2 常青树 .*可CHOP/)
   assert.match(text, /建筑：#3 南瓜灯/)
