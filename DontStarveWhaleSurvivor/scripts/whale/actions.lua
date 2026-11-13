@@ -738,22 +738,38 @@ end
 
 --- M2.1：按 #N 引用拾取**已解析好的**实体。
 --- 与 JOBS.pickup 的区别：绝不按 prefab 搜目标，也不通知客户端走路/不触发寻路。
---- 成功判据只看真实状态：目标进了玩家背包（parent/owner），或目标被原生堆叠合并且背包该 prefab 总数增加。
---- 依据：scripts.zip/scripts/actions.lua 的 ACTIONS.PICKUP.fn → inventory:GiveItem(target, nil, pos)；
---- 注意 GiveItem 失败时会把物品丢回地面，而 PICKUP.fn 仍然 return true，所以不能只看"动作没报错"。
+---
+--- 成功判据只看真实状态（依据 scripts.zip 的 ACTIONS.PICKUP.fn → inventory:GiveItem）：
+---   ① 目标已被玩家持有（GetParent / inventoryitem.owner == 玩家）
+---   ② 目标被原生堆叠合并且销毁，且背包该 prefab 总数增加
+--- 真机教训（0.15.0）：捡起来的物品会**进 limbo**（进容器了），所以"limbo 就失败"
+--- 必须排在"已持有"判定**之后**，否则成功也会被误报成 in_limbo。
 local function pickup_by_ref(j, p, target)
-    if target == nil or not target:IsValid() then
-        return "fail", "entity_gone: 目标已经不存在了"
-    end
-    if target:IsInLimbo() then
-        return "fail", "in_limbo: 目标进入了 limbo"
-    end
     local inv = p.components.inventory
     if inv == nil then return "fail", "missing_component:inventory" end
 
+    --- 目标是否已经在玩家身上（背包/装备槽/容器都算）
+    local function owned_by_player()
+        if target == nil then return false end
+        local okp, parent = pcall(function() return target:GetParent() end)
+        if okp and parent == p then return true end
+        local oki, owner = pcall(function()
+            if target.components == nil or target.components.inventoryitem == nil then return nil end
+            return target.components.inventoryitem.owner
+        end)
+        return oki and owner == p
+    end
+
     if j.step == "start" then
+        if target == nil or not target:IsValid() then
+            return "fail", "entity_gone: 目标已经不存在了"
+        end
+        if target:IsInLimbo() then
+            return "fail", "in_limbo: 目标进入了 limbo"
+        end
         j.data.target = target
         j.data.prefab = tostring(target.prefab or "?")
+        j.data.label = U.pretty(target)
         j.data.before = snapshot_counts(p)
         j.data.phase_start = U.now()
         push(p, BufferedAction(p, target, ACTIONS.PICKUP, nil))
@@ -762,20 +778,12 @@ local function pickup_by_ref(j, p, target)
     end
 
     if j.step == "acting" then
-        local t = j.data.target
-        local alive = t ~= nil and t:IsValid()
-        local owned = false
-        if alive then
-            local okp, parent = pcall(function() return t:GetParent() end)
-            if okp and parent == p then owned = true end
-            local oki, owner = pcall(function()
-                return t.components.inventoryitem ~= nil and t.components.inventoryitem.owner or nil
-            end)
-            if oki and owner == p then owned = true end
+        -- ① 先看归属（捡起后物品会在 limbo 里，但 owner/parent 已经是玩家）
+        if owned_by_player() then
+            return "done", string.format("捡起了 %s", j.data.label or j.data.prefab)
         end
-        if owned then
-            return "done", string.format("捡起了 %s", U.pretty(t))
-        end
+        -- ② 堆叠合并：目标被销毁 + 背包该 prefab 总量增加
+        local alive = target ~= nil and target:IsValid()
         local after = snapshot_counts(p)
         local gained = (after[j.data.prefab] or 0) - (j.data.before[j.data.prefab] or 0)
         if not alive and gained > 0 then
@@ -784,6 +792,9 @@ local function pickup_by_ref(j, p, target)
         if U.now() - j.data.phase_start > 6 then
             if not alive then
                 return "fail", "result_unverified: 目标消失了，但背包里没见到对应物品"
+            end
+            if target:IsInLimbo() then
+                return "fail", "in_limbo: 目标被别人收走了"
             end
             return "fail", "pickup_failed: 目标还在地上（够不着，或背包满了）"
         end

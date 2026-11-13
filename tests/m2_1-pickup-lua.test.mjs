@@ -337,3 +337,27 @@ test('pickup-L13 目标不是白名单时不会提交 BufferedAction（零副作
   assert.equal(env.get('PUSHED_TOTAL'), '0', '被拒时不能有任何动作提交')
   assert.equal(env.get('STARTED'), 'false', '被拒时不能启动动作：' + env.get('OUT_WHY'))
 })
+
+
+test('pickup-L14 真机回归：捡起后目标进 limbo 且 parent=玩家 → 必须判成功（不能报 in_limbo）', async () => {
+  const env = await withNearby('mkitem({ prefab = "twigs", x = 4, z = 0, guid = 40 })', { items: [] })
+  env.setCmd(pickupCmd())
+  env.run('CMD.args.snapshot_id = SNAP')
+  env.run(`
+    local ok, why, detail = Whale.guard.validate(CMD)
+    Whale.guard.accept(CMD)
+    TARGET = detail.target
+    Whale.actions.Start("pickup", CMD.args, CMD.command_id, { target = TARGET })
+    Whale.actions.Tick()                 -- start -> acting（提交 BufferedAction）
+    -- 模拟 DST：物品进背包后处于 limbo，但 parent 已经是玩家
+    TARGET.limbo = true
+    TARGET.parent = PLAYER
+    Whale.actions.Tick()
+    DONE = tostring(Whale.job == nil)
+  `)
+  assert.equal(env.get('DONE'), 'true', '必须判成功并结束任务')
+  env.run('OUT = tostring(LAST_REPORT_OK) .. "|" .. tostring(LAST_REPORT_TEXT)')
+  const out = env.get('OUT')
+  assert.match(out, /^true\|/, '回执必须是成功：' + out)
+  assert.match(out, /捡起了/, '文案要说捡到了什么：' + out)
+})

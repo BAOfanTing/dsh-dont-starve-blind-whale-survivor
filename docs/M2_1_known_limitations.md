@@ -47,6 +47,16 @@
   角色是 ghost、附近没有白名单物品。
 - `Fengari`/假 bridge 的通过项一律只算 `UNIT`，**不冒充真机**。
 
+## 7.1 真机首轮（0.15.0）发现的另一个缺陷：released 被当成换手
+
+MCP 每次 `tools/call` 都是 `acquire → 执行 → release`；0.15.0 的 `acquire` 把
+`status=released` 也当成"要换手"，于是发布 `revoking` 等 Lua 确认，
+**这次调用自己就被 `authority_revoking` 挡住了**（真机表现：move_to 直接 control_denied）。
+
+已修（0.15.1，`lib/control.js`）：**上一任主动 release 时没有"正在跑的动作"要撤销**，
+直接发新 generation 的 `active`；只有"从活着的持有者手里抢（force/不同实例）"和"过期"才走 revoking。
+回归用例 `ack-8`。
+
 ## 8. 信任边界（继承）
 
 - 能写 `Cluster_N/<分片>/save/whale_lease.json` 的人就能改控制权（文件系统权限范畴）；

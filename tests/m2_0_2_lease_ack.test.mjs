@@ -170,3 +170,27 @@ test('ack-7 静态检查：json.lua 不用 %d 编整数', () => {
   assert.ok(!/string\.format\('%d'/.test(src), '整数编码不能用 %d（Lua 5.1 只认 int32）')
   assert.ok(src.includes("string.format('%.0f'"), '应该用 %.0f')
 })
+
+
+test('ack-8 released 之后重新获取：直接 active（不走 revoking，否则 MCP 每次调用都会被自己挡住）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bws-released-'))
+  const file = join(dir, 'm2-control.json')
+  const ENV = { runtimeId: 'r1', sessionId: 's', shardId: '1', actorId: 'player:x' }
+  try {
+    const c = new LeaseManager({ file, now: () => 1000 })
+    const a1 = c.acquire('mcp_client', ENV, { ownerInstanceId: 'mcp' })
+    assert.equal(a1.lease.status, 'active')
+    c.release('mcp_client', { ownerInstanceId: 'mcp' })
+    assert.equal(c.readAuthority().status, 'released')
+    const a2 = c.acquire('mcp_client', ENV, { ownerInstanceId: 'mcp' })
+    assert.equal(a2.ok, true)
+    assert.equal(a2.handover, false, 'released 不是换手')
+    assert.equal(a2.reason, 'reacquired_after_release')
+    assert.equal(a2.lease.status, 'active', '必须直接 active，不能是 revoking')
+    assert.equal(a2.lease.generation, a1.lease.generation + 1, '仍然要换代')
+    // 立刻就能用（不需要 Lua 确认）
+    assert.equal(c.validate('mcp_client', { ownerInstanceId: 'mcp', env: ENV }).ok, true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
