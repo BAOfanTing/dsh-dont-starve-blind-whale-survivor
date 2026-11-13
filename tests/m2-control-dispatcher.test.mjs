@@ -317,9 +317,11 @@ test('dispatcher-10 F8 持有租约时，MCP 的请求被拒', async () => {
   } finally { h.cleanup() }
 })
 
-test('dispatcher-11 白名单只有两个 R1 动作；规格里有 riskLevel', () => {
-  assert.deepEqual(OPEN_ACTIONS.sort(), ['move_to', 'stop'])
-  for (const name of OPEN_ACTIONS) assert.equal(ACTION_SPECS[name].riskLevel, 'R1')
+test('dispatcher-11 白名单：move_to/stop 是 R1，pickup 是 R2；规格里有 riskLevel', () => {
+  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['move_to', 'pickup', 'stop'])
+  assert.equal(ACTION_SPECS.move_to.riskLevel, 'R1')
+  assert.equal(ACTION_SPECS.stop.riskLevel, 'R1')
+  assert.equal(ACTION_SPECS.pickup.riskLevel, 'R2')
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
   assert.equal(validateArgs(ACTION_SPECS.stop, { x: 1 }).ok, false)
 })
