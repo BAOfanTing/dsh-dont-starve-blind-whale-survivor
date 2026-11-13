@@ -24,7 +24,7 @@ const ctx = {
 const config = {
   port: 18090,
   gameDir: '',
-  bridgeDir: '',
+  bridgeDir: (() => { const i = process.argv.indexOf('--bridgeDir'); return i >= 0 ? process.argv[i + 1] : '' })(),
   actionTimeoutMinutes: 5,
   apiKey: '',
   baseUrl: 'https://token.sensenova.cn/v1',
