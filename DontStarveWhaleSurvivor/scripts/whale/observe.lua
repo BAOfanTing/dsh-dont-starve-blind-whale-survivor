@@ -422,6 +422,16 @@ function O.Render(data)
         if scan.reused then
             head = head .. "，沿用 " .. tostring(math.floor((scan.age_ms or 0) / 100) / 10) .. " 秒前的扫描"
         end
+        -- OBSERVATION-01：告诉模型这一帧还剩多久有效。
+        -- 真机踩到：快照 2 秒一刷、模型思考 3~5 秒，于是"刚 get_state 拿到的 id"下一次调用就 stale_snapshot。
+        -- 与其让模型盲目重试，不如把有效期写出来，让它知道"要赶紧用，或者干脆先别取 id"。
+        if scan.scan_seconds ~= nil and scan.age_ms ~= nil then
+            local left = tonumber(scan.scan_seconds) - tonumber(scan.age_ms) / 1000
+            if left ~= nil then
+                if left < 0 then left = 0 end
+                head = head .. "，这一帧大约还剩 " .. tostring(math.floor(left * 10) / 10) .. " 秒有效"
+            end
+        end
         if nearby.truncated then
             head = head .. "，只显示 " .. tostring(nearby.total_returned) .. "/" .. tostring(nearby.total_found) .. " 个"
         end

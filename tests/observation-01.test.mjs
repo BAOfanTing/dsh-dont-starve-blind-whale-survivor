@@ -259,6 +259,53 @@ test('OBS-8：craft 的 describe 要写出成品与材料消耗', async () => {
   assert.match(text, /成品 \+1/, `实际：${text}`)
 })
 
+test('OBS-16：craft 的核对要认"做好后自动装备"（torch 是 equippable，DoBuild 会直接拿在手里）', async () => {
+  const { dispatcher } = makeDispatcher()
+  const spec = dispatcher.specs.craft
+  const before = { player: { inventory: { items: [{ prefab: 'cutgrass', count: 2 }, { prefab: 'twigs', count: 2 }] }, equipment: { worn: {} } } }
+  const after = { player: { inventory: { items: [] }, equipment: { worn: { hands: 'torch' } } } }
+  const v = spec.verify(before, after, { recipe: 'torch' })
+  assert.equal(v.ok, true, '做好了并自动装备也算成功（不能只查背包）')
+  assert.equal(v.how, 'auto_equipped')
+  assert.equal(v.hand, 'torch')
+  const text = dispatcher.describe({ status: 'succeeded', message: '做好了 火把（torch+1）', verified: v })
+  assert.match(text, /已自动拿在手里/, `describe 要说明自动装备，实际：${text}`)
+})
+
+test('OBS-17：craft 什么都没发生时仍然判失败（不能因为加了自动装备就放松）', async () => {
+  const { dispatcher } = makeDispatcher()
+  const spec = dispatcher.specs.craft
+  const before = { player: { inventory: { items: [{ prefab: 'twigs', count: 2 }] }, equipment: { worn: {} } } }
+  const after = { player: { inventory: { items: [] }, equipment: { worn: {} } } } // 材料没了、成品也没有
+  const v = spec.verify(before, after, { recipe: 'axe' })
+  assert.equal(v.ok, false)
+  assert.equal(v.reason, 'craft_not_in_inventory')
+})
+
+test('OBS-14：move_to 的回执必须带"现在位置"，否则模型只能再观察一次', async () => {
+  const { dispatcher } = makeDispatcher()
+  const text = dispatcher.describe({
+    status: 'succeeded',
+    message: '走到了 (-19,33) 附近（还差 1.2 格）',
+    verified: { pos: { x: -19, z: 33 }, dist: 1.2, from: { x: -22, z: 32 } },
+  })
+  assert.match(text, /现在位置 \(-19,33\)/, `回执要写出实际位置，实际：${text}`)
+  assert.match(text, /距目标 1\.2 格/, '要写出距目标多远')
+  assert.match(text, /-22,32 → -19,33/, '要写出从哪走到哪')
+})
+
+test('OBS-15：move_to 的 verify 真的会带 pos/dist（不是只在 describe 里编）', async () => {
+  const { dispatcher } = makeDispatcher()
+  const spec = dispatcher.specs.move_to
+  const before = { actor: { tileX: -22, tileZ: 32 } }
+  const after = { actor: { tileX: -19, tileZ: 33 } }
+  const v = spec.verify(before, after, { x: -19, z: 33 })
+  assert.equal(v.ok, true)
+  assert.deepEqual(v.pos, { x: -19, z: 33 })
+  assert.ok(Math.abs(v.dist - 0) < 0.01, `距离应该是 0，实际 ${v.dist}`)
+  assert.deepEqual(v.from, { x: -22, z: 32 })
+})
+
 test('OBS-9：unknown 的 describe 必须明确"不要当成功"', async () => {
   const { dispatcher } = makeDispatcher()
   const text = dispatcher.describe({ status: 'unknown', reason: 'result_timeout', message: '' })
