@@ -221,13 +221,28 @@ function B.WriteLeaseAck(authority)
                       FILES.io_lease_ack or "whale_io_lease_ack.json", text)
 end
 
+--- 每 tick 通过**已验证的持久化字符串通道**读权威租约，缓存给同步的 guard.validate 用。
+--- Node 写的是带 KLEI 头的普通文件，TheSim:GetPersistentString 能读到（命令通道就这么工作）。
+local function poll_authority()
+    local guard = Whale ~= nil and Whale.guard or nil
+    if guard == nil or guard.parse_authority == nil then return end
+    ps_read(FILES.lease or "whale_lease.json", function(text)
+        if text == nil or text == "" then return end
+        local a = guard.parse_authority(text)
+        if a ~= nil then
+            Whale.authority_cache = { data = a, at = os.time() }
+        end
+    end)
+end
+
 --- 每个 tick 主动看一眼权威租约：revoking → 停旧动作 + 写确认（不等旧命令到达才收敛）
 local function poll_lease()
     local guard = Whale ~= nil and Whale.guard or nil
-    if guard == nil or guard.read_authority == nil then return end
-    local a = guard.read_authority()
-    if a ~= nil and a.status == "revoking" then
-        B.WriteLeaseAck(a)
+    if guard == nil or guard.parse_authority == nil then return end
+    local cache = Whale ~= nil and Whale.authority_cache or nil
+    if cache == nil or type(cache.data) ~= "table" then return end
+    if cache.data.status == "revoking" then
+        B.WriteLeaseAck(cache.data)
     end
 end
 
@@ -354,6 +369,7 @@ local function server_tick()
     tick_count = tick_count + 1
     server_last_tick_at = bridge_now()
     step("读设置", poll_settings)
+    step("读权威租约", poll_authority)
     step("看权威租约", poll_lease)
     step("读指令", poll_command)
     step("跑动作", function() Whale.actions.Tick() end)

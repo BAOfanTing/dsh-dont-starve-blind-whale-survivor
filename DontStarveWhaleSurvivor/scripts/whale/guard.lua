@@ -57,8 +57,28 @@ local function parse_authority(text)
     return data, nil
 end
 
---- 每次动作前都重新读（不缓存）：文件不存在/损坏 → 拒绝一切动作
+--- 暴露给 bridge.lua 的 poll_authority 用（同一个严格解析器，不给第二套标准）
+G.parse_authority = parse_authority
+
+--- 权威租约缓存由 bridge.lua 每个 tick 通过 TheSim:GetPersistentString 刷新。
+--- 为什么不用 io.open：DST 模组沙箱里 GLOBAL.io == nil（真机已验证：Lua 从不写
+--- whale_io_state.json / whale_io_result.json），只有持久化字符串通道是双向可用的。
+--- 缓存必须"新鲜"：超过 5 秒没刷新就判不可用（fail-closed），绝不拿旧权威放行。
+G.AUTHORITY_CACHE_MAX_AGE = 5
+
+function cached_authority()
+    local cache = Whale ~= nil and Whale.authority_cache or nil
+    if cache == nil or type(cache.data) ~= "table" then return nil end
+    local age = os.time() - (cache.at or 0)
+    if age < 0 then age = 0 end
+    if age > G.AUTHORITY_CACHE_MAX_AGE then return nil end
+    return cache.data, nil
+end
+
+--- 每次动作前都重新读：优先 ps 缓存，其次 io（沙箱测试用）；都拿不到 → 拒绝一切动作
 function G.read_authority()
+    local from_cache = cached_authority()
+    if from_cache ~= nil then return from_cache, nil end
     local files = Whale ~= nil and Whale.files or {}
     local names = { "whale_io_lease.json", "whale_lease.json" }
     if files.io_lease ~= nil then names[1] = files.io_lease end
