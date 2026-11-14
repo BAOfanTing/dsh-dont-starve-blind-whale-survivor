@@ -12,9 +12,12 @@ local tonumber = GLOBAL.tonumber
 local os = GLOBAL.os or { time = function() return 0 end }
 local io = GLOBAL.io
 
-local Widget = require("widgets/widget")
-local Text = require("widgets/text")
-local Image = require("widgets/image")
+-- 专用服务器 / 洞穴服务端没有客户端显示树。这里用 pcall 取 widgets：
+-- 取不到就把 HUD 当成"这个进程不支持"直接跳过，绝不让 require 失败把整条 modimport 打断。
+local ok_widget, Widget = pcall(require, "widgets/widget")
+local ok_text, Text = pcall(require, "widgets/text")
+local ok_image, Image = pcall(require, "widgets/image")
+local ui_available = ok_widget and ok_text and ok_image
 
 local H = {}
 
@@ -32,10 +35,12 @@ local bg = nil
 local label = nil
 local attached = false
 local failed = false
+local build_fail_logged = false
 local cached_hud = nil
 local reading = false
 local last_render = ""
 local ai_wanted = false
+local attach_fail_logged = false
 
 -- ─────────────────── 文件读写（io 优先，退回持久化字符串） ───────────────────
 
@@ -98,7 +103,11 @@ end
 -- ─────────────────── 界面 ───────────────────
 
 local function ensure_widget(owner)
-    if root ~= nil or failed then return root end
+    -- ★ failed 不能作为永久闸门：玩家还在读档、字体/控件树暂时没准备好时，
+    --   构造失败一次就永远不再试，会表现为“HUD 代码在跑但小窗一直不出现”。
+    --   现在允许调用方每秒重试；日志只打一次，避免刷屏。
+    if root ~= nil or not ui_available then return root end
+    failed = false
     local ok = pcall(function()
         root = Widget("whale_hud_root")
         root:SetHAnchor(GLOBAL.ANCHOR_LEFT)
@@ -125,7 +134,12 @@ local function ensure_widget(owner)
     if not ok then
         failed = true
         root = nil
-        Whale.util.log("HUD 建不出来，跳过（不影响游戏）")
+        label = nil
+        bg = nil
+        if not build_fail_logged then
+            build_fail_logged = true
+            Whale.util.log("HUD 暂时建不出来，稍后重试（不影响游戏）")
+        end
     end
     return root
 end
@@ -294,30 +308,68 @@ function H.BindKeys()
     if not ok then Whale.util.log("绑快捷键失败") end
 end
 
-function H.Attach(owner)
-    if attached or owner == nil then return end
-    if GLOBAL.ThePlayer ~= nil and owner ~= GLOBAL.ThePlayer then return end
-    attached = true
-    ensure_widget(owner)
-    if root == nil then return end
-    pcall(function()
-        owner:AddChild(root)
+--- 把 HUD 挂到 PlayerHud 屏幕上。
+---
+--- ★ 真机 bug：原来把 root 挂到 `owner`（玩家实体）上，而不是 PlayerHud 屏幕。
+---   玩家实体没有 Widget 的显示树，AddChild 要么失败、要么只挂到实体身上，
+---   结果就是"代码跑了，但画面上什么也看不到"。
+---   AddClassPostConstruct("screens/playerhud") 的第一个参数 self 才是屏幕，
+---   owner 只是屏幕持有的玩家实体。
+---
+--- 返回值 = 是否挂上。挂不上时**不**把 failed 永久置真：
+--- PlayerHud 可能比模组晚建、玩家可能还在读档，调用方可以隔一秒再试。
+function H.Attach(screen, player)
+    if attached then return true end
+    if not ui_available then return false end
+    local p = player or (screen ~= nil and screen.owner) or GLOBAL.ThePlayer
+    if p == nil then return false end
+    if GLOBAL.ThePlayer ~= nil and p ~= GLOBAL.ThePlayer then return false end
+    -- 允许调用方只给玩家：玩家实体的 HUD 字段就是 PlayerHud 屏幕（原生构造时挂上的）。
+    screen = screen or p.HUD
+    if screen == nil or screen.AddChild == nil then return false end
+    ensure_widget(screen)
+    if root == nil then return false end
+    local added = pcall(function()
+        screen:AddChild(root)
     end)
-    Whale.util.log("HUD 已挂上（画面左侧）")
-    owner:DoPeriodicTask(0.5, function()
-        local ok, err = pcall(refresh)
-        if not ok then
-            failed = true
-            pcall(function()
-                root:Kill()
-            end)
-            root = nil
-            Whale.util.log("HUD 刷新出错，关掉它：" .. tostring(err))
+    if not added then
+        pcall(function() root:Kill() end)
+        root = nil
+        label = nil
+        bg = nil
+        if not attach_fail_logged then
+            attach_fail_logged = true
+            Whale.util.log("HUD 暂时挂不到 PlayerHud 屏幕上，稍后重试（不影响游戏）")
         end
+        return false
+    end
+    attached = true
+    Whale.util.log("HUD 已挂上（画面左侧）")
+    pcall(function()
+        p:DoPeriodicTask(0.5, function()
+            local ok, err = pcall(refresh)
+            if not ok then
+                failed = true
+                attached = false
+                pcall(function()
+                    root:Kill()
+                end)
+                root = nil
+                Whale.util.log("HUD 刷新出错，关掉它：" .. tostring(err))
+            end
+        end)
     end)
     -- 服务端挪人的时候把走路/跑步动画补上（纯视觉，见 WatchServerMove 注释）
-    pcall(H.WatchServerMove, owner)
+    pcall(H.WatchServerMove, p)
     refresh()
+    return true
+end
+
+--- 从玩家实体找 PlayerHud 并挂上；给"模组加载晚于屏幕创建"的情况兜底。
+function H.AttachFromPlayer(player)
+    local p = player or GLOBAL.ThePlayer
+    if p == nil then return false end
+    return H.Attach(p.HUD, p)
 end
 
 function H.Status()

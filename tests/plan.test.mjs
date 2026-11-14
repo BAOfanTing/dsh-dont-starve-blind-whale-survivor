@@ -107,7 +107,7 @@ test('PLAN-4：背包里已经有火把 —— 直接装备', () => {
   assert.match(plan.next, /equip torch/)
 })
 
-test('PLAN-5：饥饿低于 30% —— 先吃；背包 items 是对象也要数得出来', () => {
+test('PLAN-5：饥饿低于 40% —— 先吃；背包 items 是对象也要数得出来', () => {
   const snapshot = makeSnapshot({ hunger: 20, items: ITEMS(['berries', 3]) })
   const plan = derivePlan(snapshot)
   assert.equal(plan.goalId, 'eat')
@@ -152,6 +152,74 @@ test('PLAN-9：背包里没吃的、附近有成熟浆果 —— 先补食物', 
   const plan = derivePlan(snapshot)
   assert.equal(plan.goalId, 'stock_food')
   assert.match(plan.next, /harvest/)
+})
+
+test('PLAN-14：理智低于 30% 且没有威胁 —— 先补理智，不要等暗影怪刷出来', () => {
+  const snapshot = makeSnapshot({ sanity: 20 })
+  const plan = derivePlan(snapshot)
+  assert.equal(plan.goalId, 'sanity')
+  assert.match(plan.next, /flower|花/)
+})
+
+test('PLAN-15：低理智 + 暗影怪贴脸 —— 血还够也先脱离', () => {
+  const snapshot = makeSnapshot({
+    health: 80,
+    sanity: 10,
+    buckets: {
+      threats: [{
+        ref: '#1', prefab: 'terrorbeak', label: '爬行恐惧', distance: 3, health: 300,
+      }],
+    },
+  })
+  const plan = derivePlan(snapshot)
+  assert.equal(plan.goalId, 'retreat')
+  assert.match(plan.why, /爬行恐惧/)
+})
+
+test('PLAN-16：饥饿 35% —— 新阈值下应提前吃', () => {
+  const snapshot = makeSnapshot({ hunger: 35, items: ITEMS(['berries', 1]) })
+  const plan = derivePlan(snapshot)
+  assert.equal(plan.goalId, 'eat')
+})
+
+test('PLAN-17：白天没火把材料但附近有草/树苗 —— 提前备火把材料', () => {
+  const snapshot = makeSnapshot({
+    phase: 'day',
+    buckets: {
+      harvestables: [{
+        ref: '#1', prefab: 'grass', label: '草丛', distance: 4, harvest_ready: true, product: 'cutgrass',
+      }],
+    },
+  })
+  const plan = derivePlan(snapshot)
+  assert.equal(plan.goalId, 'prep_light')
+  assert.match(plan.next, /cutgrass/)
+})
+
+test('PLAN-18：未点燃的火堆不算光源', () => {
+  const snapshot = makeSnapshot({
+    phase: 'night',
+    buckets: {
+      structures: [{
+        ref: '#1', prefab: 'campfire', label: '营火', distance: 3, fuel_percent: 0,
+      }],
+    },
+  })
+  const plan = derivePlan(snapshot)
+  assert.equal(plan.goalId, 'light')
+})
+
+test('PLAN-19：南瓜灯这类永久光源也算有光', () => {
+  const snapshot = makeSnapshot({
+    phase: 'night',
+    buckets: {
+      structures: [{
+        ref: '#1', prefab: 'pumpkin_lantern', label: '南瓜灯', distance: 5,
+      }],
+    },
+  })
+  const plan = derivePlan(snapshot)
+  assert.notEqual(plan.goalId, 'light')
 })
 
 test('PLAN-10：compact 只给一行，完整版带原因和下一步', () => {

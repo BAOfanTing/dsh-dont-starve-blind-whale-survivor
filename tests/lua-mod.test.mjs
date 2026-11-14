@@ -211,7 +211,10 @@ function loadMod(fengari) {
   run(STUB, '假游戏环境')
   run('Whale = { verbose = false, version = "0.1.0", files = {} }', 'Whale 表')
   run(FILES, '文件名')
-  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe', 'actions']) {
+  for (const name of [
+    'json', 'util', 'pickuprules', 'harvestrules', 'eatrules', 'craftrules', 'equiprules',
+    'config', 'actor', 'nearby', 'observe', 'actions',
+  ]) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const global = (name) => {
@@ -827,6 +830,147 @@ test('做东西：服务端必须走 builder:MakeRecipe（MakeRecipeFromMenu 在
   assert.match(global('OUT_TEXT'), /做了 2 个 torch/)
 })
 
+test('做火把：自动装备到手上必须算成功，不能说“成品消失”', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadMod(fengari)
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    Whale.craftrules.MissingIngredients = function() return nil end
+    local inv = PLAYER.components.inventory
+    inv._equipped[GLOBAL.EQUIPSLOTS.HANDS] = nil
+    -- 模拟 DST 原生 DoBuild：空手做 equippable 成品时直接装备，不放进背包。
+    PLAYER.components.builder.MakeRecipe = function(self, recipe, pt, rot, skin)
+        CRAFTED[#CRAFTED + 1] = { name = recipe.name, pt = pt }
+        inv._equipped[GLOBAL.EQUIPSLOTS.HANDS] = { prefab = "torch", components = {} }
+        BUFFERED = { action = { id = "BUILD" } }
+        return true
+    end
+    Whale.actions.Start("craft", { recipe = "torch" }, "cmd-1",
+        { survival_craft = true, recipe = "torch" })
+    BUFFERED = nil
+    Whale.actions.Tick()          -- MakeRecipe：火把直接上手
+    BUFFERED = nil
+    Whale.actions.Tick()          -- 核对：背包没多，但手上多了 torch
+    assert(REPORTED ~= nil and REPORTED.ok == true,
+        "自动装备必须算成功，实际：" .. tostring(REPORTED and REPORTED.text))
+    assert(string.find(REPORTED.text, "自动拿在手里", 1, true) ~= nil,
+        "回执要明确告诉模型成品在手上：" .. REPORTED.text)
+    OUT_TEXT = REPORTED.text
+  `)
+  assert.match(global('OUT_TEXT'), /torch/)
+})
+
+test('吃：自动挑食物跳过生蘑菇/怪物肉，手动仍可指定红蘑菇', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadMod(fengari)
+
+  runFile(`
+    local function food(prefab, hunger)
+        return {
+            prefab = prefab,
+            components = { edible = { hungervalue = hunger, healthvalue = 0 } },
+            IsValid = function(self) return true end,
+        }
+    end
+    local inv = {
+        items = {
+            food("green_cap", 12.5),      -- 生绿蘑菇：-50 理智，自动挑时必须跳过
+            food("red_cap", 12.5),        -- 生红蘑菇：-20 血
+            food("monstermeat", 25),      -- 怪物肉：掉理智/血
+            food("berries", 9.375),
+        },
+    }
+    function inv:ForEachItem(fn)
+        for _, item in pairs(self.items) do fn(item) end
+    end
+    local best = Whale.eatrules.PickBest(inv)
+    BEST = best ~= nil and best.prefab or "nil"
+    MANUAL_RED = tostring(select(1, Whale.eatrules.IsAllowedPrefab("red_cap")))
+  `)
+  assert.equal(global('BEST'), 'berries', '自动进食只能从 AUTO_SAFE 里挑，不能选生蘑菇/怪物肉')
+  assert.equal(global('MANUAL_RED'), 'true', '手动 eat red_cap 仍然可以（但不会自动挑）')
+})
+
+test('reflex：血少时自动进食走安全白名单，不碰怪物肉/生蘑菇', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8'), 'reflex.lua')
+
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    Whale.bridge = {
+        Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+        WriteState = function() end,
+    }
+    local function fakefood(prefab, hunger)
+        return {
+            prefab = prefab,
+            components = { edible = { hungervalue = hunger, healthvalue = 0 } },
+            IsValid = function(self) return true end,
+        }
+    end
+    local inv = PLAYER.components.inventory
+    inv._items[3] = fakefood("green_cap", 12.5)
+    inv._items[4] = fakefood("monstermeat", 25)
+    PLAYER.components.health.currenthealth = 30   -- 20%：触发 reflex_heal
+    for _ = 1, 5 do Whale.reflex.Tick() end           -- 内部 1 秒节流（每 5 次 tick）
+    JOB_NAME = Whale.job ~= nil and Whale.job.name or "nil"
+    Whale.actions.Tick()                               -- 真正挑食物并推 EAT
+    PICKED = PUSHED ~= nil and PUSHED.invobject and PUSHED.invobject.prefab or "nil"
+  `)
+  assert.equal(global('JOB_NAME'), 'eat', '血少且没有治疗物品时应该启动安全进食')
+  assert.equal(global('PICKED'), 'berries', '自动进食必须跳过生绿蘑菇和怪物肉')
+})
+
+test('reflex：已放置的南瓜灯即使还带 inventoryitem 也算光源', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8'), 'reflex.lua')
+
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    Whale.bridge = {
+        Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+        WriteState = function() end,
+    }
+    GLOBAL.TheWorld.state.phase = "night"
+    PLAYER.components.health.currenthealth = 150
+    PLAYER.components.hunger.current = 150
+    PLAYER.components.sanity.current = 200
+    local inv = PLAYER.components.inventory
+    inv._equipped = {}
+    inv._items[1] = {
+        prefab = "torch",
+        components = {},
+        IsValid = function() return true end,
+    }
+    local lantern = {
+        prefab = "pumpkin_lantern",
+        components = { inventoryitem = {}, light = {} },
+        _x = PLAYER._x + 4 * 4,
+        _z = PLAYER._z,
+        Transform = { GetWorldPosition = function(self)
+            return PLAYER._x + 4 * 4, 0, PLAYER._z
+        end },
+        IsValid = function() return true end,
+        HasTag = function(self, tag) return tag == "light" end,
+    }
+    NEARBY = { lantern }
+    for _ = 1, 5 do Whale.reflex.Tick() end
+    EQUIPPED = inv:GetEquippedItem(GLOBAL.EQUIPSLOTS.HANDS) ~= nil and "yes" or "no"
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+  `)
+
+  assert.equal(global('EQUIPPED'), 'no', '有南瓜灯时不该再掏火把')
+  assert.equal(global('JOB'), 'nil', '有南瓜灯时不该启动做火把/营火任务')
+})
+
 test('摆建筑：挑一块放得下的地，位置交给 MakeRecipe', async () => {
   const fengari = await import('fengari')
   const { runFile, run, global } = loadMod(fengari)
@@ -898,7 +1042,7 @@ local function fakewidget()
     widget.SetHAnchor = function() end
     widget.SetVAnchor = function() end
     widget.SetScaleMode = function() end
-    widget.AddChild = function(self, child) return child end
+    widget.AddChild = function(self, child) self.child = child return child end
     widget.Kill = function() end
     return widget
 end
@@ -951,12 +1095,21 @@ Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(ms
     assert(Whale.hud.anim_for(nil, false) == "idle_loop", "还测不出速度时按停着算")
     -- 挂上去之后根节点的 x 必须在屏幕内：x=28 是"锚点位置"，不是面板中心；
     -- 面板宽度 330，中心至少要到 165，否则文字会被推到屏幕左边外面。
-    local owner = { AddChild = function(self, child) self.child = child end, DoPeriodicTask = function() end }
-    GLOBAL.ThePlayer = owner
-    Whale.hud.Attach(owner)
-    assert(owner.child ~= nil, "HUD 根节点没挂到 owner 上；日志：" .. table.concat(LOGS, " | "))
-    assert(owner.child._pos ~= nil, "HUD 根节点没设置位置")
-    local root_x = owner.child._pos[1]
+    local screen = { AddChild = function(self, child) self.child = child end, owner = nil }
+    local player = { DoPeriodicTask = function() end }
+    screen.owner = player
+    player.HUD = screen
+    GLOBAL.ThePlayer = player
+    -- 第一次 PlayerHud 还没准备好：挂载失败不能把 HUD 永久判死。
+    local not_ready = { AddChild = function() error("playerhud not ready") end }
+    assert(Whale.hud.Attach(not_ready, player) == false, "第一次挂不上应该返回 false")
+    assert(Whale.hud.Status().attached == false, "失败后不能假装已挂上")
+    -- 屏幕就绪后从 player.HUD 重试，必须能成功。
+    assert(Whale.hud.AttachFromPlayer(player) == true, "PlayerHud 就绪后必须能重试挂上")
+    assert(screen.child ~= nil, "HUD 根节点必须挂到 PlayerHud 屏幕上；日志：" .. table.concat(LOGS, " | "))
+    assert(player.child == nil, "HUD 不能挂到玩家实体上（那样画面上看不到）")
+    assert(screen.child._pos ~= nil, "HUD 根节点没设置位置")
+    local root_x = screen.child._pos[1]
     assert(root_x >= 165, "HUD 位置太靠左，面板会被推出屏幕：x=" .. tostring(root_x))
     OUT = "ok"
   `))

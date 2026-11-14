@@ -58,3 +58,11 @@ test('S10-4：unequip 在真机形状下能认出"手上有东西 → 空了"', 
   assert.equal(v2.ok, true)
   assert.equal(v2.how, 'was_empty')
 })
+
+test('S10-5：equip 在真机形状下能认出“已经拿在手里”（不能报 hand_unchanged）', () => {
+  const before = snap({ slots: {}, worn: [] })
+  const after = snap(REAL)
+  const v = ACTION_SPECS.equip.verify(before, after, { item: 'torch' })
+  assert.equal(v.ok, true, '真机形状必须读出手持 torch')
+  assert.equal(v.hand, 'torch')
+})

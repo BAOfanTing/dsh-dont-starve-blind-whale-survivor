@@ -9,7 +9,7 @@ description = [[
 不需要截图，也不需要视觉模型。只在本地主机（自己开的世界）里生效。
 ]]
 author = "大肥鱼（参考 dsh-stardew-blind-whale-farmer 做的饥荒版）"
-version = "0.28.0"
+version = "0.29.0"
 
 api_version = 10
 dst_compatible = true
@@ -28,13 +28,13 @@ icon = ""
 configuration_options = {
     {
         name = "REFLEX",
-        label = "自助保命反射（默认关）",
-        hover = "默认关：让 AI 自己看状态决定调哪个接口。打开后模组会在血见底/天黑没光/火快灭/被贴脸时自己动手，并把做过的事写进 get_state；只在你没下令的空档触发。",
+        label = "自助保命反射（默认开）",
+        hover = "模组会在你没下令的空档自己处理最要命的几件事：血/饿见底时吃、入夜没光时举/做火把、火快灭时添柴、被贴脸时后撤、理智低时采花、白天提前备 2 草 + 2 树枝。做过的事会写进 get_state；不会覆盖你正在跑的任务。",
         options = {
             { description = "关（AI 自己决定）", data = false },
             { description = "开（模组兜底）", data = true },
         },
-        default = false,
+        default = true,
     },
     {
         name = "VERBOSE",

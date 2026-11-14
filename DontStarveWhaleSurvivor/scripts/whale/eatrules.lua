@@ -16,7 +16,11 @@ local type = type
 
 local E = {}
 
---- 允许吃的 prefab（值 = 中文名，回执用）
+--- 允许手动吃的 prefab（值 = 中文名，回执用）
+---
+--- 注意：这里放行不等于"自动挑食物时也会吃"。生蘑菇的代价见 AUTO_SAFE：
+---   生红蘑菇 -20 血、生绿蘑菇 -50 理智、生蓝蘑菇 -15 理智。
+--- 保命反射/自动 eat 不能为了 +12.5 饥饿把角色送进更危险的状态。
 E.FOODS = {
     berries = "浆果",
     carrot = "胡萝卜",
@@ -31,6 +35,21 @@ E.FOODS = {
     smallmeat = "小肉",
     froglegs = "蛙腿",
     fish = "鱼",
+}
+
+--- 自动挑食物时的保守白名单（不包含任何生蘑菇）。
+--- 手动 eat 仍可指定 E.FOODS 里的蘑菇；蘑菇应该先烤再吃。
+E.AUTO_SAFE = {
+    berries = true,
+    carrot = true,
+    corn = true,
+    pumpkin = true,
+    eggplant = true,
+    honey = true,
+    meat = true,
+    smallmeat = true,
+    froglegs = true,
+    fish = true,
 }
 
 --- 明确**不**放行的（写在这里是为了让后来者知道这是刻意的，不是漏了）
@@ -69,6 +88,7 @@ function E.PickBest(inventory)
             if item == nil or not item:IsValid() then return end
             local can, _ = E.IsEdible(item)
             if not can then return end
+            if E.AUTO_SAFE[item.prefab] ~= true then return end
             -- 分数：优先新鲜度高的，其次按白名单里定义的顺序（越靠前越基础）
             local freshness = 1
             local stackable = item.components ~= nil and item.components.perishable or nil

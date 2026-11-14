@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：REFACTOR-01（dispatcher 按领域拆分 + 提示词能力清单自动生成）｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：SURVIVAL-02（保命反射加固 + 计划层稳定目标 + HUD 挂载修复）｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -8,14 +8,14 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.19.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.29.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
-模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.17.2`）。
+模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.29.0`）。
 判断"磁盘上的模组装没装进游戏"请看 `install-mod.mjs` 的输出（`installedVersion`）。
 
-> 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.17.x。M2.2.1 决定**不建同步机制**，
+> 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.29.x。M2.2.1 决定**不建同步机制**，
 > 只在这里说清两者含义，避免下一个人误以为版本号写错了。
 
 ---
@@ -59,8 +59,11 @@
 
 - **F8 内置 AI**：在游戏里按 F8，用插件里的 API Key 自己玩（和 MCP 共用同一套工具定义与链路）。
 - **HUD**：游戏内显示 AI 的状态与最近动作。
-- **reflex（保命反射）**：血少、入夜没光、火要灭、被贴脸时自己动手（`heal`/`craft torch`/`add_fuel`/后撤）。
+- **reflex（保命反射，默认开）**：血/饿见底、入夜没光、火要灭、被贴脸、理智过低时自己动手
+  （安全进食/上药、举或做火把、添柴、后撤、采花、紧急采浆果）。白天还会提前备 2 草 + 2 树枝。
   **只在没有任务在跑时插手**；它占用 Actor 时模型的动作会收到 `actor_busy`（正常现象，先 `stop` 再试）。
+- **计划层（Plan）**：从快照推导当前唯一目标并保持稳定；F8 目标不变时只注入一行紧凑计划，
+  目标切换时才展开完整状态，减少每轮重新规划与 token 开销。
 - **Control Lease**：F8 与 DSH 会话不会同时操作；换手要等旧主人交回 `job_cleared` 的 ACK。
 - **Lua Guard**：Node 校验过的每一条结论，游戏里会**重新算一遍**。
 
@@ -87,6 +90,7 @@
 | **AGENT-01** | 真实 LLM 闭环（move_to 真走） | RUNTIME（部分）；pickup/harvest 未跑通 | `AGENT_01_report.md` |
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
+| **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
 
 ---
 
@@ -95,7 +99,7 @@
 | 级别 | 含义 | 现在的覆盖 |
 |---|---|---|
 | **STATIC** | 只读代码/文档，没有执行 | 各阶段审计报告的结论部分 |
-| **UNIT** | 单进程单测（Node 测试 + fengari Lua 沙箱 + 假游戏） | **505 项全绿**；覆盖工具表一致性、提示词一致性、guard、dispatcher、lease、nearby、pickup、harvest |
+| **UNIT** | 单进程单测（Node 测试 + fengari Lua 沙箱 + 假游戏） | **531 项全绿**；覆盖工具表一致性、提示词一致性、guard、dispatcher、lease、nearby、pickup、harvest、plan、reflex |
 | **RUNTIME** | 真实游戏在跑，模组在游戏里执行 | **0.17.2：已跑（见 §4.1）**；更早的 M1.2 / M1.4 / M2.0.2 / M2.0.3 / M2.1 / M2.2 / M2.3 是各自阶段当时的成绩 |
 | **END_TO_END** | 模型 → MCP → 命令 → 游戏动作 → 结果 → 模型，完整链路 | 真机验证脚本走的就是这条链路（MCP 产品入口 → 游戏 → 回执）；**没有**用真实 LLM 做长跑 |
 
@@ -159,7 +163,7 @@
 | 动作 | 原生实现 | 白名单 | 拒绝码 | 成功判据 |
 |---|---|---|---|---|
 | `gather` | `BufferedAction(ACTIONS.PICK)` | `grass`→cutgrass、`sapling`→twigs | `prefab_not_allowed` / `already_harvested` / `not_ready` / `target_busy` / `out_of_range` / `stale_snapshot` | 背包产物 +N / 目标消失 |
-| `eat` | `BufferedAction(ACTIONS.EAT)` | 13 种基础食物（**不含** monstermeat / rot） | `food_not_allowed` / `not_in_inventory` / `no_food` / `not_hungry` | 饥饿 +>0.5 / 该食物 -N |
+| `eat` | `BufferedAction(ACTIONS.EAT)` | 13 种手动白名单食物（**不含** monstermeat / rot；自动挑食物只用 AUTO_SAFE，跳过生蘑菇） | `food_not_allowed` / `not_in_inventory` / `no_food` / `not_hungry` | 饥饿 +>0.5 / 该食物 -N |
 | `craft` | `builder:MakeRecipe` | `torch` / `axe` / `pickaxe`（都是 TECH.NONE） | `recipe_not_allowed` / `ingredients_missing: …` / `recipe_locked` / `no_builder` | 成品进背包 +1 |
 | `equip` | `inventory:Equip(item)` | `torch` / `axe` / `pickaxe` | `item_not_equippable` / `not_in_inventory` | 装备栏 hand 变成它 |
 

@@ -19,12 +19,15 @@ local H = {}
 H.PREFABS = {
     grass = "cutgrass",
     sapling = "twigs",
+    -- 花：采下来是花瓣，采集本身回 5 点理智（前期最便宜、最安全的补理智手段）。
+    flower = "petals",
 }
 
 --- 产物 prefab → 中文（回执用）
 H.PRODUCT_LABELS = {
     cutgrass = "草",
     twigs = "树枝",
+    petals = "花瓣",
 }
 
 --- 这个实体是不是允许采集的对象（只看类型，不看成熟度）

@@ -17,7 +17,7 @@ Whale = {
     -- 版本号跟 modinfo.lua 走：状态文件里的 mod 字段要和模组列表里显示的一致，
     -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
     -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
-    version = (type(version) == "string" and version) or "0.28.0",
+    version = (type(version) == "string" and version) or "0.29.0",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -54,7 +54,7 @@ end
 
 Whale.verbose = modconfig("VERBOSE", false) and true or false
 Whale.interval = tonumber(modconfig("INTERVAL", 1)) or 1
-Whale.reflex_on = modconfig("REFLEX", false) and true or false
+Whale.reflex_on = modconfig("REFLEX", true) and true or false
 -- SURVIVAL-01：运行期强制关（做真实 LLM 实验用；reflex 会抢材料，见 reflex.lua 的说明）
 Whale.reflex_force_off = false
 
@@ -82,7 +82,7 @@ if Whale.config ~= nil and Whale.config.build ~= nil then
         if key == "scan_seconds" then return modconfig("OBSERVER_SCAN_SECONDS", 1) end
         if key == "nearby_max_total" then return modconfig("OBSERVER_NEARBY_MAX_TOTAL", 60) end
         if key == "nearby_max_per_bucket" then return modconfig("OBSERVER_NEARBY_MAX_PER_BUCKET", 12) end
-        if key == "reflex" then return modconfig("REFLEX", false) end
+        if key == "reflex" then return modconfig("REFLEX", true) end
         if key == "verbose" then return modconfig("VERBOSE", false) end
         return nil
     end)
@@ -96,7 +96,7 @@ modimport("scripts/whale/observe.lua")
 modimport("scripts/whale/actions.lua")
 -- 宏（任务级接口）：采集到够数 / 砍到够木头 / 锅做饭 / 守夜（依赖动作模块，放它之后）
 modimport("scripts/whale/macros.lua")
--- 保命反射层（默认关）：血见底/入夜没光/火要灭/被贴脸时自己动手
+-- 保命反射层（默认开）：血/饿见底、入夜没光、火要灭、被贴脸、理智低时自己动手
 modimport("scripts/whale/reflex.lua")
 modimport("scripts/whale/bridge.lua")
 modimport("scripts/whale/hud.lua")
@@ -121,9 +121,11 @@ modimport("scripts/whale/hud.lua")
 -- 和现在的 Actor Provider + 文件桥是两套东西，不能混着跑。
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
+-- AddClassPostConstruct 的 self 是 PlayerHud 屏幕本身，owner 是玩家实体。
+-- HUD 必须挂到屏幕上（self），挂到玩家实体上画不出来。
 AddClassPostConstruct("screens/playerhud", function(self, owner)
     if Whale ~= nil and Whale.hud ~= nil then
-        Whale.hud.Attach(owner)
+        pcall(Whale.hud.Attach, self, owner or self.owner)
     end
 end)
 
@@ -135,6 +137,20 @@ end)
 AddPlayerPostInit(function(inst)
     Whale.bridge.boot()
     Whale.bridge.on_player(inst)
+    -- 兜底：模组加载/热重载可能晚于 PlayerHud 创建。这里是客户端才有的 FrontEnd，
+    -- 服务端进程不该反复找 HUD（它没有显示树）。找到就挂，找不到最多试 60 秒。
+    if GLOBAL.TheFrontEnd ~= nil then
+        local tries = 0
+        local function try_attach()
+            if Whale.hud == nil or Whale.hud.AttachFromPlayer == nil then return end
+            if Whale.hud.AttachFromPlayer(inst) then return end
+            tries = tries + 1
+            if tries < 60 and inst:IsValid() then
+                pcall(function() inst:DoTaskInTime(1, try_attach) end)
+            end
+        end
+        pcall(function() inst:DoTaskInTime(0, try_attach) end)
+    end
 end)
 
 -- 玩家睡觉醒来、死亡、被传送到别的世界时，别让上一件事继续卡着

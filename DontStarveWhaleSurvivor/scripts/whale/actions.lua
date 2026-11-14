@@ -675,7 +675,16 @@ JOBS.pick = function(j, p)
             return false
         end)
         if j.args.target ~= nil then
-            local by_name = find_by_name(p, j.data.radius, j.args.target)
+            -- 普通花必须精确匹配：find_by_name("flower") 会连 flower_evil 一起匹配，
+            -- 而恶花采了掉理智，保命反射绝不能碰。
+            local by_name
+            if tostring(j.args.target) == "flower" then
+                by_name = U.find_all(p, j.data.radius, nil, nil, function(e)
+                    return e.prefab == "flower"
+                end)
+            else
+                by_name = find_by_name(p, j.data.radius, j.args.target)
+            end
             list = by_name
         end
         for _, entry in ipairs(list) do
@@ -734,6 +743,16 @@ local function snapshot_counts(p)
         out[key] = (out[key] or 0) + U.count(item)
     end)
     return out
+end
+
+--- 手上拿着的 prefab（没有就 nil）。
+--- 做火把时 DoBuild 会跳过背包、直接装备到手上，所以核对成品必须同时看这里。
+local function hand_prefab(p)
+    local inv = p ~= nil and p.components.inventory or nil
+    if inv == nil then return nil end
+    local ok, item = pcall(function() return inv:GetEquippedItem(EQUIPSLOTS.HANDS) end)
+    if not ok or item == nil then return nil end
+    return item.prefab
 end
 
 --- M2.1：按 #N 引用拾取**已解析好的**实体。
@@ -1809,6 +1828,10 @@ JOBS.craft = function(j, p)
             j.data.name = name
             j.data.label = rules.RECIPES[name].label
             j.data.before = snapshot_counts(p)
+            -- ★ 真机 bug：空手做 torch 时，原生 DoBuild 会**直接装备**而不是放进背包。
+            --   只比较背包数量会把"做成功且已拿在手里"误判成"成品没进背包"，
+            --   模型因此以为材料被扣、成品消失，转头去做别的，天黑前没光。
+            j.data.hand_before = hand_prefab(p)
             j.data.phase_start = U.now()
             -- ★ 不能用 BufferedAction：它的签名是 (doer, target, action, invobject, pos, recipe, ...)，
             --   第 4 个参数是 invobject，构造时会读 invobject.replica —— 把 recipe 传进去会崩
@@ -1829,7 +1852,9 @@ JOBS.craft = function(j, p)
         if busy(p) and U.now() - j.data.phase_start < 20 then return "run" end
         local after = snapshot_counts(p)
         local made = (after[j.data.name] or 0) - (j.data.before[j.data.name] or 0)
-        if made > 0 then
+        local hand_after = hand_prefab(p)
+        local auto_equipped = hand_after == j.data.name and j.data.hand_before ~= j.data.name
+        if made > 0 or auto_equipped then
             -- 顺便报告材料消耗
             local used = {}
             local def = rules.RECIPES[j.data.name]
@@ -1839,6 +1864,13 @@ JOBS.craft = function(j, p)
             end
             table.sort(used)
             local tail = #used > 0 and ("（" .. table.concat(used, "，") .. "）") or ""
+            -- 有的构建里 ForEachItem 会把装备槽也算进背包总数（真机/沙箱都出现过），
+            -- 于是"自动装备"同时满足 made > 0。此时必须优先说清"在手上"，
+            -- 否则模型仍会以为成品进了背包，转头又 equip 一次或继续找。
+            if auto_equipped then
+                return "done", string.format("做好了 %s，已自动拿在手里（%s）%s",
+                    j.data.label, j.data.name, tail)
+            end
             return "done", string.format("做好了 %s（%s+%d）%s", j.data.label, j.data.name, made, tail)
         end
         if U.now() - j.data.phase_start > 20 then

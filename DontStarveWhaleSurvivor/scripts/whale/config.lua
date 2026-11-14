@@ -26,7 +26,7 @@ C.DEFAULTS = {
     scan_seconds = 1,
     nearby_max_total = 60,
     nearby_max_per_bucket = 12,
-    reflex = false,
+    reflex = true,
     verbose = false,
 }
 

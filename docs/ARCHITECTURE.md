@@ -3,7 +3,7 @@
 > 本文只描述**现在真正在跑**的系统。历史架构（A 栈的 TypeScript bridge / mcp-server / agent、
 > HTTP 18788 那一套）已全部归档，见 [`archive/milestones/INDEX.md`](archive/milestones/INDEX.md)。
 >
-> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.17.2）+ `lib/`（DSH 插件，0.9.2）
+> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.29.0）+ `lib/`（DSH 插件，0.9.2）
 
 ---
 
@@ -262,8 +262,9 @@ M2.2.1 的瘦身**只删了模型可见但永远被拒的工具定义**，上面
 `lib/plan.js` 是**纯函数**：输入一份归一化快照，输出「当前目标 + 原因 + 下一步」。
 它不调模型、不改世界、不写游戏文件，只把"现在最值得做的一件事"固定下来。
 
-- **优先级固定**：灵魂（revive）> 脱战（retreat）> 光源（light）> 进食（eat）
-  > 回血（heal）> 斧头（tool_axe）> 镐（tool_pickaxe）> 存粮（stock_food）> 探索（explore）。
+- **优先级固定**：灵魂（revive）> 脱战（retreat）> 光源（light）> 回血（heal）> 进食（eat）
+  > 补理智（sanity）> 存粮（stock_food）> 白天备火把材料（prep_light）> 斧头（tool_axe）
+  > 镐（tool_pickaxe）> 探索（explore）。
 - **稳定保持**：上一份计划的世界（`nearby.runtime_id`）没变、旧目标仍然成立、
   且没有更高优先级的新目标时，沿用旧目标（`changed=false`，`since` 不变），
   避免模型每轮在"吃 / 砍树 / 探路"之间来回翻烧饼。
