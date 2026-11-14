@@ -241,6 +241,54 @@ function makeDispatcher(over = {}) {
   return { bridge, dispatcher }
 }
 
+test('OBS-18：动作成功后，下一轮提示里要带"已知背包"（来自已核对结果，模型不必再观察）', async () => {
+  const bridge = makeBridge()
+  const prompts = []
+  let turn = 0
+  const runner = new AiRunner({
+    log: () => {}, bridge,
+    chatFn: async (cfg, messages) => {
+      turn++
+      prompts.push(messages[messages.length - 1]?.content ?? '')
+      if (turn === 1) return { content: '', toolCalls: [{ id: 'a', name: 'gather', args: { target_ref: '#1', snapshot_id: 'r1-n2' } }], rawToolCalls: [] }
+      return { content: '(完)', toolCalls: [], rawToolCalls: [] }
+    },
+    settings: () => ({ apiKey: 'x', baseUrl: 'http://x', model: 'm', maxTokens: 64 }),
+    instructions: () => '规则', toolList: () => [],
+    callTool: async (name) => name === 'get_state' ? '状态' : '采了 草\n【已核对】cutgrass +1',
+    onStatus: () => {},
+  })
+  runner.start()
+  { const d = Date.now() + 4000; while (runner.running && Date.now() < d) await sleep(50); if (runner.running) runner.stop('t'); await sleep(150) }
+  assert.ok(prompts.length >= 2, `至少两轮，实际 ${prompts.length}`)
+  assert.match(prompts[1], /已知背包（来自已核对的结果）：cutgrass×1/, `第 2 轮要带已知背包，实际：${prompts[1]}`)
+})
+
+test('OBS-19：已知背包只认"已核对"的数据（失败回执不改记忆）', async () => {
+  const bridge = makeBridge()
+  const prompts = []
+  let turn = 0
+  const runner = new AiRunner({
+    log: () => {}, bridge,
+    chatFn: async (cfg, messages) => {
+      turn++
+      prompts.push(messages[messages.length - 1]?.content ?? '')
+      if (turn === 1) return { content: '', toolCalls: [{ id: 'a', name: 'gather', args: { target_ref: '#1', snapshot_id: 'r1-n2' } }], rawToolCalls: [] }
+      return { content: '(完)', toolCalls: [], rawToolCalls: [] }
+    },
+    settings: () => ({ apiKey: 'x', baseUrl: 'http://x', model: 'm', maxTokens: 64 }),
+    instructions: () => '规则', toolList: () => [],
+    // 失败回执里没有【已核对】，不该产生任何"已知背包"
+    callTool: async (name) => name === 'get_state' ? '状态' : '失败：拒绝：not_ready（not_ready）',
+    onStatus: () => {},
+  })
+  runner.start()
+  { const d = Date.now() + 4000; while (runner.running && Date.now() < d) await sleep(50); if (runner.running) runner.stop('t'); await sleep(150) }
+  // 失败会触发重新观察，所以提示里应该是"看状态"而不是"已知背包"
+  const joined = prompts.join('\n')
+  assert.ok(!/已知背包（来自已核对的结果）：cutgrass/.test(joined), '失败回执不能凭空产生背包记忆')
+})
+
 test('OBS-7：动作成功后 describe 要带上已核对的变化（不是只回一句"完成"）', async () => {
   const { dispatcher } = makeDispatcher()
   // 直接造一个 succeeded 结果走 describe
