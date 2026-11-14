@@ -104,7 +104,11 @@ local function ensure_widget(owner)
         root:SetHAnchor(GLOBAL.ANCHOR_LEFT)
         root:SetVAnchor(GLOBAL.ANCHOR_MIDDLE)
         root:SetScaleMode(GLOBAL.SCALEMODE_PROPORTIONAL)
-        root:SetPosition(28, 10, 0)
+        -- ★ 真机 bug：root 锚在屏幕左边缘（x=28），但下面 bg / label 又按"以 root 为中心"
+        --   来摆（label x = -WIDTH/2 + 14）。结果文字被推到 x≈-123，整个跑到屏幕外，
+        --   只剩背景右半截贴在左边缘 —— 看上去就是"没有小窗"。
+        --   把 root 往右挪半个宽度，整块面板就落在 [28, 28+WIDTH] 里。
+        root:SetPosition(28 + WIDTH / 2, 10, 0)
 
         bg = root:AddChild(Image("images/global.xml", "square.tex"))
         bg:SetTint(0, 0, 0, 0.62)
@@ -299,6 +303,7 @@ function H.Attach(owner)
     pcall(function()
         owner:AddChild(root)
     end)
+    Whale.util.log("HUD 已挂上（画面左侧）")
     owner:DoPeriodicTask(0.5, function()
         local ok, err = pcall(refresh)
         if not ok then

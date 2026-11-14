@@ -23,7 +23,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  ① DSH 会话：模型 → MCP 工具（Streamable HTTP + SSE）                                      │
 │  ② 游戏里按 F8：插件内置 AI → 同一套工具定义                                               │
 └───────────────────────────────────────┬─────────────────────────────────────────────────┘
-                                        │  工具 = lib/tools.js 的 TOOLS（7 个）
+                                        │  工具 = lib/tools.js 的 TOOLS（34 个 = 3 本地 + 31 动作）
                                         ▼
 ┌──────────────────────────── DSH 插件进程（Node，lib/）────────────────────────────────────┐
 │                                                                                          │
@@ -32,7 +32,11 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │     └─ 动作      → dispatcher.dispatch()  ────────────────┐                               │
 │                                                            │                               │
 │  dispatcher.js  ①参数与快照校验 ②拿控制租约 ③写命令 ④等结果 ⑤核对真实状态  ◄── 唯一允许    │
-│                 （白名单：move_to / stop / pickup / harvest）                  下发动作的地方 │
+│                 （白名单：ACTION_SPECS 的全部 31 个动作）                      下发动作的地方 │
+│                                                                                          │
+│  actions/specs/*.js   按领域拆分的动作规格（movement / gathering / crafting / ...）        │
+│                       每个动作声明 riskLevel / 参数白名单 / verify（核对方式）              │
+│  actions/state-query.js  快照查询：背包两种 JSON 形状、装备栏两种形状的统一读取            │
 │                                                            │                               │
 │  control.js     Control Lease（本机文件锁 + 跨进程互斥 + 换手 ACK）                        │
 │  bridge.js      文件桥客户端：找目录、读状态、写命令、读结果、权威性判定                     │
@@ -127,19 +131,37 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 
 ---
 
-## 7. 工具表面（7 个）与共用链路
+## 7. 工具表面（34 个）与共用链路
 
 ```
 TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写笔记
-      + [move_to, stop, pickup, harvest]            ← 动作，必须过 dispatcher
+      + ACTION_SPECS 的 31 个动作                   ← 必须过 dispatcher
 ```
+
+动作按领域放在 `lib/actions/specs/`：
+
+| 文件 | 动作 | 数量 |
+|---|---|---|
+| `movement.js` | move_to / stop / seek | 3 |
+| `gathering.js` | pickup / harvest / gather / gather_area / chop / mine / dig / hammer | 8 |
+| `crafting.js` | craft / build / cook | 3 |
+| `survival.js` | eat / equip / unequip / drop / fuel / wait | 6 |
+| `interaction.js` | use / container_take / container_put / give | 4 |
+| `combat.js` | attack / kill | 2 |
+| `info.js` | recipes / lookup / probe / inspect | 4 |
+| `social.js` | say | 1 |
+
+`lib/actions/state-query.js` 集中处理"快照的两种 JSON 形状"（背包数组/对象、装备 slots/worn），
+所有 `verify()` 都基于它做前后比对。
 
 - 这 3 个**本地工具**不进 dispatcher：`get_state` / `get_guide` 只读快照与攻略；
   **`update_notes` 会写本地文件**（覆盖 `~/.dsh/plugins-data/…/notes.md`，空字符串 = 清空）。
 - F8 的 `agent.js` 和 MCP 的 `mcp-server.js` 都调**同一个** `executeTool()` 和**同一份** `TOOLS`。
 - 所以"F8 能做的事"和"MCP 能做的事"必然一致，不存在两条链路。
-- dispatcher 的白名单 `OPEN_ACTIONS` 是唯一开关：工具表里有的动作，这里不放行也会被拒；
-  M2.2.1 之后两边完全对齐（有测试盯着，见 `TESTING.md`）。
+- dispatcher 的白名单 `OPEN_ACTIONS = Object.keys(ACTION_SPECS)` 是唯一开关：工具表里有的动作，
+  这里不放行也会被拒；两边完全对齐（`tool-parity.test.mjs` 盯着）。
+- `RULES` 里的能力清单**从 `ACTION_SPECS` 生成**，不再手写数字（`prompt-parity.test.mjs` 盯着），
+  所以加一个动作不会出现"代码能用、说明书还说没有"的漂移。
 
 ---
 
@@ -176,7 +198,8 @@ dispatch({tool, args, owner})
 
 - 命令有效期 **8 秒**：游戏卡住时不会执行几分钟前的旧指令。
 - 结果只认 `command_id` 对得上的那份；对不上就是 `unknown`（不猜、不重试）。
-- 每种动作声明自己的核对方式与等待时间：`move_to` 2.5s、`pickup` 3s、`harvest` 4s。
+- 每种动作在自己的规格里声明核对方式（`verify`）与等待时间（`verifyWaitMs`）：
+  `move_to` 2.5s、`pickup` 3s、`harvest` 4s、`build` 5s。
 
 ---
 
@@ -231,3 +254,21 @@ dispatch({tool, args, owner})
 10. 动作执行与结果确认（以真实状态为准）
 
 M2.2.1 的瘦身**只删了模型可见但永远被拒的工具定义**，上面 10 条一条没动（有测试守着）。
+
+---
+
+## 13. 计划层（Plan：减少每轮重新规划）
+
+`lib/plan.js` 是**纯函数**：输入一份归一化快照，输出「当前目标 + 原因 + 下一步」。
+它不调模型、不改世界、不写游戏文件，只把"现在最值得做的一件事"固定下来。
+
+- **优先级固定**：灵魂（revive）> 脱战（retreat）> 光源（light）> 进食（eat）
+  > 回血（heal）> 斧头（tool_axe）> 镐（tool_pickaxe）> 存粮（stock_food）> 探索（explore）。
+- **稳定保持**：上一份计划的世界（`nearby.runtime_id`）没变、旧目标仍然成立、
+  且没有更高优先级的新目标时，沿用旧目标（`changed=false`，`since` 不变），
+  避免模型每轮在"吃 / 砍树 / 探路"之间来回翻烧饼。
+- **可核对**：目标是否成立只看快照字段（灵魂、血量、饥饿、相位、背包、附近桶），
+  不依赖模型自己说"做完了"。
+- **省 token 的注入方式**：`get_state` 文本末尾输出完整计划，JSON 模式放在 `plan` 字段；
+  F8 每轮只注入一行紧凑计划，只有目标切换时才展开完整版。
+- F8 与 MCP 通过 `lib/index.js` 的 `sharedPlan` 共用同一份计划，换入口不会重新规划。

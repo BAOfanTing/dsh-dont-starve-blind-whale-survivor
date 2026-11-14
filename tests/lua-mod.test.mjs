@@ -886,14 +886,29 @@ GLOBAL.ThePlayer = { components = {} }
 WRITTEN = {}
 KEYHANDLERS = {}
 GLOBAL.TheInput = { AddKeyHandler = function(self, fn) KEYHANDLERS[#KEYHANDLERS + 1] = fn end }
-local function fakewidget() return { SetPosition = function() end, SetSize = function() end, SetTint = function() end,
-    SetString = function() end, SetHAlign = function() end, SetVAlign = function() end, SetColour = function() end,
-    SetHAnchor = function() end, SetVAnchor = function() end, SetScaleMode = function() end,
-    AddChild = function(self, c) return c end, Kill = function() end } end
-package.loaded["widgets/widget"] = function() return setmetatable({}, { __call = function() return fakewidget() end }) end
-package.loaded["widgets/text"] = function() return setmetatable({}, { __call = function() return fakewidget() end }) end
-package.loaded["widgets/image"] = function() return setmetatable({}, { __call = function() return fakewidget() end }) end
-Whale = { files = {}, util = { log = function() end } }
+local function fakewidget()
+    local widget = { _pos = nil }
+    function widget:SetPosition(x, y, z) self._pos = { x, y, z } end
+    widget.SetSize = function() end
+    widget.SetTint = function() end
+    widget.SetString = function() end
+    widget.SetHAlign = function() end
+    widget.SetVAlign = function() end
+    widget.SetColour = function() end
+    widget.SetHAnchor = function() end
+    widget.SetVAnchor = function() end
+    widget.SetScaleMode = function() end
+    widget.AddChild = function(self, child) return child end
+    widget.Kill = function() end
+    return widget
+end
+-- 注意：require 对 package.loaded 里已有的值会直接返回，不会把它当 loader 调用。
+-- 所以这里必须放**可调用表**本身，不能放返回可调用表的函数。
+package.loaded["widgets/widget"] = setmetatable({}, { __call = function() return fakewidget() end })
+package.loaded["widgets/text"] = setmetatable({}, { __call = function() return fakewidget() end })
+package.loaded["widgets/image"] = setmetatable({}, { __call = function() return fakewidget() end })
+LOGS = {}
+Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(msg) end } }
 `
   let status = lauxlib.luaL_dostring(L, to_luastring(prelude))
   assert.equal(status, lua.LUA_OK, '前置环境出错：' + fail())
@@ -934,6 +949,15 @@ Whale = { files = {}, util = { log = function() end } }
     assert(Whale.hud.anim_for(8, false) == "run_loop", "服务端在挪我，应该自己播跑步")
     assert(Whale.hud.anim_for(0.1, false) == "idle_loop", "停下了就应该回 idle")
     assert(Whale.hud.anim_for(nil, false) == "idle_loop", "还测不出速度时按停着算")
+    -- 挂上去之后根节点的 x 必须在屏幕内：x=28 是"锚点位置"，不是面板中心；
+    -- 面板宽度 330，中心至少要到 165，否则文字会被推到屏幕左边外面。
+    local owner = { AddChild = function(self, child) self.child = child end, DoPeriodicTask = function() end }
+    GLOBAL.ThePlayer = owner
+    Whale.hud.Attach(owner)
+    assert(owner.child ~= nil, "HUD 根节点没挂到 owner 上；日志：" .. table.concat(LOGS, " | "))
+    assert(owner.child._pos ~= nil, "HUD 根节点没设置位置")
+    local root_x = owner.child._pos[1]
+    assert(root_x >= 165, "HUD 位置太靠左，面板会被推出屏幕：x=" .. tostring(root_x))
     OUT = "ok"
   `))
   assert.equal(lua.lua_pcall(L, 0, 0, 0), lua.LUA_OK, 'HUD 行为不对：' + fail())

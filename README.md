@@ -8,19 +8,21 @@
 
 ## 现在能做什么
 
-**模型能用的 7 个工具**（就这些，其余都还没开放）：
+**模型能用的 31 个动作 + 3 个本地工具**（清单由 `ACTION_SPECS` 自动生成，不会和代码脱节）：
 
-| 工具 | 作用 |
+| 用途 | 工具 |
 |---|---|
-| `get_state` | 看世界：时间、位置、血/饿/理智、背包、附近能捡能采的东西、敌人与危险提醒 |
-| `get_guide` | 读攻略（主攻略 / 生存 / 战斗 / 烹饪，玩家可改） |
-| `update_notes` | 记长期笔记，下次 `get_state` 显示在最前 |
-| `move_to` | 走到格子坐标（自动绕障碍） |
-| `stop` | 立刻停手 |
-| `pickup` | 捡地上的树枝 / 割下的草 / 燧石 |
-| `harvest` | 采**已经成熟**的浆果丛 |
+| 看 | `get_state`、`get_guide`、`update_notes`、`recipes`、`lookup`、`probe`、`inspect` |
+| 走 | `move_to`、`seek`、`stop` |
+| 采集 | `pickup`、`harvest`、`gather`、`gather_area`、`chop`、`mine`、`dig`、`hammer` |
+| 制作 | `craft`（torch / axe / pickaxe）、`build`（营火 / 火坑 / 箱子 / 锅 / 科学机器）、`cook` |
+| 生存 | `eat`、`equip`、`unequip`、`drop`、`fuel`、`wait` |
+| 交互 | `use`、`container_take`、`container_put`、`give` |
+| 战斗 | `attack`、`kill` |
+| 社交 | `say` |
 
-**还做不到**（别期待）：砍树、挖矿、采集活的植物、制作、生火、加柴、吃东西、回血、战斗、存箱子、开锅取菜。这些在模组里有一部分实现，但**没有对 AI 开放**。
+**还没开放**：`pick`（手摘蘑菇/胡萝卜）、`heal`（主动回血）、`sleep`、`make_fire`。
+回血目前只能靠吃东西和模组自带的保命反射。
 
 **不靠模型的自动能力**：
 

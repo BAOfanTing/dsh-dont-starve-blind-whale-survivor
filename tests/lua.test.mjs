@@ -42,6 +42,61 @@ test('modinfo.lua 有关键字段', () => {
   }
 })
 
+test('modinfo.lua 的配置项结构完整（default 不能悬空在选项外）', async () => {
+  const fengari = await import('fengari')
+  const { lua, lauxlib, lualib, to_luastring } = fengari
+  const L = lauxlib.luaL_newstate()
+  lualib.luaL_openlibs(L)
+  const source = readFileSync(join(MOD, 'modinfo.lua'), 'utf8')
+  const status = lauxlib.luaL_dostring(L, to_luastring(source))
+  if (status !== lua.LUA_OK) {
+    throw new Error('modinfo.lua 加载失败：' + lua.lua_tojsstring(L, -1))
+  }
+
+  lua.lua_getglobal(L, to_luastring('configuration_options'))
+  assert.equal(lua.lua_type(L, -1), lua.LUA_TTABLE, 'configuration_options 应该是一张表')
+  const count = lua.lua_rawlen(L, -1)
+  assert.ok(count >= 8, `配置项只有 ${count} 个，看起来没加载全`)
+
+  for (let index = 1; index <= count; index++) {
+    lua.lua_rawgeti(L, -1, index)
+    assert.equal(lua.lua_type(L, -1), lua.LUA_TTABLE, `第 ${index} 个配置项不是表`)
+    lua.lua_getfield(L, -1, to_luastring('name'))
+    const name = lua.lua_tojsstring(L, -1)
+    assert.ok(name && name.length > 0, `第 ${index} 个配置项没有 name`)
+    lua.lua_pop(L, 1)
+
+    // ★ 0.28.0 之前这里真的坏过：default 落在了选项表外面，
+    //   于是这个配置项没有 default，游戏读取时拿到 nil。
+    lua.lua_getfield(L, -1, to_luastring('default'))
+    assert.notEqual(lua.lua_type(L, -1), lua.LUA_TNIL, `配置项 ${name} 缺 default`)
+    const defaultType = lua.lua_type(L, -1)
+    const defaultNumber = defaultType === lua.LUA_TNUMBER ? lua.lua_tonumber(L, -1) : null
+    const defaultString = defaultType === lua.LUA_TSTRING ? lua.lua_tojsstring(L, -1) : null
+    const defaultBoolean = defaultType === lua.LUA_TBOOLEAN ? lua.lua_toboolean(L, -1) : null
+    lua.lua_pop(L, 1)
+
+    lua.lua_getfield(L, -1, to_luastring('options'))
+    assert.equal(lua.lua_type(L, -1), lua.LUA_TTABLE, `配置项 ${name} 的 options 不是表`)
+    const optionCount = lua.lua_rawlen(L, -1)
+    assert.ok(optionCount > 0, `配置项 ${name} 没有可选值`)
+    let matched = false
+    for (let optionIndex = 1; optionIndex <= optionCount; optionIndex++) {
+      lua.lua_rawgeti(L, -1, optionIndex)
+      lua.lua_getfield(L, -1, to_luastring('data'))
+      const dataType = lua.lua_type(L, -1)
+      if (defaultType === dataType) {
+        if (defaultNumber !== null && lua.lua_tonumber(L, -1) === defaultNumber) matched = true
+        if (defaultString !== null && lua.lua_tojsstring(L, -1) === defaultString) matched = true
+        if (defaultBoolean !== null && lua.lua_toboolean(L, -1) === defaultBoolean) matched = true
+      }
+      lua.lua_pop(L, 2)
+    }
+    assert.ok(matched, `配置项 ${name} 的 default 不在 options 里`)
+    lua.lua_pop(L, 2)
+  }
+})
+
 test('json.lua 能和外面的 JSON 互相转（真 Lua 虚拟机里跑）', async () => {
   const fengari = await import('fengari')
   const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari

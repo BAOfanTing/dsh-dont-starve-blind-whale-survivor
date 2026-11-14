@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：SURVIVAL-01（四个基础生存动作：gather / eat / craft / equip）｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：REFACTOR-01（dispatcher 按领域拆分 + 提示词能力清单自动生成）｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -22,10 +22,12 @@
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（13 个）
+### 2.1 模型可见的工具（34 个 = 3 本地 + 31 动作）
 
 > 分类：`get_state` / `get_guide` = **只读**；`update_notes` = **本地写入**（会覆盖写笔记文件）；
-> `move_to` / `stop` / `pickup` / `harvest` / `gather` / `eat` / `craft` / `equip` = **游戏动作**。
+> 其余 31 个 = **游戏动作**，全部必须过 dispatcher。
+> 权威清单是 `lib/actions/specs/*.js` 的 `ACTION_SPECS`：`OPEN_ACTIONS`、`TOOLS`、`RULES` 的能力段
+> 都从它派生，有 `tool-parity` / `prompt-parity` 两组测试盯着。
 
 | 工具 | 类型 | 说明 |
 |---|---|---|
@@ -42,10 +44,15 @@
 | **`equip`** | 动作 R1 | **SURVIVAL-01 新增**：把 `torch` / `axe` / `pickaxe` 拿在手里 |
 | **`gather_area`** | 动作 R2 | **SURVIVAL-02 新增**：一次采完附近能采的（可只采某一种）—— 省调用次数 |
 | **`seek`** | 动作 R2 | **SURVIVAL-02 新增**：8 方向 × 多环走出去找东西，只报位置、不自动动手 |
+| **`chop` / `mine` / `dig` / `hammer`** | 动作 R2 | **SURVIVAL-03**：砍树 / 挖矿 / 铲草皮树桩 / 拆建筑（要对应工具） |
+| **`attack` / `kill`** | 动作 R2 | **SURVIVAL-03**：打几下 / 打到死（血低于 25% 自动放弃） |
+| **`wait` / `drop`** | 动作 R1 | **SURVIVAL-03**：等一会儿 / 丢背包里的东西 |
+| **`unequip` / `fuel` / `use` / `inspect` / `say`** | 动作 R1/R2 | **SURVIVAL-04**：脱装备 / 添柴 / 通用交互 / 查目标详情 / 聊天 |
+| **`container_take` / `container_put` / `give` / `cook`** | 动作 R2 | **SURVIVAL-05**：容器取放 / 给予 / 锅 |
+| **`build` / `recipes` / `lookup` / `probe`** | 动作 R2/R1 | **SURVIVAL-06**：摆建筑（白名单 5 种）/ 查配方 / 查资料 / 探附近 |
 
-**未开放**（Lua 里有实现、但 guard 不放行、工具表也不暴露）：
-`chop / mine / hammer / dig / attack / pick / cook / build / make_fire / add_fuel / heal / drop /
-sleep / say / wait / act / list_actions / list_recipes / store / take / go_to`
+**仍未开放**（工具表里没有，调了会报「没有这个工具」）：
+`pick`（手摘蘑菇/胡萝卜）、`heal`（主动回血）、`sleep`、`make_fire`、`add_fuel`，
 以及全部宏（`gather / chop_until / cook_meal / night_watch`）。
 
 ### 2.2 非模型能力（仍然在跑）
@@ -88,7 +95,7 @@ sleep / say / wait / act / list_actions / list_recipes / store / take / go_to`
 | 级别 | 含义 | 现在的覆盖 |
 |---|---|---|
 | **STATIC** | 只读代码/文档，没有执行 | 各阶段审计报告的结论部分 |
-| **UNIT** | 单进程单测（Node 测试 + fengari Lua 沙箱 + 假游戏） | **479 项全绿**；覆盖工具表一致性、guard、dispatcher、lease、nearby、pickup、harvest |
+| **UNIT** | 单进程单测（Node 测试 + fengari Lua 沙箱 + 假游戏） | **505 项全绿**；覆盖工具表一致性、提示词一致性、guard、dispatcher、lease、nearby、pickup、harvest |
 | **RUNTIME** | 真实游戏在跑，模组在游戏里执行 | **0.17.2：已跑（见 §4.1）**；更早的 M1.2 / M1.4 / M2.0.2 / M2.0.3 / M2.1 / M2.2 / M2.3 是各自阶段当时的成绩 |
 | **END_TO_END** | 模型 → MCP → 命令 → 游戏动作 → 结果 → 模型，完整链路 | 真机验证脚本走的就是这条链路（MCP 产品入口 → 游戏 → 回执）；**没有**用真实 LLM 做长跑 |
 

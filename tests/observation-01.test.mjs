@@ -255,7 +255,13 @@ test('OBS-18：动作成功后，下一轮提示里要带"已知背包"（来自
     },
     settings: () => ({ apiKey: 'x', baseUrl: 'http://x', model: 'm', maxTokens: 64 }),
     instructions: () => '规则', toolList: () => [],
-    callTool: async (name) => name === 'get_state' ? '状态' : '采了 草\n【已核对】cutgrass +1',
+    // 新契约：动作工具返回 { text, outcome }，背包记忆只认 outcome.verified
+    callTool: async (name) => (name === 'get_state'
+      ? '状态'
+      : {
+        text: '采了 草\n【已核对】cutgrass +1',
+        outcome: { status: 'succeeded', verified: { product: 'cutgrass', gained: 1 } },
+      }),
     onStatus: () => {},
   })
   runner.start()
@@ -278,7 +284,7 @@ test('OBS-19：已知背包只认"已核对"的数据（失败回执不改记忆
     },
     settings: () => ({ apiKey: 'x', baseUrl: 'http://x', model: 'm', maxTokens: 64 }),
     instructions: () => '规则', toolList: () => [],
-    // 失败回执里没有【已核对】，不该产生任何"已知背包"
+    // 失败回执：没有结构化核对结果，不该产生任何"已知背包"
     callTool: async (name) => name === 'get_state' ? '状态' : '失败：拒绝：not_ready（not_ready）',
     onStatus: () => {},
   })

@@ -77,7 +77,7 @@ node --test --test-force-exit "tests/m2_*.test.mjs"    # 只跑 M2 系列
 用 `fetch` 发 JSON-RPC（`initialize` / `tools/list` / `tools/call`），并读 SSE 流。
 假游戏（`FakeGame`）会在临时目录里写/读状态、命令、结果文件。
 
-覆盖：协议握手、`tools/list` 只暴露 7 个工具且名字唯一、未开放工具被拒、
+覆盖：协议握手、`tools/list` 暴露 34 个工具（3 本地 + 31 动作）且名字唯一、未开放工具被拒、
 动作结果原样返回、`get_state` 读不到游戏时的提示。
 
 ---
@@ -146,7 +146,7 @@ node tools/unpause.mjs
 node tools/m2_0_2_start_mcp.mjs        # 后台跑；然后 http://127.0.0.1:18090/status 应该 HTTP 200
 ```
 
-确认产品入口暴露的工具表（应该是 7 个、名字唯一）：
+确认产品入口暴露的工具表（应该是 34 个、名字唯一；数量以 `ACTION_SPECS` 为准）：
 
 ```powershell
 # JSON-RPC：initialize → tools/list

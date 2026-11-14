@@ -91,6 +91,8 @@ configuration_options = {
             { description = "4 秒", data = 4 },
             { description = "8 秒", data = 8 },
         },
+        default = 4,
+    },
     {
         name = "OBSERVER_NEARBY_MAX_TOTAL",
         label = "附近实体总上限",
@@ -114,7 +116,5 @@ configuration_options = {
             { description = "50 个", data = 50 },
         },
         default = 12,
-    },
-        default = 4,
     },
 }
