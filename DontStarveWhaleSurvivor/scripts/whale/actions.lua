@@ -2539,9 +2539,23 @@ JOBS.fuel = function(j, p)
     return "run"
 end
 
---- 通用交互：对目标尝试 OPEN / READ / USE / ACTIVATE / TAKEITEM 之一
---- 只允许这几个动作（不给模型任意 ACTIONS 名字）
-local USE_ALLOWED = { "OPEN", "READ", "USE", "ACTIVATE", "TAKEITEM" }
+--- 通用交互：对目标尝试这几个动作之一
+--- 只允许这几个（不给模型任意 ACTIONS 名字）
+---
+--- ⚠️ 这份名单**必须是游戏 ACTIONS 表里真实存在的**。
+--- 真机核对（docs/reference/动作表.md，由 tools/dump-reference.mjs 从游戏本体导出）：
+---   ✅ ACTIVATE / ACTIVATE_CONTAINER / READ / PICKUP / PICK / OPEN_CRAFTING / CLOSESPELLBOOK
+---   ❌ OPEN / CLOSE / USE / TAKEITEM —— **游戏里没有这几个动作**
+--- 旧实现的白名单里写了 OPEN/USE/TAKEITEM/CLOSE，照抄会得到"动作不存在"，已修正。
+local USE_ALLOWED = {
+    "ACTIVATE",           -- 通用激活（科学机器、帐篷、天体探测仪…）
+    "ACTIVATE_CONTAINER", -- 打开容器（箱子、冰箱、背包）
+    "RUMMAGE",            -- 翻找容器
+    "TAKEITEM",           -- 从容器里取出
+    "READ",               -- 读书
+    "PICKUP",             -- 捡起
+    "OPEN_CRAFTING",      -- 打开制作台
+}
 
 JOBS.use = function(j, p)
     local ctx = j.ctx or {}
