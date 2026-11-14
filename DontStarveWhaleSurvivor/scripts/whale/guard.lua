@@ -203,6 +203,73 @@ G.ACTIONS = {
             look = { type = "number", min = 8, max = 40 },
         },
     },
+    -- ═══════════ SURVIVAL-03：批量开放的常用动作 ═══════════
+    -- chop / mine / dig / hammer：对目标用 workable 动作（都要 #N 引用）
+    chop = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
+    mine = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
+    dig = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
+    hammer = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
+    -- attack / kill：对目标重复 ATTACK（kill 打到死）
+    attack = {
+        risk = "R2",
+        required_components = { "locomotor", "health" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            times = { type = "number", min = 1, max = 50, integer = true },
+        },
+    },
+    kill = {
+        risk = "R2",
+        required_components = { "locomotor", "health" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
+    -- wait / drop
+    wait = {
+        risk = "R1",
+        required_components = {},
+        args = {
+            seconds = { type = "number", min = 1, max = 30 },
+        },
+    },
+    drop = {
+        risk = "R1",
+        required_components = { "inventory" },
+        args = {
+            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+        },
+    },
 }
 
 --- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
@@ -633,6 +700,36 @@ function G.validate(cmd)
         local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
         if inv == nil then return false, "missing_component:inventory", nil end
         if qr.FindInInventory(inv, item) == nil then return false, "not_in_inventory", nil end
+    end
+
+    -- ═══════════ SURVIVAL-03：chop / mine / dig / hammer / attack / kill ═══════════
+    if action == "chop" or action == "mine" or action == "dig" or action == "hammer" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local snapshot_id = tostring(cmd.args.snapshot_id)
+        local ref = tostring(cmd.args.target_ref)
+        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        if ent == nil then return false, why_t or "unknown_ref", nil end
+        if ent.components == nil or ent.components.workable == nil then
+            return false, "target_not_workable", nil
+        end
+        -- 距离：workable 动作靠引擎自己走过去，但太远（>6 格）先拒绝，避免"隔着半张地图砍树"
+        local d = U.dist(actor, ent)
+        if d ~= nil and d > 6 * 4 then return false, "out_of_range", nil end
+        target = ent
+    end
+
+    if action == "attack" or action == "kill" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local snapshot_id = tostring(cmd.args.snapshot_id)
+        local ref = tostring(cmd.args.target_ref)
+        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        if ent == nil then return false, why_t or "unknown_ref", nil end
+        if ent.components == nil or ent.components.health == nil then
+            return false, "target_not_attackable", nil
+        end
+        local d = U.dist(actor, ent)
+        if d ~= nil and d > 6 * 4 then return false, "out_of_range", nil end
+        target = ent
     end
 
     -- ═══════════ SURVIVAL-02 ═══════════

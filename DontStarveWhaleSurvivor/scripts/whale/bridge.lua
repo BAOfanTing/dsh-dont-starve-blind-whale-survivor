@@ -306,6 +306,9 @@ local function handle_command(json_text)
             step = cmd.args ~= nil and cmd.args.step or nil,
             max_tiles = cmd.args ~= nil and cmd.args.max_tiles or nil,
             look = cmd.args ~= nil and cmd.args.look or nil,
+            -- SURVIVAL-03
+            times = cmd.args ~= nil and cmd.args.times or nil,
+            seconds = cmd.args ~= nil and cmd.args.seconds or nil,
         }
     )
     if not started then

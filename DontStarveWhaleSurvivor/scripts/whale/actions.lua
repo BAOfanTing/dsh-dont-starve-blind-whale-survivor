@@ -1245,6 +1245,8 @@ JOBS.equip = function(j, p)
 end
 
 JOBS.drop = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.survival_drop == true then return drop_by_ref(j, p, ctx.item) end
     local want = j.args.item
     if want == nil or want == "" then return "fail", "drop 要传 item" end
     local item = U.find_item(p, want)
@@ -2219,6 +2221,208 @@ JOBS.seek = function(j, p)
             -- 走不到（被挡/在水里）就换下一站，别卡死
             j.step = "look"
             return "run"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+-- ═══════════════ SURVIVAL-03：批量开放的动作 ═══════════════
+--
+-- 这些是从"另一个实现"搬过来的能力，但**目标引用沿用我的 #N + snapshot_id**：
+-- 模型仍然只能给当前快照里的引用，不能给 GUID / prefab / 坐标。
+--
+-- chop / mine / dig / hammer 本质是同一件事：对目标用 workable 动作。
+-- 所以共用一个 work_by_ref，用 action 名区分。
+
+--- workable 动作表：动作名 → { 原生动作, 动词, 需要的工具提示 }
+local WORK_ACTIONS = {
+    chop = { action = "CHOP", verb = "砍", tool = "axe", tool_cn = "斧头" },
+    mine = { action = "MINE", verb = "挖", tool = "pickaxe", tool_cn = "镐" },
+    dig = { action = "DIG", verb = "铲", tool = "shovel", tool_cn = "铲子" },
+    hammer = { action = "HAMMER", verb = "拆", tool = "hammer", tool_cn = "锤子" },
+}
+
+--- 目标的 workable 是不是已经完成（挖碎/砍倒/拆掉）
+local function work_done(ent, action_id)
+    if ent == nil or not ent:IsValid() then return true end
+    local workable = ent.components ~= nil and ent.components.workable or nil
+    if workable == nil then return true end
+    local ok, left = pcall(function() return workable.workleft end)
+    if ok and type(left) == "number" then return left <= 0 end
+    return false
+end
+
+--- 对实体干活（chop/mine/dig/hammer 共用）
+local function work_by_ref(j, p, target, kind)
+    local def = WORK_ACTIONS[kind]
+    if def == nil then return "fail", "unknown_work_action" end
+    if target == nil or not target:IsValid() then
+        -- 已经动过手、目标却没了 = 被我们干掉了（岩石挖碎会消失，树倒变树桩）
+        if j.data ~= nil and j.data.pushed ~= nil then
+            return "done", string.format("%s了 %s", def.verb, j.data.label or "目标")
+        end
+        return "fail", "entity_gone: 目标已经不存在了"
+    end
+    local workable = target.components ~= nil and target.components.workable or nil
+    if workable == nil then
+        return "fail", "target_not_workable: 这个东西不能" .. def.verb
+    end
+    local action = ACTIONS[def.action]
+    if action == nil then return "fail", "这个版本里没有 " .. def.action end
+
+    if j.step == "start" then
+        if target:IsInLimbo() then return "fail", "in_limbo: 目标进入了 limbo" end
+        j.data.target = target
+        j.data.kind = kind
+        j.data.label = U.pretty(target)
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        -- 工具检查（没有就明确说，别推一条注定失败的动作）
+        local tool = U.best_tool(p, action)
+        if tool == nil then
+            return "fail", string.format("no_tool: 背包里没有能%s的工具，先 craft %s", def.verb, def.tool)
+        end
+        -- 装备到手上（workable 动作要求手持对应工具）
+        local inv = p.components ~= nil and p.components.inventory or nil
+        if inv ~= nil then
+            local hand = inv:GetEquippedItem(EQUIPSLOTS.HANDS)
+            if hand ~= tool then pcall(function() inv:Equip(tool) end) end
+        end
+        local ba = BufferedAction(p, target, action, tool)
+        if ba == nil then return "fail", "action_unavailable: 这个动作用不了" end
+        -- 官方"按住 F"连砍时会给动作打这个标记
+        pcall(function() ba.options.no_predict_fastforward = true end)
+        push(p, ba)
+        j.data.pushed = U.now()
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local alive = target:IsValid()
+        if work_done(target, def.action) or not alive then
+            local after = snapshot_counts(p)
+            -- 产物核对：砍树出 log、挖矿出 rocks/flint/goldnugget
+            local gained = {}
+            for prefab, n in pairs(after) do
+                local d = n - (j.data.before[prefab] or 0)
+                if d > 0 then gained[#gained + 1] = string.format("%s+%d", prefab, d) end
+            end
+            table.sort(gained)
+            local tail = #gained > 0 and ("（" .. table.concat(gained, "，") .. "）") or ""
+            return "done", string.format("%s了 %s%s", def.verb, j.data.label or "目标", tail)
+        end
+        if U.now() - j.data.phase_start > 120 then
+            return "fail", "work_failed: 干了 120 秒还没弄完（可能够不着或工具不对）"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+-- 分流：带 ctx.target（guard 解析好的 #N）走新路径；否则走下面的旧实现（reflex 用）。
+-- 和 pickup / harvest 完全同一个模式，避免把旧行为删掉。
+local function work_dispatch(kind)
+    return function(j, p)
+        local ctx = j.ctx or {}
+        if ctx.target ~= nil then return work_by_ref(j, p, ctx.target, kind) end
+        return job_work(j, p, kind:upper())
+    end
+end
+JOBS.chop = work_dispatch("chop")
+JOBS.mine = work_dispatch("mine")
+JOBS.dig = work_dispatch("dig")
+JOBS.hammer = work_dispatch("hammer")
+
+--- 攻击（attack = 打几下；kill = 打到死或超时）
+local function attack_by_ref(j, p, target, mode)
+    if target == nil or not target:IsValid() then
+        if j.data ~= nil and j.data.pushed ~= nil then
+            return "done", string.format("打倒了 %s", j.data.label or "目标")
+        end
+        return "fail", "entity_gone: 目标已经不存在了"
+    end
+    local health = target.components ~= nil and target.components.health or nil
+    if health == nil then return "fail", "target_not_attackable: 这个东西打不了" end
+
+    if j.step == "start" then
+        j.data.target = target
+        j.data.label = U.pretty(target)
+        j.data.mode = mode
+        j.data.hits = 0
+        j.data.want = mode == "kill" and 999 or (tonumber(j.ctx and j.ctx.times) or 1)
+        j.data.phase_start = U.now()
+        j.step = "acting"
+    end
+
+    if j.step == "acting" then
+        local dead = false
+        pcall(function() dead = health:IsDead() end)
+        if dead or not target:IsValid() then
+            return "done", string.format("打倒了 %s（%d 下）", j.data.label or "目标", j.data.hits)
+        end
+        if j.data.hits >= j.data.want then
+            return "done", string.format("打了 %s %d 下（还没倒）", j.data.label or "目标", j.data.hits)
+        end
+        -- 自己的血太低就别硬打（保命优先，和 reflex 一个原则）
+        local hp = p.components ~= nil and p.components.health or nil
+        local pct = 1
+        if hp ~= nil then pcall(function() pct = hp:GetPercent() end) end
+        if pct ~= nil and pct < 0.25 then
+            return "fail", "low_health: 自己血不多了，先退（继续打会死）"
+        end
+        if busy(p) then
+            if U.now() - j.data.phase_start > 180 then return "fail", "attack_failed: 打了很久没结果" end
+            return "run"
+        end
+        push(p, BufferedAction(p, target, ACTIONS.ATTACK, nil))
+        j.data.hits = j.data.hits + 1
+        j.data.pushed = U.now()
+        if U.now() - j.data.phase_start > 180 then
+            return "fail", "attack_failed: 打了很久没结果"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+JOBS.attack = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.target == nil then return "fail", "attack 只能按 #N 引用调用" end
+    return attack_by_ref(j, p, ctx.target, "attack")
+end
+JOBS.kill = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.target == nil then return "fail", "kill 只能按 #N 引用调用" end
+    return attack_by_ref(j, p, ctx.target, "kill")
+end
+
+--- 丢掉背包里的东西（新路径：核对背包真的少了；旧路径保持不变）
+local function drop_by_ref(j, p, item_name)
+    if j.step == "start" then
+        local want = item_name
+        if want == nil or want == "" then return "fail", "drop 要传 item" end
+        local item = U.find_item(p, want)
+        if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(want) end
+        local inv = p.components ~= nil and p.components.inventory or nil
+        if inv == nil then return "fail", "no_inventory" end
+        j.data.prefab = tostring(item.prefab)
+        j.data.before = snapshot_counts(p)
+        local ok, err = pcall(function() inv:DropItem(item) end)
+        if not ok then return "fail", "drop_failed: " .. tostring(err) end
+        j.step = "acting"
+        j.data.phase_start = U.now()
+        return "run"
+    end
+    if j.step == "acting" then
+        local after = snapshot_counts(p)
+        local lost = (j.data.before[j.data.prefab] or 0) - (after[j.data.prefab] or 0)
+        if lost > 0 then
+            return "done", string.format("丢掉了 %s×%d", j.data.prefab, lost)
+        end
+        if U.now() - j.data.phase_start > 5 then
+            return "fail", "drop_failed: 背包里数量没变"
         end
         return "run"
     end

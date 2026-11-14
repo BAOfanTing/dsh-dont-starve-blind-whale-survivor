@@ -89,14 +89,15 @@ test('tools/list 只暴露 3 个本地工具 + 8 个白名单动作，且名字�
   const names = body.result.tools.map((tool) => tool.name)
   // SURVIVAL-01：新增 gather / eat / craft / equip（7 → 11）
   for (const want of ['get_state', 'get_guide', 'update_notes', 'move_to', 'stop', 'pickup', 'harvest',
-    'gather', 'eat', 'craft', 'equip', 'gather_area', 'seek']) {
+    'gather', 'eat', 'craft', 'equip', 'gather_area', 'seek',
+    'chop', 'mine', 'dig', 'hammer', 'attack', 'kill', 'wait', 'drop']) {
     assert.ok(names.includes(want), `缺少工具 ${want}`)
   }
   assert.equal(names.length, toolList().length)
-  assert.equal(names.length, 13, '模型可见工具应该是 13 个（SURVIVAL-02 加了 gather_area/seek）')
+  assert.equal(names.length, 21, '模型可见工具应该是 21 个（SURVIVAL-03 加了 chop/mine/dig/hammer/attack/kill/wait/drop）')
   assert.equal(new Set(names).size, names.length, '工具名不能重复（M2.2.1 修过 pickup/harvest 重复注册）')
   // 未开放的动作不再出现在工具表里（模型只看见 dispatcher 白名单里的动作）
-  for (const gone of ['chop', 'mine', 'attack', 'build', 'heal', 'night_watch']) {
+  for (const gone of ['cook', 'build', 'fuel', 'use', 'night_watch']) {
     assert.ok(!names.includes(gone), `${gone} 没开放，不该出现在工具表里`)
   }
   await server.stop()
@@ -137,8 +138,9 @@ test('动作会被转给游戏，结果原样返回（走 SSE）；未开放的�
   assert.match(ok.result.content[0].text, /停了（stop）/)
 
   // 未开放动作：工具表里没有它，调用直接被拒，而且绝不许进游戏
+  // SURVIVAL-03：chop 已开放，换成仍然未开放的 cook
   const before = game.commands.length
-  const closed = await rpc(url, 'tools/call', { name: 'chop', arguments: { count: 1 } })
+  const closed = await rpc(url, 'tools/call', { name: 'cook', arguments: {} })
   assert.match(closed.result.content[0].text, /没有这个工具/)
   assert.equal(game.commands.length, before, '被拒的动作不该写进游戏命令')
 
