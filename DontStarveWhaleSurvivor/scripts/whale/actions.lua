@@ -1219,7 +1219,12 @@ function job_build(j, p)
     if busy(p) and U.now() - j.data.phase_start < 60 then return "run" end
     return "done", string.format("在 (%d,%d) 摆了 %s", j.data.tx, j.data.tz, j.data.key)
 end
-JOBS.build = job_build
+-- 分流：带 ctx.survival_build 走新路径；否则走旧实现（reflex 用）
+JOBS.build = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.survival_build == true then return build_by_ctx(j, p) end
+    return job_build(j, p)
+end
 
 JOBS.make_fire = function(j, p)
     j.args = j.args or {}
@@ -2861,6 +2866,224 @@ JOBS.cook = function(j, p)
         return "run"
     end
     return "run"
+end
+
+-- ═══════════════ SURVIVAL-06：建造 / 查询 ═══════════════
+
+--- 能放到地上的建筑白名单（和 craftrules 一样：必须以游戏脚本里的真实配方为准）
+local BUILD_ALLOWED = {
+    campfire = true,      -- 营火：2 草 + 3 树枝，TECH.NONE
+    firepit = true,       -- 石头火坑：2 石头 + 12 木头，TECH.NONE
+    chest = true,         -- 箱子：3 木板，TECH.NONE
+    cookpot = true,       -- 锅：3 木炭 + 6 树枝 + 6 石头，TECH.SCIENCE_ONE
+    sciencemachine = true,-- 科学机器：4 木板 + 4 石头 + 1 金块，TECH.NONE
+}
+
+--- 放在地上：选点 → MakeRecipe → 用"附近同 prefab 数量变多"确认
+local function build_by_ctx(j, p)
+    local ctx = j.ctx or {}
+    local name = tostring(ctx.build_recipe or "")
+    if name == "" then return "fail", "build 需要 recipe" end
+    if BUILD_ALLOWED[name] ~= true then
+        return "fail", "recipe_not_allowed: 只能建 " .. "campfire/firepit/chest/cookpot/sciencemachine"
+    end
+    local builder = p.components ~= nil and p.components.builder or nil
+    if builder == nil then return "fail", "no_builder: 这个角色不能制作" end
+
+    -- 附近这个 prefab 现在有几个（用来判断"我真的放下去了一个"）
+    local function count_near(x, z)
+        if x == nil then return 0 end
+        local n = 0
+        local list = U.find_all(p, 12, nil, nil, function(e)
+            return e ~= nil and e.prefab == name
+        end)
+        for _, entry in ipairs(list or {}) do
+            local e = entry.ent or entry
+            if e ~= nil and e:IsValid() then n = n + 1 end
+        end
+        return n
+    end
+
+    if j.step == "start" then
+        local recipe = recipe_of(name)
+        if recipe == nil then return "fail", "unknown_recipe: 游戏里没有 " .. name end
+        if recipe.placer == nil then return "fail", "not_placeable: " .. name .. " 不是能放到地上的建筑" end
+        j.data.recipe = recipe
+        j.data.name = name
+        j.data.before_count = count_near(1, 1)
+        j.data.phase_start = U.now()
+        j.data.tried = 0
+        j.step = "place"
+        return "run"
+    end
+
+    if j.step == "place" then
+        -- ① 已经排上队：等建筑真的出现在地上
+        if j.data.pending then
+            if count_near(1, 1) > j.data.before_count then
+                return "done", string.format("把 %s 放下了", name)
+            end
+            if U.now() - (j.data.pushed_at or U.now()) > 8 then
+                j.data.pending = false
+                j.data.spot = nil   -- 这个点放不下，换点再试
+            else
+                return "run"
+            end
+        end
+
+        -- ② 材料 / 科技
+        local can = U.try(function() return builder:CanBuild(j.data.recipe.name) end)
+        if not can then
+            local missing = missing_ingredients(p, j.data.recipe)
+            if #missing > 0 then return "fail", "ingredients_missing: " .. table.concat(missing, "、") end
+            return "fail", "cannot_build: 造不了 " .. name .. "（科技不够？）"
+        end
+
+        -- ③ 选点：脚边 9 个候选里第一个放得下的
+        if j.data.spot == nil then
+            local px, _, pz = U.pos(p)
+            if px == nil then return "fail", "no_position" end
+            if j.data.spots == nil then
+                local offsets = {
+                    { 0, 1.6 }, { 1.6, 0 }, { -1.6, 0 }, { 0, -1.6 },
+                    { 1.2, 1.2 }, { -1.2, 1.2 }, { 1.2, -1.2 }, { -1.2, -1.2 }, { 0, 0 },
+                }
+                j.data.spots = {}
+                for _, o in ipairs(offsets) do
+                    j.data.spots[#j.data.spots + 1] = { px + o[1] * 4 * 0.4, pz + o[2] * 4 * 0.4 }
+                end
+            end
+            j.data.tried = (j.data.tried or 0) + 1
+            if j.data.tried > #j.data.spots then
+                return "fail", "no_space: 附近没有能放下 " .. name .. " 的空地"
+            end
+            j.data.spot = j.data.spots[j.data.tried]
+        end
+
+        -- ④ 排队（放下要走 BUILD 动作，等它演完；由 ① 确认）
+        j.data.before_count = count_near(1, 1)
+        local called, queued = pcall(function()
+            return builder:MakeRecipe(j.data.recipe, Vector3(j.data.spot[1], 0, j.data.spot[2]), 0, nil)
+        end)
+        if called ~= true or queued ~= true then
+            j.data.spot = nil
+            return "run"
+        end
+        j.data.pending = true
+        j.data.pushed_at = U.now()
+        return "run"
+    end
+    return "run"
+end
+
+--- 查配方（只读）：能做哪些、还差什么材料
+JOBS.recipes = function(j, p)
+    local ctx = j.ctx or {}
+    local want = ctx.recipe_filter
+    local builder = p.components ~= nil and p.components.builder or nil
+    if builder == nil then return "fail", "no_builder" end
+    local all = U.g("AllRecipes") or {}
+    local names = {}
+    for name in pairs(all) do names[#names + 1] = tostring(name) end
+    table.sort(names)
+    local lines = {}
+    local shown = 0
+    local limit = math.min(tonumber(ctx.limit) or 30, 60)
+    for _, name in ipairs(names) do
+        if want == nil or want == "" or string.find(name, tostring(want), 1, true) ~= nil then
+            local recipe = all[name]
+            if recipe ~= nil then
+                local can = U.try(function() return builder:CanBuild(name) end)
+                local knows = U.try(function() return builder:KnowsRecipe(name) end)
+                local missing = {}
+                if recipe.ingredients ~= nil then
+                    for _, ing in ipairs(recipe.ingredients) do
+                        local have = U.count(p, ing.type)
+                        if have < ing.amount then
+                            missing[#missing + 1] = string.format("%s %d/%d", ing.type, have, ing.amount)
+                        end
+                    end
+                end
+                local status = can and "✅能做" or (knows and ("差材料：" .. table.concat(missing, "，")) or "没解锁科技")
+                lines[#lines + 1] = string.format("%s：%s", name, status)
+                shown = shown + 1
+                if shown >= limit then break end
+            end
+        end
+    end
+    if #lines == 0 then
+        return "done", want ~= nil and ("没有匹配 " .. tostring(want) .. " 的配方") or "查不到配方"
+    end
+    return "done", string.format("配方（%d 个）：\n%s", #lines, table.concat(lines, "\n"))
+end
+
+--- 查游戏数据（只读）：某个 prefab 是什么、怎么做、能干什么
+JOBS.lookup = function(j, p)
+    local ctx = j.ctx or {}
+    local q = tostring(ctx.lookup_query or "")
+    if q == "" then return "fail", "lookup 需要 q" end
+    local lines = {}
+    -- ① 当作配方查
+    local recipe = recipe_of(q)
+    if recipe ~= nil then
+        local ing = {}
+        if recipe.ingredients ~= nil then
+            for _, i in ipairs(recipe.ingredients) do
+                ing[#ing + 1] = string.format("%s×%d", i.type, i.amount)
+            end
+        end
+        lines[#lines + 1] = string.format("配方 %s：%s", q, #ing > 0 and table.concat(ing, " + ") or "（无材料）")
+        if recipe.placer ~= nil then lines[#lines + 1] = "  可以放到地上" end
+    end
+    -- ② 当作物品查
+    local prefab = U.g("Prefabs") and U.g("Prefabs")[q] or nil
+    if prefab ~= nil then
+        lines[#lines + 1] = string.format("物品 %s：游戏里有这个 prefab", q)
+    end
+    -- ③ 当作可采集/可工作目标查
+    local info = {}
+    if U.g("ACTIONS") ~= nil then
+        local acts = {}
+        for name in pairs(U.g("ACTIONS")) do acts[#acts + 1] = tostring(name) end
+        table.sort(acts)
+        if #acts > 0 then
+            local picked = {}
+            for i = 1, math.min(#acts, 20) do picked[#picked + 1] = acts[i] end
+            lines[#lines + 1] = "游戏里的动作（前 20 个）：" .. table.concat(picked, "、")
+        end
+    end
+    if #lines == 0 then
+        return "done", string.format("没查到 %s（可能是中文名；试试英文 prefab 名）", q)
+    end
+    return "done", table.concat(lines, "\n")
+end
+
+--- 探测附近某个 prefab（只读）：不靠 get_state，直接看这一带有没有
+JOBS.probe = function(j, p)
+    local ctx = j.ctx or {}
+    local want = tostring(ctx.probe_prefab or "")
+    if want == "" then return "fail", "probe 需要 prefab" end
+    local radius = math.min(tonumber(ctx.probe_radius) or 16, 40)
+    local hits = {}
+    local list = U.find_all(p, radius, nil, nil, function(e)
+        return e ~= nil and e.prefab ~= nil and tostring(e.prefab) == want
+    end)
+    for _, entry in ipairs(list or {}) do
+        local e = entry.ent or entry
+        if e ~= nil and e:IsValid() then
+            local tx, tz = U.tile_of(e.Transform:GetWorldPosition())
+            hits[#hits + 1] = { tx = tx, tz = tz, dist = U.dist(p, e) }
+        end
+    end
+    table.sort(hits, function(a, b) return (a.dist or 999) < (b.dist or 999) end)
+    if #hits == 0 then
+        return "done", string.format("%d 格内没有 %s", radius, want)
+    end
+    local parts = {}
+    for i = 1, math.min(#hits, 8) do
+        parts[#parts + 1] = string.format("(%d,%d)%.0f格", hits[i].tx, hits[i].tz, (hits[i].dist or 0) / 4)
+    end
+    return "done", string.format("%d 格内有 %d 个 %s：%s", radius, #hits, want, table.concat(parts, "、"))
 end
 
 --- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable

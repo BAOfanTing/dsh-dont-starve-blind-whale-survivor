@@ -349,6 +349,37 @@ G.ACTIONS = {
             items = { type = "string", max_len = 120 },
         },
     },
+    -- ═══════════ SURVIVAL-06：建造 / 查询 ═══════════
+    build = {
+        risk = "R2",
+        required_components = { "locomotor", "builder" },
+        args = {
+            recipe = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+        },
+    },
+    recipes = {
+        risk = "R1",
+        required_components = { "builder" },
+        args = {
+            filter = { type = "string", pattern = "^[a-z_]*$", max_len = 32 },
+            limit = { type = "number", min = 1, max = 60, integer = true },
+        },
+    },
+    lookup = {
+        risk = "R1",
+        required_components = {},
+        args = {
+            q = { type = "string", max_len = 64, required = true },
+        },
+    },
+    probe = {
+        risk = "R1",
+        required_components = {},
+        args = {
+            prefab = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            radius = { type = "number", min = 4, max = 40 },
+        },
+    },
 }
 
 --- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
@@ -779,6 +810,16 @@ function G.validate(cmd)
         local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
         if inv == nil then return false, "missing_component:inventory", nil end
         if qr.FindInInventory(inv, item) == nil then return false, "not_in_inventory", nil end
+    end
+
+    -- ═══════════ SURVIVAL-06：build 的建筑白名单 ═══════════
+    if action == "build" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local BUILD_OK = { campfire = true, firepit = true, chest = true, cookpot = true, sciencemachine = true }
+        local want = cmd.args.recipe
+        if want == nil or BUILD_OK[tostring(want)] ~= true then
+            return false, "recipe_not_allowed", nil
+        end
     end
 
     -- ═══════════ SURVIVAL-05：container_* / give / cook 都要 #N 引用 ═══════════

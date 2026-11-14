@@ -136,7 +136,7 @@ test('S5-11：4 个工具的描述必须讲清用途与引用方式', () => {
 
 test('S5-12：仍然没有开放 build / recipes / lookup / probe', () => {
   const names = new Set(TOOLS.map((t) => t.name))
-  for (const bad of ['build', 'recipes', 'lookup', 'probe', 'sleep', 'act']) {
+  for (const bad of ['pick', 'act', 'heal', 'night_watch', 'store']) {
     assert.ok(!names.has(bad), `${bad} 不该出现（本批没开放）`)
   }
 })

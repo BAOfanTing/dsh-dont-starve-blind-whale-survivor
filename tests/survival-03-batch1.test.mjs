@@ -171,8 +171,8 @@ test('S3-14：8 个新工具的描述必须讲清"要 #N + 快照 ID"或用途',
 
 test('S3-15：仍然没有开放建造/烹饪/存箱（避免顺手扩太多）', () => {
   const names = new Set(TOOLS.map((t) => t.name))
-  // SURVIVAL-05：container_*/give/cook 已开放，只查仍未开放的
-  for (const bad of ['build', 'recipes', 'lookup', 'probe', 'sleep']) {
+  // SURVIVAL-06：只查这些从来不存在/不该有的
+  for (const bad of ['pick', 'act', 'heal', 'night_watch', 'store']) {
     assert.ok(!names.has(bad), `${bad} 不该出现（本批没开放）`)
   }
 })

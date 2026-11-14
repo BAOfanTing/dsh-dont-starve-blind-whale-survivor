@@ -659,7 +659,7 @@ test('harvest-27 Harvest 与 Pickup 边界：不自动接续、不换目标、�
 
 test('harvest-28 回归：move_to / stop / pickup 语义未变，白名单只多了一个 harvest', async () => {
   const { OPEN_ACTIONS, ACTION_SPECS, validateArgs } = await import('../lib/dispatcher.js')
-  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'chop', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'inspect', 'kill', 'mine', 'move_to', 'pickup', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
+  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'inspect', 'kill', 'lookup', 'mine', 'move_to', 'pickup', 'probe', 'recipes', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
   assert.equal(validateArgs(ACTION_SPECS.move_to, { x: 1, z: 2 }).ok, true)
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
   assert.deepEqual(ACTION_SPECS.pickup.args.target_ref.pattern, '^#[0-9]{1,4}$')

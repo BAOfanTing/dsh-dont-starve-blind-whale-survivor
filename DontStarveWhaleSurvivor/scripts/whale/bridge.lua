@@ -318,6 +318,13 @@ local function handle_command(json_text)
             -- SURVIVAL-05
             count = cmd.args ~= nil and cmd.args.count or nil,
             cook_items = cmd.args ~= nil and cmd.args.items or nil,
+            -- SURVIVAL-06
+            survival_build = (action == "build") or nil,
+            build_recipe = cmd.args ~= nil and cmd.args.recipe or nil,
+            recipe_filter = cmd.args ~= nil and cmd.args.filter or nil,
+            lookup_query = cmd.args ~= nil and cmd.args.q or nil,
+            probe_prefab = cmd.args ~= nil and cmd.args.prefab or nil,
+            probe_radius = cmd.args ~= nil and cmd.args.radius or nil,
         }
     )
     if not started then

@@ -136,7 +136,8 @@ test('guard-1 合法命令通过（权威租约齐全且精确匹配）', async 
 
 test('guard-2 协议版本不对 → bad_protocol', () => expectReject(cmd({ protocol_version: 2 }), 'bad_protocol'))
 test('guard-3 没有 command_id → missing_command_id', () => expectReject(cmd({ command_id: '' }), 'missing_command_id'))
-test('guard-4 动作不在白名单 → action_not_allowed', () => expectReject(cmd({ action: 'build' }), 'action_not_allowed'))
+// SURVIVAL-06：build 已开放，换成确实不存在的动作名
+test('guard-4 动作不在白名单 → action_not_allowed', () => expectReject(cmd({ action: 'night_watch' }), 'action_not_allowed'))
 test('guard-5 命令过期 → command_expired', () => expectReject(cmd({ expires_at: 1 }), 'command_expired'))
 test('guard-6 没有有效期 → missing_expiry', () => expectReject(cmd({ expires_at: null }), 'missing_expiry'))
 
