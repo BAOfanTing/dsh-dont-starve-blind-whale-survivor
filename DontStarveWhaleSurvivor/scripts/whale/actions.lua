@@ -2626,6 +2626,243 @@ JOBS.inspect = function(j, p)
     return "done", table.concat(lines, "；")
 end
 
+-- ═══════════════ SURVIVAL-05：容器 / 给予 / 烹饪 ═══════════════
+
+--- 从容器里拿东西 / 往容器里放东西（共用一套逻辑）
+local function container_by_ref(j, p, box, take, item_name, count)
+    if box == nil or not box:IsValid() then return "fail", "entity_gone: 容器已经没了" end
+    local container = box.components ~= nil and box.components.container or nil
+    if container == nil then return "fail", "target_not_container: 这个东西不是容器" end
+    local inv = p.components ~= nil and p.components.inventory or nil
+    if inv == nil then return "fail", "no_inventory" end
+
+    if j.step == "start" then
+        j.data.label = U.pretty(box)
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        if take then
+            -- 从容器里拿：按名字找，没指定就拿第一个
+            local entries = {}
+            pcall(function()
+                local items = container:GetItems()
+                for _, item in ipairs(items or {}) do
+                    if item ~= nil and item:IsValid() then
+                        entries[#entries + 1] = {
+                            item = item,
+                            prefab = tostring(item.prefab),
+                            count = U.count(item),
+                        }
+                    end
+                end
+            end)
+            if #entries == 0 then return "fail", "container_empty: 箱子是空的" end
+            local picked = nil
+            if item_name ~= nil and item_name ~= "" then
+                for _, e in ipairs(entries) do
+                    if e.prefab == tostring(item_name) then picked = e break end
+                end
+                if picked == nil then
+                    return "fail", "not_in_container: 箱子里没有 " .. tostring(item_name)
+                end
+            else
+                picked = entries[1]
+            end
+            j.data.prefab = picked.prefab
+            local want = math.min(tonumber(count) or picked.count, picked.count)
+            j.data.want = want
+            local ok = pcall(function()
+                container:RemoveItem(picked.item, true)
+                inv:GiveItem(picked.item, nil, p:GetPosition())
+            end)
+            if not ok then return "fail", "container_take_failed" end
+            j.step = "acting"
+            return "run"
+        end
+        -- 往容器里放
+        if item_name == nil or item_name == "" then return "fail", "container_put 需要 item" end
+        local item = U.find_item(p, item_name)
+        if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(item_name) end
+        j.data.prefab = tostring(item.prefab)
+        local ok = pcall(function() container:GiveItem(item, nil, p:GetPosition()) end)
+        if not ok then return "fail", "container_put_failed" end
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local after = snapshot_counts(p)
+        local before = j.data.before[j.data.prefab] or 0
+        local now = after[j.data.prefab] or 0
+        local delta = now - before
+        if take and delta > 0 then
+            return "done", string.format("从 %s 拿出了 %s×%d", j.data.label, j.data.prefab, delta)
+        end
+        if (not take) and delta < 0 then
+            return "done", string.format("把 %s×%d 放进了 %s", j.data.prefab, -delta, j.data.label)
+        end
+        if U.now() - j.data.phase_start > 8 then
+            return "fail", string.format("%s_failed: 背包里 %s 的数量没变", take and "container_take" or "container_put", j.data.prefab)
+        end
+        return "run"
+    end
+    return "run"
+end
+
+JOBS.container_take = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.target == nil then return "fail", "container_take 只能按 #N 引用调用" end
+    return container_by_ref(j, p, ctx.target, true, ctx.item, ctx.count)
+end
+JOBS.container_put = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.target == nil then return "fail", "container_put 只能按 #N 引用调用" end
+    return container_by_ref(j, p, ctx.target, false, ctx.item, ctx.count)
+end
+
+--- 把背包里的东西给某个目标（猪人、鸟、队友…）
+JOBS.give = function(j, p)
+    local ctx = j.ctx or {}
+    local target = ctx.target
+    if target == nil then return "fail", "give 只能按 #N 引用调用" end
+    if not target:IsValid() then return "fail", "entity_gone: 目标已经没了" end
+
+    if j.step == "start" then
+        local want = ctx.item
+        if want == nil or want == "" then return "fail", "give 需要 item" end
+        local item = U.find_item(p, want)
+        if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(want) end
+        j.data.prefab = tostring(item.prefab)
+        j.data.label = U.pretty(target)
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        push(p, BufferedAction(p, target, ACTIONS.GIVE, item))
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local after = snapshot_counts(p)
+        local used = (j.data.before[j.data.prefab] or 0) - (after[j.data.prefab] or 0)
+        if used > 0 then
+            return "done", string.format("把 %s×%d 给了 %s", j.data.prefab, used, j.data.label)
+        end
+        if U.now() - j.data.phase_start > 10 then
+            return "fail", "give_failed: 东西还在背包里（它可能不要这个）"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+--- 锅：放材料进去开始煮；已经煮好就拿出来
+JOBS.cook = function(j, p)
+    local ctx = j.ctx or {}
+    local pot = ctx.target
+    if pot == nil then return "fail", "cook 只能按 #N 引用调用" end
+    if not pot:IsValid() then return "fail", "entity_gone: 锅已经没了" end
+    local stewer = pot.components ~= nil and pot.components.stewer or nil
+    local container = pot.components ~= nil and pot.components.container or nil
+    if stewer == nil and container == nil then
+        return "fail", "target_not_cookpot: 那不是锅（cookpot 要先在科学机器旁造出来）"
+    end
+
+    if j.step == "start" then
+        j.data.label = U.pretty(pot)
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        -- ① 已经煮好 → 拿出来
+        if stewer ~= nil then
+            local done = false
+            pcall(function() done = stewer:IsDone() end)
+            if done then
+                local ok = pcall(function() stewer:Harvest(p) end)
+                if not ok then return "fail", "cook_harvest_failed" end
+                j.data.action = "harvest"
+                j.step = "acting"
+                return "run"
+            end
+            local cooking = false
+            pcall(function() cooking = stewer:IsCooking() end)
+            if cooking then
+                local left = 0
+                pcall(function() left = stewer:GetTimeToCook() or 0 end)
+                return "done", string.format("锅里已经在煮了（还有 %d 秒），等一会儿再来拿", math.floor(left))
+            end
+        end
+        -- ② 没在煮 → 放材料
+        local want = ctx.cook_items
+        local list = {}
+        if want ~= nil and tostring(want) ~= "" then
+            for name in string.gmatch(tostring(want), "[^,%s]+") do
+                local item = U.find_item(p, name)
+                if item ~= nil then list[#list + 1] = item end
+                if #list >= 4 then break end
+            end
+        else
+            -- 自动挑：带 cookable 的肉/菜
+            local inv = p.components ~= nil and p.components.inventory or nil
+            if inv ~= nil then
+                pcall(function()
+                    inv:ForEachItem(function(item)
+                        if #list >= 4 then return end
+                        if item == nil or not item:IsValid() then return end
+                        local cookable = item.components ~= nil and item.components.cookable or nil
+                        if cookable == nil then return end
+                        local meat = item:HasTag("meat")
+                        local veggie = item:HasTag("veggie")
+                        if meat or veggie then list[#list + 1] = item end
+                    end)
+                end)
+            end
+        end
+        if #list == 0 then return "fail", "no_ingredients: 背包里没有能下锅的材料" end
+        local added = 0
+        for _, item in ipairs(list) do
+            if item:IsValid() and container ~= nil then
+                local ok = pcall(function() container:GiveItem(item, nil, pot:GetPosition()) end)
+                if ok then added = added + 1 end
+            end
+        end
+        if added == 0 then return "fail", "cook_put_failed: 材料放不进锅里（锅满了？）" end
+        if stewer ~= nil then pcall(function() stewer:StartCooking(p) end) end
+        j.data.added = added
+        j.data.action = "put"
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local after = snapshot_counts(p)
+        if j.data.action == "put" then
+            -- 放材料：背包里这些东西应该少了
+            local lost = 0
+            for prefab, n in pairs(j.data.before) do
+                local d = n - (after[prefab] or 0)
+                if d > 0 then lost = lost + d end
+            end
+            if lost > 0 then
+                return "done", string.format("往锅里放了 %d 样材料，开始煮了（等 40 秒左右再来拿）", j.data.added)
+            end
+            if U.now() - j.data.phase_start > 10 then
+                return "fail", "cook_put_failed: 材料没进锅"
+            end
+            return "run"
+        end
+        -- 拿成品：背包里应该多了东西
+        local gained = 0
+        for prefab, n in pairs(after) do
+            local d = n - (j.data.before[prefab] or 0)
+            if d > 0 then gained = gained + d end
+        end
+        if gained > 0 then return "done", "锅里的东西做好了，已经拿出来" end
+        if U.now() - j.data.phase_start > 10 then
+            return "fail", "cook_harvest_failed: 没拿到东西"
+        end
+        return "run"
+    end
+    return "run"
+end
+
 --- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable
 JOBS.harvest = function(j, p)
     -- M2.3：带 ctx.target 时走"按 #N 收获"的新路径（只认 guard 解析出来的真实实体，

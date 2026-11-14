@@ -48,13 +48,13 @@ test('模型可见的动作 === dispatcher 白名单（不多不少）', () => {
   assert.deepEqual([...EXPOSED].sort(), [...OPEN_ACTIONS].sort(),
     '工具表暴露的动作必须和 dispatcher 放行的白名单完全一致')
   // SURVIVAL-01：新增 gather / eat / craft / equip
-  assert.deepEqual([...EXPOSED].sort(), ['attack', 'chop', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'hammer', 'harvest', 'inspect', 'kill', 'mine', 'move_to', 'pickup', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
+  assert.deepEqual([...EXPOSED].sort(), ['attack', 'chop', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'inspect', 'kill', 'mine', 'move_to', 'pickup', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
 })
 
 test('未开放的动作一律不在工具表里（模型看不到，也就不会去点）', () => {
   // SURVIVAL-01：gather / eat / craft / equip 已开放，从"未开放"名单里移除
-  // SURVIVAL-04：fuel/use/inspect/unequip/say 已开放
-  const forbidden = ['pick', 'cook', 'build', 'make_fire', 'add_fuel', 'heal',
+  // SURVIVAL-05：container_*/give/cook 已开放
+  const forbidden = ['pick', 'build', 'make_fire', 'add_fuel', 'heal',
     'sleep', 'act', 'list_actions', 'list_recipes', 'store', 'take', 'go_to',
     'chop_until', 'cook_meal', 'night_watch']
   const leaked = forbidden.filter((n) => EXPOSED.has(n))
@@ -95,7 +95,7 @@ test('未开放的动作：调用直接被拒（抛错），而且一条命令�
       call: async (name, args) => { calls.push({ name, args }); return { ok: true, text: '好了' } },
     },
   }
-  for (const name of ['pick', 'cook', 'build', 'give', 'heal', 'night_watch']) {
+  for (const name of ['pick', 'build', 'recipes', 'lookup', 'heal', 'night_watch']) {
     await assert.rejects(
       () => executeTool(name, { count: 1 }, ctx),
       /没有这个工具/,

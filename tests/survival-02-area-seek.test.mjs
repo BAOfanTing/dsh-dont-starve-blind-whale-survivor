@@ -108,8 +108,8 @@ test('S2-8：两个新工具的描述必须讲清"省调用次数"和"不自动�
 
 test('S2-9：白名单扩容后仍然没有泄漏旧动作（chop/mine/attack 依然不可见）', () => {
   const names = new Set(TOOLS.map((t) => t.name))
-  // SURVIVAL-04：fuel/use 已开放，这里只查仍然未开放的
-  for (const bad of ['cook', 'build', 'give', 'container_take', 'recipes']) {
+  // SURVIVAL-05：container_*/give/cook 已开放，只查仍未开放的
+  for (const bad of ['build', 'recipes', 'lookup', 'probe', 'sleep']) {
     assert.ok(!names.has(bad), `${bad} 不该出现在工具表里`)
   }
 })

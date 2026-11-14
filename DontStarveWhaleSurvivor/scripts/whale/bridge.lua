@@ -315,6 +315,9 @@ local function handle_command(json_text)
             text = cmd.args ~= nil and cmd.args.text or nil,
             fuel_item = cmd.args ~= nil and cmd.args.item or nil,
             use_action = cmd.args ~= nil and cmd.args.action or nil,
+            -- SURVIVAL-05
+            count = cmd.args ~= nil and cmd.args.count or nil,
+            cook_items = cmd.args ~= nil and cmd.args.items or nil,
         }
     )
     if not started then

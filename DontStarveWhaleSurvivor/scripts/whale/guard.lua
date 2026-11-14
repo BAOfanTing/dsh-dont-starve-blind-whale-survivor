@@ -311,6 +311,44 @@ G.ACTIONS = {
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
+    -- ═══════════ SURVIVAL-05：容器 / 给予 / 烹饪 ═══════════
+    container_take = {
+        risk = "R2",
+        required_components = { "locomotor", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+            count = { type = "number", min = 1, max = 40, integer = true },
+        },
+    },
+    container_put = {
+        risk = "R2",
+        required_components = { "locomotor", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+        },
+    },
+    give = {
+        risk = "R2",
+        required_components = { "locomotor", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+        },
+    },
+    cook = {
+        risk = "R2",
+        required_components = { "locomotor", "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            items = { type = "string", max_len = 120 },
+        },
+    },
 }
 
 --- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
@@ -741,6 +779,30 @@ function G.validate(cmd)
         local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
         if inv == nil then return false, "missing_component:inventory", nil end
         if qr.FindInInventory(inv, item) == nil then return false, "not_in_inventory", nil end
+    end
+
+    -- ═══════════ SURVIVAL-05：container_* / give / cook 都要 #N 引用 ═══════════
+    if action == "container_take" or action == "container_put" or action == "give" or action == "cook" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local snapshot_id = tostring(cmd.args.snapshot_id)
+        local ref = tostring(cmd.args.target_ref)
+        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        if ent == nil then return false, why_t or "unknown_ref", nil end
+        if action == "container_take" or action == "container_put" then
+            if ent.components == nil or ent.components.container == nil then
+                return false, "target_not_container", nil
+            end
+        end
+        if action == "cook" then
+            local has_stewer = ent.components ~= nil and ent.components.stewer ~= nil
+            local has_container = ent.components ~= nil and ent.components.container ~= nil
+            if not has_stewer and not has_container then
+                return false, "target_not_cookpot", nil
+            end
+        end
+        local d = U.dist(actor, ent)
+        if d ~= nil and d > 4 * 4 then return false, "out_of_range", nil end
+        target = ent
     end
 
     -- ═══════════ SURVIVAL-04：fuel / use / inspect 都要 #N 引用 ═══════════
