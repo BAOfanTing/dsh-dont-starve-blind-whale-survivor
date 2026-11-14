@@ -23,7 +23,8 @@
   },
   "scripts": {
     "build:client": "node tools/build-client.mjs",
-    "test": "node --test --test-force-exit \"tests/*.test.mjs\""
+    "test": "node --test --test-force-exit \"tests/*.test.mjs\"",
+    "record": "node tools/session-recorder.mjs"
   },
   "files": [
     "lib",

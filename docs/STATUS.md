@@ -91,7 +91,7 @@
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
-| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（566/566）；RUNTIME 见 §4.6 | 本节 §4.6 |
+| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（573/573）；RUNTIME 见 §4.6 | 本节 §4.6 |
 
 ---
 
@@ -312,7 +312,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 
 #### 4.6.4 自动化测试
 
-`node --test tests/*.test.mjs` → **566 passed / 0 failed**（基线 535 + 新增 31）。
+`node --test tests/*.test.mjs` → **573 passed / 0 failed**（基线 535 + 新增 38）。
 新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
 
 | 要求 | 用例 |
@@ -339,6 +339,10 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 真机补测追加 4 条回归（0.32.1 / 0.32.2）：
 RF-17（附近没草时要去采能采到的树苗）、RF-18（诊断限频且不污染 get_state 提示）、
 RF-19（torch 用 `fueled`，烧空了不算可用光源）、RF-20（制作结果用独立 section，不被限频吞掉）。
+
+另有 **REC-1..7**（`tests/session-recorder.test.mjs`）覆盖旁路会话记录器：
+KLEI 头、命令/回执/状态/反射/死亡入时间线、按 id 去重、日志增量与截断、`--from-start`、
+以及"记录器绝不改写桥文件"这条硬约束。记录器用法见 `docs/TESTING.md` §6.9。
 
 #### 4.6.5 真实游戏验证（RUNTIME）
 
