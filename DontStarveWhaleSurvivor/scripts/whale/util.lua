@@ -12,6 +12,18 @@ local U = {}
 
 U.TILE = 4 -- 饥荒一格是 4 个世界单位
 
+--- 安全调用：出错就返回 default（默认 nil）。
+--- 为什么需要它：模组沙箱里游戏 API 随时可能不存在（不同构建差异很大），
+--- 直接调会让整个动作崩掉。真机教训：actions.lua 里有 9 处调 U.try，
+--- 但这版 util 重写时漏了它 —— 于是 builder:CanBuild 那条路一走到就
+--- "attempt to call a nil value (field 'try')"（recipes / lookup 都崩在这）。
+function U.try(fn, default)
+    if type(fn) ~= "function" then return default end
+    local ok, value = pcall(fn)
+    if ok then return value end
+    return default
+end
+
 function U.world()
     return GLOBAL.TheWorld
 end

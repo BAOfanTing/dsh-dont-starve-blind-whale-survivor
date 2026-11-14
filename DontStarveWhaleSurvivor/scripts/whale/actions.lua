@@ -2036,6 +2036,8 @@ JOBS.gather_area = function(j, p)
         j.data.products = {}
         j.data.before = snapshot_counts(p)
         j.data.t0 = U.now()
+        -- 内部预算：外层给多少就用多少（再留 5 秒自己收尾）。没给就保守取 45 秒。
+        j.data.budget = math.max(10, (tonumber(ctx.budget_s) or 50) - 5)
         j.step = "next"
     end
 
@@ -2043,7 +2045,7 @@ JOBS.gather_area = function(j, p)
         if j.data.count >= j.data.limit then
             return "done", area_summary(j.data.count, j.data.products, j.data.failed)
         end
-        if U.now() - j.data.t0 > 240 then
+        if U.now() - j.data.t0 > (j.data.budget or 45) then
             local text = area_summary(j.data.count, j.data.products, j.data.failed) .. "（时间到，先停）"
             if j.data.count == 0 then return "fail", "gather_area_failed: " .. text end
             return "done", text
@@ -2218,6 +2220,7 @@ JOBS.seek = function(j, p)
         end
         j.data.index = 0
         j.data.t0 = U.now()
+        j.data.budget = math.max(10, (tonumber(ctx.budget_s) or 50) - 5)
         j.step = "look"
     end
 
@@ -2247,7 +2250,7 @@ JOBS.seek = function(j, p)
                 #hits, j.data.want, table.concat(names, "、"))
         end
         j.data.index = j.data.index + 1
-        if j.data.index > #j.data.plan or U.now() - j.data.t0 > 180 then
+        if j.data.index > #j.data.plan or U.now() - j.data.t0 > (j.data.budget or 45) then
             return "fail", string.format("从 (%d,%d) 往外走了约 %d 格也没看到 %s（换个方向再 seek，或者改找别的）",
                 U.tile_of(j.data.origin[1], j.data.origin[2]), j.data.max_tiles, j.data.want)
         end
@@ -2331,7 +2334,7 @@ local function work_by_ref(j, p, target, kind)
         j.data.before = snapshot_counts(p)
         j.data.phase_start = U.now()
         -- 工具检查（没有就明确说，别推一条注定失败的动作）
-        local tool = U.best_tool(p, action)
+        local tool = best_tool(p, action)
         if tool == nil then
             return "fail", string.format("no_tool: 背包里没有能%s的工具，先 craft %s", def.verb, def.tool)
         end
@@ -2559,7 +2562,7 @@ JOBS.fuel = function(j, p)
             item = U.find_item(p, want)
             if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(want) end
         else
-            item = U.best_fuel(p, 3)
+            item = best_fuel(p, 3)
             if item == nil then return "fail", "no_fuel: 背包里没有能烧的东西（木头、草、树枝都行）" end
         end
         j.data.fuel = item
@@ -3037,45 +3040,66 @@ local function build_by_ctx(j, p)
     return "run"
 end
 
+--- 材料清单文案：把配方的材料 + 玩家现有数量一起写出来
+--- 返回 (ingredients_text, missing_text)
+local function recipe_cost_text(recipe, counts)
+    local ings, missing = {}, {}
+    for _, ing in ipairs(recipe.ingredients or {}) do
+        -- ing.type 正常是字符串；有些配方用表表示"任选一种"，跳过（不猜）
+        if type(ing.type) == "string" then
+            local need = tonumber(ing.amount) or 1
+            local have = counts[ing.type] or 0
+            ings[#ings + 1] = string.format("%s×%d", ing.type, need)
+            if have < need then
+                missing[#missing + 1] = string.format("%s %d/%d", ing.type, have, need)
+            end
+        end
+    end
+    return table.concat(ings, " + "), table.concat(missing, "，")
+end
+
 --- 查配方（只读）：能做哪些、还差什么材料
 JOBS.recipes = function(j, p)
     local ctx = j.ctx or {}
     local want = ctx.recipe_filter
     local builder = p.components ~= nil and p.components.builder or nil
-    if builder == nil then return "fail", "no_builder" end
-    local all = U.g("AllRecipes") or {}
+    if builder == nil then return "fail", "no_builder: 这个角色不能制作" end
+    -- 游戏全局走 GLOBAL（不是 U.g —— 那个函数不存在，真机一调就崩）
+    local all = GLOBAL.AllRecipes or {}
+    local counts = (Whale.craftrules ~= nil and Whale.craftrules.Counts ~= nil)
+        and Whale.craftrules.Counts(p) or {}
     local names = {}
     for name in pairs(all) do names[#names + 1] = tostring(name) end
     table.sort(names)
+
     local lines = {}
-    local shown = 0
+    local shown, can_count = 0, 0
     local limit = math.min(tonumber(ctx.limit) or 30, 60)
     for _, name in ipairs(names) do
-        if want == nil or want == "" or string.find(name, tostring(want), 1, true) ~= nil then
-            local recipe = all[name]
-            if recipe ~= nil then
-                local can = U.try(function() return builder:CanBuild(name) end)
-                local knows = U.try(function() return builder:KnowsRecipe(name) end)
-                local missing = {}
-                if recipe.ingredients ~= nil then
-                    for _, ing in ipairs(recipe.ingredients) do
-                        local have = U.count(p, ing.type)
-                        if have < ing.amount then
-                            missing[#missing + 1] = string.format("%s %d/%d", ing.type, have, ing.amount)
-                        end
-                    end
-                end
-                local status = can and "✅能做" or (knows and ("差材料：" .. table.concat(missing, "，")) or "没解锁科技")
-                lines[#lines + 1] = string.format("%s：%s", name, status)
-                shown = shown + 1
-                if shown >= limit then break end
+        local recipe = all[name]
+        if recipe ~= nil and (want == nil or want == "" or string.find(name, tostring(want), 1, true) ~= nil) then
+            local can = U.try(function() return builder:CanBuild(name) end) == true
+            local knows = U.try(function() return builder:KnowsRecipe(name) end) == true
+            local cost, missing = recipe_cost_text(recipe, counts)
+            local status
+            if can then
+                status = "能做（" .. cost .. "）"
+                can_count = can_count + 1
+            elseif knows then
+                status = "差材料：" .. (missing ~= "" and missing or "（算不出来）") .. "；需要 " .. cost
+            else
+                status = "科技没解锁；需要 " .. cost
             end
+            lines[#lines + 1] = name .. "：" .. status
+            shown = shown + 1
+            if shown >= limit then break end
         end
     end
     if #lines == 0 then
-        return "done", want ~= nil and ("没有匹配 " .. tostring(want) .. " 的配方") or "查不到配方"
+        return "done", want ~= nil and ("没有匹配「" .. tostring(want) .. "」的配方") or "查不到配方"
     end
-    return "done", string.format("配方（%d 个）：\n%s", #lines, table.concat(lines, "\n"))
+    return "done", string.format("配方 %d 个（其中 %d 个现在就能做）：\n%s",
+        #lines, can_count, table.concat(lines, "\n"))
 end
 
 --- 查游戏数据（只读）：某个 prefab 是什么、怎么做、能干什么
@@ -3084,37 +3108,34 @@ JOBS.lookup = function(j, p)
     local q = tostring(ctx.lookup_query or "")
     if q == "" then return "fail", "lookup 需要 q" end
     local lines = {}
-    -- ① 当作配方查
+    local counts = (Whale.craftrules ~= nil and Whale.craftrules.Counts ~= nil)
+        and Whale.craftrules.Counts(p) or {}
+    local builder = p.components ~= nil and p.components.builder or nil
+
+    -- ① 当作配方查：材料 + 现在够不够 + 能不能造
     local recipe = recipe_of(q)
     if recipe ~= nil then
-        local ing = {}
-        if recipe.ingredients ~= nil then
-            for _, i in ipairs(recipe.ingredients) do
-                ing[#ing + 1] = string.format("%s×%d", i.type, i.amount)
+        local cost, missing = recipe_cost_text(recipe, counts)
+        lines[#lines + 1] = string.format("配方 %s：%s", q, cost ~= "" and cost or "（无材料）")
+        if builder ~= nil then
+            local can = U.try(function() return builder:CanBuild(q) end) == true
+            if can then
+                lines[#lines + 1] = "  现在就能做"
+            else
+                lines[#lines + 1] = "  还差：" .. (missing ~= "" and missing or "科技没解锁")
             end
         end
-        lines[#lines + 1] = string.format("配方 %s：%s", q, #ing > 0 and table.concat(ing, " + ") or "（无材料）")
-        if recipe.placer ~= nil then lines[#lines + 1] = "  可以放到地上" end
+        if recipe.placer ~= nil then lines[#lines + 1] = "  这是建筑，能放到地上（build）" end
     end
-    -- ② 当作物品查
-    local prefab = U.g("Prefabs") and U.g("Prefabs")[q] or nil
-    if prefab ~= nil then
-        lines[#lines + 1] = string.format("物品 %s：游戏里有这个 prefab", q)
-    end
-    -- ③ 当作可采集/可工作目标查
-    local info = {}
-    if U.g("ACTIONS") ~= nil then
-        local acts = {}
-        for name in pairs(U.g("ACTIONS")) do acts[#acts + 1] = tostring(name) end
-        table.sort(acts)
-        if #acts > 0 then
-            local picked = {}
-            for i = 1, math.min(#acts, 20) do picked[#picked + 1] = acts[i] end
-            lines[#lines + 1] = "游戏里的动作（前 20 个）：" .. table.concat(picked, "、")
-        end
+    -- ② 背包里有几个
+    local have = counts[q]
+    if have ~= nil then lines[#lines + 1] = string.format("你背包里有 %s×%d", q, have) end
+    -- ③ 是不是游戏里存在的 prefab（不问就说没有，别硬凑）
+    if GLOBAL.Prefabs ~= nil and GLOBAL.Prefabs[q] ~= nil then
+        lines[#lines + 1] = string.format("游戏里存在这个 prefab：%s", q)
     end
     if #lines == 0 then
-        return "done", string.format("没查到 %s（可能是中文名；试试英文 prefab 名）", q)
+        return "done", string.format("没查到 %s（用英文 prefab 名试试，比如 axe / log / cookpot）", q)
     end
     return "done", table.concat(lines, "\n")
 end
@@ -3330,6 +3351,8 @@ function A.Start(name, args, cmd_id, ctx)
         -- 不允许执行函数自己按 prefab 去搜目标。
         ctx = ctx or {},
         t0 = U.now(),
+        -- 外层给的预算（秒）。A.Tick 用它兜底：超了自己收尾，别被外层判成 result_timeout。
+        budget_s = ctx ~= nil and tonumber(ctx.budget_s) or nil,
     }
     -- 动作开始前拍背包快照（结束时用来算净变化）
     job.data.inv_before = snapshot_counts(p)
@@ -3365,6 +3388,16 @@ function A.Tick()
     end
     local fn = JOBS[j.name]
     local ok, status, text = pcall(fn, j, p)
+    -- ★ 通用预算兜底：外层等不了更久，超了就把控制权交回去、如实说"没做完"，
+    --   别让外层把整条命令判成 result_timeout（真机：gather_area 内部 240 秒、
+    --   外层 120 秒 → 必然超时，模型只看到"结果未知"，不知道该干嘛）。
+    if ok and status == "run" and j.budget_s ~= nil and j.t0 ~= nil then
+        if (U.now() - j.t0) > j.budget_s then
+            status = "fail"
+            text = string.format("budget_exceeded: 这一步用了 %d 秒还没完（上限 %d 秒），先停下。已经做了一部分，用 get_state 看现在的真实状态再决定下一步",
+                math.floor(U.now() - j.t0), math.floor(j.budget_s))
+        end
+    end
     if not ok then
         Whale.util.log("动作 " .. tostring(j.name) .. " 出错：" .. tostring(status))
         client_stop(p)

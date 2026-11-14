@@ -1092,3 +1092,138 @@ test('OBS2-5：gather_area 一个都没采到 → 报失败，不许报"做完�
   assert.match(text, /采了 0 个/, '失败文案要说清采了 0 个')
   assert.match(text, /not_ready|没成熟|够不着/, `失败文案要讲原因，实际：${text}`)
 })
+
+// ═══════════ SURVIVAL-08：recipes 崩溃 + 多步动作超预算 ═══════════
+
+test('S8-1：recipes 不再崩（真机是 U.g 不存在 → attempt to call field g）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run('NEARBY = {}', '附近空')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    -- 假 builder 默认没有 CanBuild（真机有）；这里补上，让"能做/差材料"两条路都走到
+    local p = GLOBAL.AllPlayers[1]
+    p.components.builder.CanBuild = function(self, name) return name == "torch" end
+    local ctx = { limit = 10 }
+    local started, err = Whale.actions.Start("recipes", { limit = 10 }, "c-recipes", ctx)
+    assert(started == true, "recipes 应该能开始：" .. tostring(err))
+    for i = 1, 10 do
+        if Whale.job == nil then break end
+        Whale.actions.Tick()
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
+  `)
+  assert.equal(global('OUT_OK'), 'true', `recipes 不该报错，实际：${global('OUT_TEXT')}`)
+  const text = String(global('OUT_TEXT'))
+  assert.match(text, /torch/, '应该列出 STUB 里的 torch 配方')
+  assert.match(text, /campfire/, '应该列出 campfire')
+  assert.match(text, /能做|差材料|科技/, '每条要带状态')
+  assert.ok(!/attempt to call/.test(text), '不许再出现 U.g 那种崩溃')
+})
+
+test('S8-2：lookup 也不崩，并且会说"还差什么材料"', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run('NEARBY = {}', '附近空')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    local p = GLOBAL.AllPlayers[1]
+    p.components.builder.CanBuild = function(self, name) return false end
+    local ctx = { lookup_query = "torch" }
+    Whale.actions.Start("lookup", { q = "torch" }, "c-lookup", ctx)
+    for i = 1, 10 do
+        if Whale.job == nil then break end
+        Whale.actions.Tick()
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
+  `)
+  assert.equal(global('OUT_OK'), 'true', `lookup 不该报错，实际：${global('OUT_TEXT')}`)
+  const text = String(global('OUT_TEXT'))
+  assert.match(text, /torch/, '要提到 torch')
+  assert.ok(!/attempt to call/.test(text), '不许出现崩溃')
+})
+
+test('S8-3：多步动作超过外层预算 → 自己收尾报 budget_exceeded，不许被砍成 result_timeout', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  // 目标在 20 格外：gather_area 会一直走，不会自然结束
+  run(`
+    FAR = mkent("berrybush", 91, 12 * 4 + 2 + 80, 45 * 4 + 2)
+    NEARBY = { FAR }
+  `, '远处放一丛浆果')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    PUSHED = nil
+    -- 注意：U.now() 只在 TheSim:GetTime() > 0 时才用它（否则回退到系统时钟）。
+    -- 所以先把 NOW 设成正数，后面推进它才有效 —— 否则测的是墙钟、推进 NOW 毫无作用。
+    NOW = 100
+    -- 外层只给 1 秒预算（真机是 120 秒外层 / 240 秒内层，必然被砍）
+    local ctx = { survival_area = true, radius = 12, limit = 3, budget_s = 1 }
+    Whale.actions.Start("gather_area", { radius = 12, limit = 3 }, "c-budget", ctx)
+    Whale.actions.Tick()          -- start → next → 走路
+    OUT_STILL_RUNNING = tostring(Whale.job ~= nil)
+    NOW = NOW + 5                 -- 假装过了 5 秒（超过 1 秒预算）
+    Whale.actions.Tick()          -- 这次必须被预算兜底截住
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
+    OUT_JOB_CLEARED = tostring(Whale.job == nil)
+  `)
+  assert.equal(global('OUT_STILL_RUNNING'), 'true', '第一步应该还在跑（走路中）')
+  assert.equal(global('OUT_OK'), 'false', '超预算必须报失败，不能报成功')
+  const text = String(global('OUT_TEXT'))
+  assert.match(text, /budget_exceeded/, `要说清是超预算，实际：${text}`)
+  assert.match(text, /上限 1 秒/, '要报出预算是多少')
+  assert.equal(global('OUT_JOB_CLEARED'), 'true', '报完必须把任务清掉，不能挂着')
+})
+
+test('S8-4：预算够用时不该误伤（正常做完就是成功）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  // 脚边一丛成熟浆果：一次就能采完
+  run(`
+    NEAR = mkent("berrybush", 92, 12 * 4 + 2 + 4, 45 * 4 + 2)
+    NEAR.components.pickable.CanBePicked = function() return true end
+    NEAR.components.pickable.Pick = function() end
+    NEARBY = { NEAR }
+  `, '脚边放一丛成熟浆果')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    PUSHED = nil
+    local ctx = { survival_area = true, radius = 12, limit = 1, budget_s = 60 }
+    Whale.actions.Start("gather_area", { radius = 12, limit = 1 }, "c-ok", ctx)
+    for i = 1, 40 do
+        if Whale.job == nil then break end
+        Whale.actions.Tick()
+        -- 采完之后 CanBePicked 变 false（模拟真机），推进状态机
+        if BUFFERED ~= nil or PUSHED ~= nil then
+            NEAR.components.pickable.CanBePicked = function() return false end
+        end
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
+  `)
+  const text = String(global('OUT_TEXT'))
+  assert.ok(!/budget_exceeded/.test(text), `预算充足时不该报超预算，实际：${text}`)
+})

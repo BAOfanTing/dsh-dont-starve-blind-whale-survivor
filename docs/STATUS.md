@@ -228,8 +228,11 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 | 11 | **HUD 写入偶发 `EPERM`** | `whale_hud.json` 的 temp→rename 偶尔失败（Windows/OneDrive 抢占），小窗短暂不刷新 | **间歇、自愈**（实测 1922 行日志里 1 次，下一周期成功）。属桥/ HUD 范围，本阶段只记录不改 |
 | 12 | **`m2_0_3_verify_move.mjs` 的 ⑤-3 会假报失败** | 它"ack 前后各读一次位置"，把状态帧里的一次 2 格跳变算成"Abort 后还在走" | **测量方式问题，不是产品问题**：`m2_0_3_verify_stop.mjs` 用逐帧去重采样，实测 Abort 后 6 帧位置不变 → **真的停住了**。本阶段**未改脚本** |
 | 13 | **`update_notes` 曾被归类为"只读"** | 文档误导：它是**覆盖写** `~/.dsh/plugins-data/…/notes.md` | **AGENT-01 已更正**（STATUS/ARCHITECTURE/TESTING + 测试注释）；实现未改 |
-| 15 | **`stale_snapshot` 的固有竞争** | 模型思考 3~5 秒、nearby 2 秒一刷，拿"刚看过的那一帧"时它往往已经过期 | 真机 20 次里发生 2 次（第 6、10 次 harvest）。**这是信息时效问题，不是 id 拿错**；`scan.age_ms` 已有但没渲染，见 `AGENT_01_1_report.md` §12 |
-| 14 | **`get_state` 只印 `快照 s<seq>`，不印 `nearby.snapshot_id`** | 真实模型照抄 `s1622` → `harvest` 必然 `stale_snapshot` | **AGENT-01 发现，未修**（属渲染层，见 `AGENT_01_report.md` §6 P1） |
+| 15 | ~~**`stale_snapshot` 的固有竞争**~~ **已修（0.25.0）** | 模型思考 3~5 秒、nearby 最多 1 秒一刷，拿"刚看过的那一帧"时它往往已经过期 | 根因是 **id 每秒就换**（`scan_seq` 每次重扫 +1），不是信息时效。修法：按**内容指纹**（GUID + 所在格）决定要不要换编号 —— 内容没变就复用，实体增删/移动立刻换新号、旧引用照样失效。真机证据 session-403656e9：15 步 5 次 stale_snapshot | §12 |
+| 14 | ~~**`get_state` 只印 `快照 s<seq>`，不印 `nearby.snapshot_id`**~~ **已修** | 真实模型照抄 `s1622` → `harvest` 必然 `stale_snapshot` | 现在「附近」段头会印 `Nearby 快照 ID：r…-n2`，并附"这一帧大约还剩 N 秒有效" |
+
+| 16 | ~~**`recipes` 一调就崩**~~ **已修（0.26.0）** | 凭印象用了不存在的帮助函数 `U.g` / `U.try` / `U.best_tool` / `U.best_fuel` | 真机 session-b159b09a：#4 recipes → `actions.lua:3046: attempt to call field 'g' (a nil value)`。这四个**从来不存在**（`U.try` 旧实现有、本版 util 重写时漏了）。已改用 `GLOBAL.AllRecipes` + `craftrules.Counts` 并补上 `U.try`；新增 `tests/lua-module-calls.test.mjs` 做静态审计（已用注入 bug 验证它真能抓到） |
+| 17 | ~~**多步动作被外层超时砍成"结果未知"**~~ **已修（0.26.0）** | Lua 内部预算 240 秒 > Node 外层 120 秒 → 必然 `result_timeout` | 真机 session-b159b09a：#5 `gather_area` → `结果未知（result_timeout）`（也就是用户看到的"浆果采不了卡住了"）。现在 Node 通过命令信封把 `budget_s` 告诉 Lua，`A.Tick` 通用兜底：超预算就自己收尾、如实报 `budget_exceeded`，而不是被砍掉 |
 
 ### 4.2 guide 一致性审计结论（STABILITY-01）
 

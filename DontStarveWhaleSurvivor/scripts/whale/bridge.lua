@@ -317,6 +317,8 @@ local function handle_command(json_text)
             use_action = cmd.args ~= nil and cmd.args.action or nil,
             -- SURVIVAL-05
             count = cmd.args ~= nil and cmd.args.count or nil,
+            -- 外层给的预算（秒）。顶层字段，不来自 args，模型改不了。
+            budget_s = tonumber(cmd.budget_s) or nil,
             cook_items = cmd.args ~= nil and cmd.args.items or nil,
             -- SURVIVAL-06
             survival_build = (action == "build") or nil,
