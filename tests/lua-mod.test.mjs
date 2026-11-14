@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
-const LEGACY_HOME = join(ROOT, 'archive', 'phase-a')
 
 /** 假的 GLOBAL：只实现模组真的用到的那部分 API。 */
 const STUB = `
@@ -759,7 +758,7 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
     }) do
         assert(idx(name) ~= nil, "少了 modimport：" .. name)
     end
-    -- 防回归：A 栈（scripts/main）已归档到 archive/phase-a/，决不能再被 modimport 回来。
+    -- 防回归：A 栈（scripts/main）已于 SURVIVAL-07 彻底删除，绝不能再被 modimport 回来。
     -- 要恢复某一段（比如 M4 的战斗 Kiting），必须单独评估、单独加载，不能整条链一起起。
     for _, name in ipairs(MODIMPORTS) do
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)

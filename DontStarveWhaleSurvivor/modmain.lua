@@ -111,11 +111,14 @@ modimport("scripts/whale/hud.lua")
 -- （TheSim:QueryServer → 本地 HTTP）、自己的动作入口（BWS2.actionExecutor / combat / tasks），
 -- 而且都能对同一个角色下发动作。M1.0 的收敛决定只留 B 栈，所以整条 A 栈的运行入口在这里断开。
 --
--- 代码没有删，全部搬到 archive/phase-a/scripts/main/（连同 archive/phase-a/bridge/ 这个 Node 端）。
--- 想恢复某一段（比如 M4 的战斗 Kiting），从 archive 里搬回来再单独 modimport，别整条链一起起。
+-- A 栈代码已**彻底删除**（SURVIVAL-07）。要找回某一段（比如 M4 的战斗 Kiting），
+-- 从 git 历史里 checkout，再单独评估、单独 modimport —— 别整条链一起起。
 --
--- modimport("archive/phase-a/scripts/main/http_client.lua")   -- 例：只搬 HTTP 传输
--- modimport("archive/phase-a/scripts/main/combat_executor.lua") -- 例：只搬战斗执行器
+--   git log --oneline -- archive/phase-a          # 找到删除前的那次提交
+--   git checkout <commit> -- archive/phase-a      # 只取回需要的部分
+--
+-- 恢复时注意：A 栈的观察器会自己遍历 AllPlayers、用 HTTP 18788 桥，
+-- 和现在的 Actor Provider + 文件桥是两套东西，不能混着跑。
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
 AddClassPostConstruct("screens/playerhud", function(self, owner)

@@ -55,7 +55,6 @@ node --test --test-force-exit "tests/m2_*.test.mjs"    # 只跑 M2 系列
 | 控制与安全 | `m2-control-dispatcher`、`m2-lua-guard`、`m2_0_1_lease_security`、`m2_0_2_authority_channel`、`m2_0_2_lease_ack` | 白名单、命令协议、租约换手 ACK 的五条硬条件、权威性通道 |
 | 动作 | `m2_1-pickup-lua`、`m2_1-pickup-node`、`m2_2-actionable-nearby`、`m2_3-harvest`（30 例） | 白名单、目标校验、距离、成熟度、结果核对 |
 | MCP / 桥 / Agent | `mcp.test.mjs`、`bridge.test.mjs`、`agent.test.mjs` | Streamable HTTP + SSE、文件桥读写、F8 循环 |
-| **历史（A 栈）** | `phase1-*`（4）、`phase2-*`（4）、`phase5-*`（6）、`phase6-lua` | 跑的是 `archive/phase-a/scripts/main/*.lua`（fengari）+ `schema/state.schema.json`。**仍有效**：防止归档代码腐烂，`phase6-lua` 还核对归档 Lua 白名单 == `tests/fixtures/legacy-ts-profiles.json` |
 
 ---
 

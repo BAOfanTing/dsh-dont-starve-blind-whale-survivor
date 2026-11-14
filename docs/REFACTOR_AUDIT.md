@@ -48,7 +48,7 @@
 | `phase3` | 6 | TS MCP 服务器 | 废弃 | 归档（代码在 `archive/legacy-mcp-server/`） |
 | `phase4` | 8 | TS Agent（LLM provider / loop / 上下文） | 废弃 | 归档（代码在 `archive/legacy-agent/`） |
 | `phase5` | 10 | 动作控制、移动、两次真机验证、采集、工具化 | 废弃（含原始真机证据） | 归档 `legacy/phase5/` |
-| `phase6` | 9 | 威胁/逃跑/战斗/季节/Boss/决策 | 废弃 | 归档（Boss/敌人档案已提取成 `tests/fixtures/legacy-ts-profiles.json`） |
+| `phase6` | 9 | 威胁/逃跑/战斗/季节/Boss/决策 | 废弃 | 归档（Boss/敌人档案曾提取成 `tests/fixtures/legacy-ts-profiles.json`，**该 fixture 已于 SURVIVAL-07 删除**——它只被 `phase6-lua` 用来核对归档 Lua 白名单） |
 
 > **统计口径修正**：第一阶段的审计报告写的是 47 篇，实际是 **48 篇**
 > （9+6+6+8+10+9）。本次按 48 归档，`docs/` 总数 104 → 104，一篇没少。
@@ -103,6 +103,22 @@ archive/ 163  ← legacy-mcp-server / legacy-agent / legacy-game-bridge / phase-
 **全部用 `git mv`，历史可追溯；没有复制、没有改名后重写内容。**
 
 ### 4.1 代码（98 个文件 → `archive/`）
+
+> **SURVIVAL-07 更新（2026-11）**：`archive/` 已**整体删除**，连同 138 个只测归档代码的
+> `tests/phase*.test.mjs`（以及 `tests/fixtures/legacy-ts-profiles.json`）。
+> 理由：那 138 个用例（占当时 613 个的 22%）跑的是 A 栈的 `archive/phase-a/scripts/main/*.lua`，
+> 而现行模组 18 个 `modimport` 全是 `scripts/whale/*`、`scripts/main` 目录根本不存在 ——
+> 它们保护的是死代码，却让人误以为有 613 个测试在保护现行实现。
+>
+> 下面的表记录的是 **M2.2.1 当时搬到了哪**，不是现在还在哪。要找回任何一段：
+>
+> ```powershell
+> git log --oneline -- archive/            # 找到删除前那次提交
+> git checkout <commit> -- archive/phase-a # 只取回需要的部分
+> ```
+>
+> 恢复时注意：A 栈的观察器会自己遍历 `AllPlayers`、用 HTTP 18788 桥，
+> 和现在的 Actor Provider + 文件桥是两套东西，不能混着跑。
 
 | 原路径 | 新路径 | 为什么 |
 |---|---|---|

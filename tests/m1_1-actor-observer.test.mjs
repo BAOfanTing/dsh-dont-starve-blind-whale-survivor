@@ -645,7 +645,10 @@ test('M1.1-19 归档的 A 栈没有被重新加载（运行链干净）', () => 
   }
   assert.ok(!imports.includes('bws_config.lua'), 'bws_config.lua 不该加载')
   assert.equal(existsSync(join(MOD, 'scripts', 'main')), false, 'scripts/main 应该已经归档（不在模组目录里）')
-  assert.equal(existsSync(join(ROOT, 'archive', 'phase-a', 'scripts', 'main')), true, '归档目录应该存在')
+  // SURVIVAL-07：归档的 A 栈代码已**彻底删除**（GitHub 有历史，需要时 git checkout 找回）。
+  // 这条断言从"归档目录还在"改成"归档目录已经不在" —— 意图没变（证明 A 栈不在运行链里），
+  // 而且更强：现在连"某处误加载归档代码"都不可能发生了。
+  assert.equal(existsSync(join(ROOT, 'archive', 'phase-a')), false, 'A 栈归档目录应该已经彻底删除')
 
   // 观察器不许自己去找玩家：只允许通过 Whale.actor 拿
   const observe = readFileSync(join(MOD, 'scripts', 'whale', 'observe.lua'), 'utf8')
