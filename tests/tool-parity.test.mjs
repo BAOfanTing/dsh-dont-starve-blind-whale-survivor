@@ -48,7 +48,7 @@ test('模型可见的动作 === dispatcher 白名单（不多不少）', () => {
   assert.deepEqual([...EXPOSED].sort(), [...OPEN_ACTIONS].sort(),
     '工具表暴露的动作必须和 dispatcher 放行的白名单完全一致')
   // SURVIVAL-01：新增 gather / eat / craft / equip
-  assert.deepEqual([...EXPOSED].sort(), ['craft', 'eat', 'equip', 'gather', 'harvest', 'move_to', 'pickup', 'stop'])
+  assert.deepEqual([...EXPOSED].sort(), ['craft', 'eat', 'equip', 'gather', 'gather_area', 'harvest', 'move_to', 'pickup', 'seek', 'stop'])
 })
 
 test('未开放的动作一律不在工具表里（模型看不到，也就不会去点）', () => {

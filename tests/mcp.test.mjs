@@ -89,11 +89,11 @@ test('tools/list 只暴露 3 个本地工具 + 8 个白名单动作，且名字�
   const names = body.result.tools.map((tool) => tool.name)
   // SURVIVAL-01：新增 gather / eat / craft / equip（7 → 11）
   for (const want of ['get_state', 'get_guide', 'update_notes', 'move_to', 'stop', 'pickup', 'harvest',
-    'gather', 'eat', 'craft', 'equip']) {
+    'gather', 'eat', 'craft', 'equip', 'gather_area', 'seek']) {
     assert.ok(names.includes(want), `缺少工具 ${want}`)
   }
   assert.equal(names.length, toolList().length)
-  assert.equal(names.length, 11, '模型可见工具应该是 11 个')
+  assert.equal(names.length, 13, '模型可见工具应该是 13 个（SURVIVAL-02 加了 gather_area/seek）')
   assert.equal(new Set(names).size, names.length, '工具名不能重复（M2.2.1 修过 pickup/harvest 重复注册）')
   // 未开放的动作不再出现在工具表里（模型只看见 dispatcher 白名单里的动作）
   for (const gone of ['chop', 'mine', 'attack', 'build', 'heal', 'night_watch']) {

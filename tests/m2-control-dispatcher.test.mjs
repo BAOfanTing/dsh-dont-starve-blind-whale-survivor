@@ -321,7 +321,7 @@ test('dispatcher-10 F8 持有租约时，MCP 的请求被拒', async () => {
 
 test('dispatcher-11 白名单：move_to/stop 是 R1，pickup/harvest 是 R2；规格里有 riskLevel', () => {
   // SURVIVAL-01：新增 gather / eat / craft / equip
-  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['craft', 'eat', 'equip', 'gather', 'harvest', 'move_to', 'pickup', 'stop'])
+  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['craft', 'eat', 'equip', 'gather', 'gather_area', 'harvest', 'move_to', 'pickup', 'seek', 'stop'])
   assert.equal(ACTION_SPECS.move_to.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.stop.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.pickup.riskLevel, 'R2')

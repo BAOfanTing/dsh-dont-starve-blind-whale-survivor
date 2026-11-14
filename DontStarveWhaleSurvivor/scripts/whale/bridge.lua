@@ -297,6 +297,15 @@ local function handle_command(json_text)
             recipe = detail ~= nil and detail.recipe or nil,
             item = detail ~= nil and detail.item or nil,
             food = detail ~= nil and detail.food or nil,
+            -- SURVIVAL-02：范围采集 / 走出去找
+            survival_area = (action == "gather_area") or nil,
+            survival_seek = (action == "seek") or nil,
+            prefab = cmd.args ~= nil and cmd.args.prefab or nil,
+            radius = cmd.args ~= nil and cmd.args.radius or nil,
+            limit = cmd.args ~= nil and cmd.args.limit or nil,
+            step = cmd.args ~= nil and cmd.args.step or nil,
+            max_tiles = cmd.args ~= nil and cmd.args.max_tiles or nil,
+            look = cmd.args ~= nil and cmd.args.look or nil,
         }
     )
     if not started then

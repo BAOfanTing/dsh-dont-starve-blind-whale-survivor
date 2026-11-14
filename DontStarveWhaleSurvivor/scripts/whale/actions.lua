@@ -1948,6 +1948,283 @@ JOBS.equip = function(j, p)
     return "done", "把 " .. U.describe_item(item) .. " 拿在手里了"
 end
 
+-- ═══════════════ SURVIVAL-02：范围采集 + 走出去找东西 ═══════════════
+--
+-- 这两个动作存在的理由：真实模型一次只能做一个动作，而"采 6 丛草"要 6 次调用。
+-- OBSERVATION-01 折腾半天发现，减少 get_state 不如**直接减少动作次数**。
+--
+-- 共同约束（一条都没放宽）：
+--   · 目标一律来自 Whale.nearby 的分类结果（观察侧与执行侧同一份白名单）
+--   · 每个子目标执行前仍然要过 IsReady（成熟度/可采性）与 InNativeRange（原生距离）
+--   · 结果核对以**背包变化**为准（不是"动作跑完了"）
+
+--- 在半径内找一类可采目标（按距离排序），只返回**白名单内**的
+local function gather_candidates(p, radius_tiles, want_prefab)
+    local gr = Whale ~= nil and Whale.gatherrules or nil
+    local hr = Whale ~= nil and Whale.harvestrules or nil
+    if gr == nil and hr == nil then return {} end
+    local out = {}
+    local seen = {}
+    local list = U.find_all(p, radius_tiles, nil, nil, function(e)
+        if e == nil or e == p then return false end
+        if e.prefab == nil then return false end
+        -- 草/树苗走 gatherrules；浆果丛走 harvestrules
+        local is_gather = gr ~= nil and gr.IsCandidate(e, p)
+        local is_harvest = (not is_gather) and hr ~= nil and hr.IsCandidate(e, p)
+        if not is_gather and not is_harvest then return false end
+        if want_prefab ~= nil and tostring(e.prefab) ~= want_prefab then return false end
+        return true
+    end)
+    for _, entry in ipairs(list or {}) do
+        local e = entry.ent or entry
+        if e ~= nil and e:IsValid() and not seen[e] then
+            seen[e] = true
+            local rules = (gr ~= nil and gr.IsCandidate(e, p)) and gr or hr
+            local ready, why = rules.IsReady(e)
+            out[#out + 1] = {
+                ent = e,
+                ready = ready == true,
+                why = why,
+                dist = U.dist(p, e),
+                product = rules.ProductOf and rules.ProductOf(e) or nil,
+                use_gather = (rules == gr),
+            }
+        end
+    end
+    table.sort(out, function(a, b) return (a.dist or 999) < (b.dist or 999) end)
+    return out
+end
+
+--- 采完/找完的收尾文案
+local function area_summary(done, product_counts, failed)
+    local bits = {}
+    local keys = {}
+    for k in pairs(product_counts or {}) do keys[#keys + 1] = k end
+    table.sort(keys)
+    for _, k in ipairs(keys) do bits[#bits + 1] = string.format("%s+%d", k, product_counts[k]) end
+    local tail = #bits > 0 and ("（" .. table.concat(bits, "，") .. "）") or ""
+    local fail_tail = (failed or 0) > 0 and string.format("，%d 个没采成", failed) or ""
+    return string.format("采了 %d 个%s%s", done or 0, tail, fail_tail)
+end
+
+--- 范围采集：一次采完半径内能采的（可选只采某一种）
+JOBS.gather_area = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.survival_area ~= true then
+        return "fail", "gather_area 只能按白名单调用"
+    end
+    if j.step == "start" then
+        j.data.radius = tonumber(ctx.radius) or 12
+        j.data.limit = math.min(tonumber(ctx.limit) or 15, 30)   -- 硬上限，别让它无限跑
+        j.data.want = ctx.prefab ~= nil and tostring(ctx.prefab) or nil
+        j.data.done = {}
+        j.data.count = 0
+        j.data.failed = 0
+        j.data.products = {}
+        j.data.before = snapshot_counts(p)
+        j.data.t0 = U.now()
+        j.step = "next"
+    end
+
+    if j.step == "next" then
+        if j.data.count >= j.data.limit then
+            return "done", area_summary(j.data.count, j.data.products, j.data.failed)
+        end
+        if U.now() - j.data.t0 > 240 then
+            return "done", area_summary(j.data.count, j.data.products, j.data.failed) .. "（时间到，先停）"
+        end
+        -- 每次重新找最近的**还没试过**的（跳过失败的，避免死循环）
+        local cands = gather_candidates(p, j.data.radius, j.data.want)
+        local pick = nil
+        for _, c in ipairs(cands) do
+            if j.data.done[c.ent] == nil and c.ready then pick = c break end
+        end
+        if pick == nil then
+            local left = 0
+            for _, c in ipairs(cands) do if j.data.done[c.ent] == nil then left = left + 1 end end
+            local tail = left > 0 and string.format("（还有 %d 个没成熟/够不着）", left) or ""
+            return "done", area_summary(j.data.count, j.data.products, j.data.failed) .. tail
+        end
+        -- 距离不够就先走过去（和单个 gather 一样：动作本身不走路）
+        local rules = pick.use_gather and Whale.gatherrules or Whale.harvestrules
+        if not rules.InNativeRange(p, pick.ent) then
+            local tx, tz = U.tile_of(pick.ent.Transform:GetWorldPosition())
+            p.components.locomotor:GoToPoint(Vector3(pick.ent.Transform:GetWorldPosition()))
+            j.data.walking_to = pick.ent
+            j.data.walk_start = U.now()
+            j.step = "walking"
+            return "run"
+        end
+        j.data.done[pick.ent] = true
+        j.data.current = pick
+        j.data.phase_start = U.now()
+        push(p, BufferedAction(p, pick.ent, ACTIONS.PICK, nil))
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "walking" then
+        local target = j.data.walking_to
+        if target == nil or not target:IsValid() then
+            j.step = "next"
+            return "run"
+        end
+        local rules = (Whale.gatherrules ~= nil and Whale.gatherrules.IsCandidate(target, p)) and Whale.gatherrules or Whale.harvestrules
+        if rules.InNativeRange(p, target) then
+            j.data.done[target] = true
+            j.data.current = target
+            j.data.phase_start = U.now()
+            push(p, BufferedAction(p, target, ACTIONS.PICK, nil))
+            j.step = "acting"
+            return "run"
+        end
+        if U.now() - j.data.walk_start > 12 then
+            -- 走不过去就放弃这个目标，别卡住
+            j.data.done[target] = true
+            j.data.failed = j.data.failed + 1
+            j.step = "next"
+            return "run"
+        end
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local cur = j.data.current
+        local pickable = cur ~= nil and cur.components ~= nil and cur.components.pickable or nil
+        local alive = cur ~= nil and cur:IsValid()
+        local ok_can, can = pcall(function() return pickable ~= nil and pickable:CanBePicked() end)
+        local flipped = (ok_can and can == false)
+        if flipped or not alive then
+            j.data.count = j.data.count + 1
+            local after = snapshot_counts(p)
+            local product = nil
+            if cur ~= nil then
+                local gr = Whale.gatherrules
+                local hr = Whale.harvestrules
+                product = (gr ~= nil and gr.ProductOf(cur)) or nil
+                if product == nil and hr ~= nil and hr.ReadState ~= nil then
+                    local st = hr.ReadState(cur)
+                    product = st ~= nil and st.product or nil
+                end
+            end
+            if product ~= nil then
+                local gained = (after[product] or 0) - (j.data.before[product] or 0)
+                if gained > 0 then
+                    j.data.products[product] = (j.data.products[product] or 0) + gained
+                    j.data.before[product] = after[product]
+                end
+            end
+            j.step = "next"
+            return "run"
+        end
+        if U.now() - j.data.phase_start > 6 then
+            j.data.done[cur] = true
+            j.data.failed = j.data.failed + 1
+            j.step = "next"
+            return "run"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+--- 走出去找东西：8 个方向 × 多环，逐站扫描；找到就报位置（**不自动采**，让模型决定）
+JOBS.seek = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.survival_seek ~= true then
+        return "fail", "seek 只能按白名单调用"
+    end
+    local TILE = 4
+    if j.step == "start" then
+        j.data.want = tostring(ctx.prefab or "")
+        if j.data.want == "" then return "fail", "seek 要传 prefab" end
+        j.data.step_tiles = math.max(4, tonumber(ctx.step) or 10)
+        j.data.max_tiles = math.max(j.data.step_tiles, tonumber(ctx.max_tiles) or 40)
+        j.data.look = math.max(8, tonumber(ctx.look) or 16)
+        local px, _, pz = U.pos(p)
+        if px == nil then return "fail", "读不到自己的位置" end
+        j.data.origin = { px, pz }
+        -- 8 个方向 × 环：越往外走越远，落点在水里的直接不排
+        local dirs = {
+            { 1, 0 }, { 0.7071, 0.7071 }, { 0, 1 }, { -0.7071, 0.7071 },
+            { -1, 0 }, { -0.7071, -0.7071 }, { 0, -1 }, { 0.7071, -0.7071 },
+        }
+        j.data.plan = {}
+        local rings = math.max(1, math.floor(j.data.max_tiles / j.data.step_tiles))
+        for ring = 1, rings do
+            for _, d in ipairs(dirs) do
+                local wx = px + d[1] * ring * j.data.step_tiles * TILE
+                local wz = pz + d[2] * ring * j.data.step_tiles * TILE
+                local tx, tz = U.tile_of(wx, wz)
+                local ok_water, water = pcall(function() return TheWorld.Map:IsOceanAtPoint(wx, 0, wz, false) end)
+                if not (ok_water and water == true) then
+                    j.data.plan[#j.data.plan + 1] = { wx, wz, tx, tz }
+                end
+            end
+        end
+        j.data.index = 0
+        j.data.t0 = U.now()
+        j.step = "look"
+    end
+
+    -- 到一站先看这一带有没有（用观察侧同一份分类）
+    if j.step == "look" then
+        local hits = {}
+        local list = U.find_all(p, j.data.look, nil, nil, function(e)
+            if e == nil or e == p or e.prefab == nil then return false end
+            if tostring(e.prefab) ~= j.data.want then return false end
+            return true
+        end)
+        for _, entry in ipairs(list or {}) do
+            local e = entry.ent or entry
+            if e ~= nil and e:IsValid() then
+                local tx, tz = U.tile_of(e.Transform:GetWorldPosition())
+                hits[#hits + 1] = { ent = e, tx = tx, tz = tz, dist = U.dist(p, e) }
+            end
+        end
+        table.sort(hits, function(a, b) return (a.dist or 999) < (b.dist or 999) end)
+        if #hits > 0 then
+            local names = {}
+            for i = 1, math.min(#hits, 5) do
+                names[#names + 1] = string.format("%s(%d,%d)%.0f格",
+                    U.pretty(hits[i].ent), hits[i].tx, hits[i].tz, (hits[i].dist or 0) / TILE)
+            end
+            return "done", string.format("找到了 %d 个 %s：%s。先用 move_to 走过去（或直接对它用动作）",
+                #hits, j.data.want, table.concat(names, "、"))
+        end
+        j.data.index = j.data.index + 1
+        if j.data.index > #j.data.plan or U.now() - j.data.t0 > 180 then
+            return "fail", string.format("从 (%d,%d) 往外走了约 %d 格也没看到 %s（换个方向再 seek，或者改找别的）",
+                U.tile_of(j.data.origin[1], j.data.origin[2]), j.data.max_tiles, j.data.want)
+        end
+        local target = j.data.plan[j.data.index]
+        j.data.cur = target
+        p.components.locomotor:GoToPoint(Vector3(target[1], 0, target[2]))
+        j.data.walk_start = U.now()
+        j.step = "walk"
+        return "run"
+    end
+
+    if j.step == "walk" then
+        local tgt = j.data.cur
+        local px, _, pz = U.pos(p)
+        if px == nil then return "fail", "读不到自己的位置" end
+        local dx, dz = tgt[1] - px, tgt[2] - pz
+        local far = math.sqrt(dx * dx + dz * dz)
+        if far <= TILE * 1.5 then
+            j.step = "look"
+            return "run"
+        end
+        if U.now() - j.data.walk_start > 25 then
+            -- 走不到（被挡/在水里）就换下一站，别卡死
+            j.step = "look"
+            return "run"
+        end
+        return "run"
+    end
+    return "run"
+end
+
 --- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable
 JOBS.harvest = function(j, p)
     -- M2.3：带 ctx.target 时走"按 #N 收获"的新路径（只认 guard 解析出来的真实实体，

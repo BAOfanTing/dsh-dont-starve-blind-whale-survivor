@@ -181,6 +181,28 @@ G.ACTIONS = {
             item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
         },
     },
+    -- ═══════════ SURVIVAL-02 ═══════════
+    -- gather_area：范围采集（白名单由 gatherrules/harvestrules 决定，模型只能给"只采哪种"+范围+上限）
+    gather_area = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            prefab = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+            radius = { type = "number", min = 2, max = 40 },
+            limit = { type = "number", min = 1, max = 30, integer = true },
+        },
+    },
+    -- seek：走出去找东西。只**报位置**，不自动采（让模型决定下一步）
+    seek = {
+        risk = "R2",
+        required_components = { "locomotor", "health" },
+        args = {
+            prefab = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            step = { type = "number", min = 4, max = 30 },
+            max_tiles = { type = "number", min = 4, max = 80 },
+            look = { type = "number", min = 8, max = 40 },
+        },
+    },
 }
 
 --- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
@@ -611,6 +633,41 @@ function G.validate(cmd)
         local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
         if inv == nil then return false, "missing_component:inventory", nil end
         if qr.FindInInventory(inv, item) == nil then return false, "not_in_inventory", nil end
+    end
+
+    -- ═══════════ SURVIVAL-02 ═══════════
+    if action == "gather_area" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        local gr = Whale ~= nil and Whale.gatherrules or nil
+        local hr = Whale ~= nil and Whale.harvestrules or nil
+        if gr == nil and hr == nil then return false, "gather_rules_missing", nil end
+        -- 指定了 prefab 就要求它**在某一侧的白名单里**（不许让模型自由指定）
+        local want = cmd.args.prefab
+        if want ~= nil and want ~= "" then
+            local w = tostring(want)
+            local ok_g = gr ~= nil and gr.PREFABS[w] ~= nil
+            local ok_h = hr ~= nil and hr.PREFABS[w] ~= nil
+            if not ok_g and not ok_h then return false, "prefab_not_allowed", nil end
+        end
+        -- 至少得有一个可采的目标，否则不下发注定失败的命令
+        local found = U.find_all(actor, tonumber(cmd.args.radius) or 12, nil, nil, function(e)
+            if e == nil or e == actor or e.prefab == nil then return false end
+            if want ~= nil and want ~= "" and tostring(e.prefab) ~= tostring(want) then return false end
+            local is_g = gr ~= nil and gr.IsCandidate(e, actor)
+            local is_h = (not is_g) and hr ~= nil and hr.IsCandidate(e, actor)
+            if not is_g and not is_h then return false end
+            local rules = is_g and gr or hr
+            local ready = rules.IsReady(e)
+            return ready == true
+        end)
+        if found == nil or #found == 0 then return false, "no_targets_in_range", nil end
+    end
+
+    if action == "seek" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        -- seek 只是走路+看，不改世界；但要有 locomotor
+        local loco = actor ~= nil and actor.components ~= nil and actor.components.locomotor or nil
+        if loco == nil then return false, "missing_component:locomotor", nil end
     end
 
     -- 组件
