@@ -2014,6 +2014,12 @@ local function area_summary(done, product_counts, failed)
     return string.format("采了 %d 个%s%s", done or 0, tail, fail_tail)
 end
 
+--- 真正能动手的距离（格）。InNativeRange 是"扫描得到"的范围（约 radius+4 格），
+--- 拿它当"可以推动作了"用会隔着 20 格砍空气 —— 真机踩过（session-403656e9：采了 0 个，3 个没采成）。
+--- 所以接近判定必须用**动作自己的距离**量级。
+local APPROACH_TILES = 1.6
+local APPROACH_UNITS = APPROACH_TILES * 4   -- 1 格 = 4 世界单位
+
 --- 范围采集：一次采完半径内能采的（可选只采某一种）
 JOBS.gather_area = function(j, p)
     local ctx = j.ctx or {}
@@ -2038,7 +2044,9 @@ JOBS.gather_area = function(j, p)
             return "done", area_summary(j.data.count, j.data.products, j.data.failed)
         end
         if U.now() - j.data.t0 > 240 then
-            return "done", area_summary(j.data.count, j.data.products, j.data.failed) .. "（时间到，先停）"
+            local text = area_summary(j.data.count, j.data.products, j.data.failed) .. "（时间到，先停）"
+            if j.data.count == 0 then return "fail", "gather_area_failed: " .. text end
+            return "done", text
         end
         -- 每次重新找最近的**还没试过**的（跳过失败的，避免死循环）
         local cands = gather_candidates(p, j.data.radius, j.data.want)
@@ -2050,21 +2058,38 @@ JOBS.gather_area = function(j, p)
             local left = 0
             for _, c in ipairs(cands) do if j.data.done[c.ent] == nil then left = left + 1 end end
             local tail = left > 0 and string.format("（还有 %d 个没成熟/够不着）", left) or ""
-            return "done", area_summary(j.data.count, j.data.products, j.data.failed) .. tail
+            local text = area_summary(j.data.count, j.data.products, j.data.failed) .. tail
+            if j.data.count == 0 then
+                -- 一个都没采到 → 明确的失败，把"为什么"讲给模型听
+                local notes = {}
+                for _, c in ipairs(cands) do
+                    if c.why ~= nil and c.why ~= "" then notes[c.why] = (notes[c.why] or 0) + 1 end
+                end
+                local reasons = {}
+                for why, n in pairs(notes) do reasons[#reasons + 1] = string.format("%s×%d", why, n) end
+                table.sort(reasons)
+                local why_text = #reasons > 0 and ("；原因：" .. table.concat(reasons, "，")) or ""
+                return "fail", "gather_area_failed: " .. text .. why_text
+                    .. "。可以换一片地方（用 seek 找），或者等它们长好再来"
+            end
+            return "done", text
         end
-        -- 距离不够就先走过去（和单个 gather 一样：动作本身不走路）
-        local rules = pick.use_gather and Whale.gatherrules or Whale.harvestrules
-        if not rules.InNativeRange(p, pick.ent) then
-            local tx, tz = U.tile_of(pick.ent.Transform:GetWorldPosition())
-            p.components.locomotor:GoToPoint(Vector3(pick.ent.Transform:GetWorldPosition()))
+        -- 距离不够就先走过去（动作本身不走路）
+        local d = U.dist(p, pick.ent) or 99999
+        if d > APPROACH_UNITS then
+            local tx, ty, tz = pick.ent.Transform:GetWorldPosition()
+            p.components.locomotor:GoToPoint(Vector3(tx, 0, tz))
             j.data.walking_to = pick.ent
             j.data.walk_start = U.now()
+            j.data.walk_repush = U.now()
             j.step = "walking"
             return "run"
         end
+        if busy(p) then return "run" end   -- 手上还有动作，等它做完
         j.data.done[pick.ent] = true
         j.data.current = pick
         j.data.phase_start = U.now()
+        j.data.pushes = 1
         push(p, BufferedAction(p, pick.ent, ACTIONS.PICK, nil))
         j.step = "acting"
         return "run"
@@ -2076,14 +2101,22 @@ JOBS.gather_area = function(j, p)
             j.step = "next"
             return "run"
         end
-        local rules = (Whale.gatherrules ~= nil and Whale.gatherrules.IsCandidate(target, p)) and Whale.gatherrules or Whale.harvestrules
-        if rules.InNativeRange(p, target) then
+        local d = U.dist(p, target) or 99999
+        if d <= APPROACH_UNITS then
+            if busy(p) then return "run" end
             j.data.done[target] = true
             j.data.current = target
             j.data.phase_start = U.now()
+            j.data.pushes = 1
             push(p, BufferedAction(p, target, ACTIONS.PICK, nil))
             j.step = "acting"
             return "run"
+        end
+        -- 每 0.6 秒重发一次目标点：GoToPoint 只下一次的话，被打断/走偏就再也不动了
+        if U.now() - (j.data.walk_repush or 0) > 0.6 then
+            local tx, ty, tz = target.Transform:GetWorldPosition()
+            p.components.locomotor:GoToPoint(Vector3(tx, 0, tz))
+            j.data.walk_repush = U.now()
         end
         if U.now() - j.data.walk_start > 12 then
             -- 走不过去就放弃这个目标，别卡住
@@ -2124,7 +2157,21 @@ JOBS.gather_area = function(j, p)
             j.step = "next"
             return "run"
         end
-        if U.now() - j.data.phase_start > 6 then
+        -- 动作没在跑、东西却还能采 → 多半是刚才那下没推上去（离得远/被挡），重推几次
+        local waited = U.now() - j.data.phase_start
+        if not busy(p) and waited > 0.8 then
+            if (j.data.pushes or 0) < 3 then
+                j.data.pushes = (j.data.pushes or 0) + 1
+                j.data.phase_start = U.now()
+                push(p, BufferedAction(p, cur, ACTIONS.PICK, nil))
+                return "run"
+            end
+            j.data.done[cur] = true
+            j.data.failed = j.data.failed + 1
+            j.step = "next"
+            return "run"
+        end
+        if waited > 8 then
             j.data.done[cur] = true
             j.data.failed = j.data.failed + 1
             j.step = "next"

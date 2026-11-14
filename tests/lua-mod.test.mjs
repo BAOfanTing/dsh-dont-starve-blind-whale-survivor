@@ -939,3 +939,157 @@ Whale = { files = {}, util = { log = function() end } }
   `))
   assert.equal(lua.lua_pcall(L, 0, 0, 0), lua.LUA_OK, 'HUD 行为不对：' + fail())
 })
+
+// ═══════════ OBSERVATION-02：Nearby 编号复用 + gather_area 接近距离 ═══════════
+
+/**
+ * 造一个最小可用实体。
+ * 注意 pickable 必须带 caninteractwith = true —— harvestrules.IsReady 会读它
+ * （scripts/whale/harvestrules.lua:134），少了就判 target_not_harvestable。
+ */
+const ENT_HELPER = `
+function mkent(prefab, guid, x, z, ready)
+    local e = { prefab = prefab, GUID = guid, components = {}, _x = x, _z = z }
+    function e:IsValid() return true end
+    function e:IsInLimbo() return false end
+    function e:HasTag(t) return false end
+    function e:GetDistanceSqToInst(o) local dx, dz = e._x - o._x, e._z - o._z; return dx * dx + dz * dz end
+    e.Transform = { GetWorldPosition = function() return e._x, 0, e._z end }
+    e.components.pickable = {
+        caninteractwith = true,
+        CanBePicked = function() return ready ~= false end,
+        IsStuck = function() return false end,
+        IsBarren = function() return false end,
+    }
+    return e
+end
+`
+
+test('OBS2-1：附近内容没变 → Nearby 快照 ID 复用（否则模型手里的 #N 必然过期）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run(`
+    ACTOR = mkent("wilson", 1, 0, 0)
+    BUSH = mkent("berrybush", 2, 20, 0)
+    NEARBY = { BUSH }
+  `, '放一丛浆果')
+
+  runFile(`
+    local opts = { radius = 16, scan_seconds = 1, max_total = 60, max_per_bucket = 12, force = true }
+    ID_A = Whale.nearby.Observe(ACTOR, {}, 1, opts).snapshot_id
+    ID_B = Whale.nearby.Observe(ACTOR, {}, 1.5, opts).snapshot_id
+    ID_C = Whale.nearby.Observe(ACTOR, {}, 5, opts).snapshot_id
+  `)
+  const a = global('ID_A')
+  assert.ok(a, '应该拿到 snapshot_id')
+  assert.equal(global('ID_B'), a, '内容没变时第二次必须复用同一个 id（真机就栽在这）')
+  assert.equal(global('ID_C'), a, '第三次也一样')
+})
+
+test('OBS2-2：附近内容变了 → 换新编号（stale_snapshot 没有被放宽）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run(`
+    ACTOR = mkent("wilson", 1, 0, 0)
+    BUSH = mkent("berrybush", 2, 20, 0)
+    BUSH2 = mkent("berrybush", 3, 24, 0)
+    NEARBY = { BUSH }
+  `, '一丛浆果')
+
+  runFile(`
+    local opts = { radius = 16, scan_seconds = 1, max_total = 60, max_per_bucket = 12, force = true }
+    ID_1 = Whale.nearby.Observe(ACTOR, {}, 1, opts).snapshot_id
+    NEARBY = { BUSH, BUSH2 }        -- 多了一丛：编号必须换
+    ID_2 = Whale.nearby.Observe(ACTOR, {}, 2, opts).snapshot_id
+    local ent, why = Whale.nearby.Resolve(ID_1, "#1")
+    OLD_WHY = why
+  `)
+  assert.notEqual(global('ID_2'), global('ID_1'), '内容变了必须换编号')
+  assert.equal(global('OLD_WHY'), 'stale_snapshot', '旧编号必须失效（fail-closed 没变）')
+})
+
+test('OBS2-3：实体只是移动了 → 也换新编号（位置进了指纹）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run(`
+    ACTOR = mkent("wilson", 1, 0, 0)
+    BUSH = mkent("berrybush", 2, 20, 0)
+    NEARBY = { BUSH }
+  `, '一丛浆果')
+
+  runFile(`
+    local opts = { radius = 16, scan_seconds = 1, max_total = 60, max_per_bucket = 12, force = true }
+    ID_1 = Whale.nearby.Observe(ACTOR, {}, 1, opts).snapshot_id
+    BUSH._x = BUSH._x + 8          -- 挪了 2 格
+    ID_2 = Whale.nearby.Observe(ACTOR, {}, 2, opts).snapshot_id
+  `)
+  assert.notEqual(global('ID_2'), global('ID_1'), '位置变了必须换编号（引用的是"那一格的东西"）')
+})
+
+test('OBS2-4：gather_area 目标太远时先走过去，不许隔着老远推动作', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  // 玩家在 (12*4+2, 45*4+2)；把这丛浆果放到 20 格（80 单位）之外
+  run(`
+    FAR = mkent("berrybush", 77, 12 * 4 + 2 + 80, 45 * 4 + 2)
+    NEARBY = { FAR }
+  `, '远处放一丛浆果')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    PUSHED = nil
+    MOVED_TO = nil
+    local ctx = { survival_area = true, radius = 12, limit = 3 }
+    local started, err = Whale.actions.Start("gather_area", { radius = 12, limit = 3 }, "c-far", ctx)
+    assert(started == true, "应该能开始：" .. tostring(err))
+    Whale.actions.Tick()
+    -- 注意：fengari 的 global() 读 Lua 布尔拿到的不一定是 JS 布尔，统一转成字符串比
+    OUT_NO_PUSH = tostring(PUSHED == nil)   -- 关键：不许推
+    OUT_MOVED = tostring(MOVED_TO ~= nil)   -- 应该去走
+    OUT_HAS_JOB = tostring(Whale.job ~= nil)
+
+  `)
+  assert.equal(global('OUT_NO_PUSH'), 'true', '离 20 格远时不该推动作（真机就是这么砍空气的）')
+  assert.equal(global('OUT_MOVED'), 'true', '应该往目标走（GoToPoint）')
+  assert.equal(global('OUT_HAS_JOB'), 'true', '任务应该还挂着')
+})
+
+test('OBS2-5：gather_area 一个都没采到 → 报失败，不许报"做完了"', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run(`
+    -- 就在脚边，但"现在不能采"（CanBePicked=false → not_ready）
+    BUSH = mkent("berrybush", 5, 12 * 4 + 2 + 4, 45 * 4 + 2, false)
+    NEARBY = { BUSH }
+  `, '放一丛没成熟的浆果')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    PUSHED = nil
+    local ctx = { survival_area = true, radius = 12, limit = 3 }
+    Whale.actions.Start("gather_area", { radius = 12, limit = 3 }, "c-none", ctx)
+    for i = 1, 30 do
+        if Whale.job == nil then break end
+        Whale.actions.Tick()
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
+    OUT_NO_PUSH = tostring(PUSHED == nil)
+  `)
+  assert.equal(global('OUT_OK'), 'false', '一个都没采到必须是失败（不能让 dispatcher 报"做完了但没核对上"）')
+  assert.equal(global('OUT_NO_PUSH'), 'true', '没成熟的东西不该被推去采')
+  const text = String(global('OUT_TEXT'))
+  assert.match(text, /采了 0 个/, '失败文案要说清采了 0 个')
+  assert.match(text, /not_ready|没成熟|够不着/, `失败文案要讲原因，实际：${text}`)
+})

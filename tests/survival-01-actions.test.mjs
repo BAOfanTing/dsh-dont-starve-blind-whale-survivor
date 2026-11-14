@@ -26,7 +26,10 @@ test('survival-2：gather 只接受 target_ref + snapshot_id（和 harvest 同�
   const spec = ACTION_SPECS.gather
   assert.equal(spec.requiresSnapshot, true, 'gather 必须校验快照')
   assert.deepEqual(Object.keys(spec.args).sort(), ['snapshot_id', 'target_ref'])
-  assert.deepEqual(spec.args.target_ref.pattern, '^#[0-9]{1,4}$')
+  // OBSERVATION-02：引用是 1 起的，#0 不该合法
+  assert.deepEqual(spec.args.target_ref.pattern, '^#[1-9][0-9]{0,3}$')
+  assert.equal(validateArgs(spec, { target_ref: '#0', snapshot_id: 'r1-n2' }).ok, false, '#0 要拒')
+  assert.equal(validateArgs(spec, { target_ref: '#1', snapshot_id: 'r1-n2' }).ok, true, '#1 要收')
   assert.equal(validateArgs(spec, { target_ref: '#3', snapshot_id: 'r1-n2' }).ok, true)
   assert.equal(validateArgs(spec, { target_ref: 'grass', snapshot_id: 'r1-n2' }).ok, false, '不许按 prefab 指定')
   assert.equal(validateArgs(spec, { target_ref: '#3' }).ok, false, '缺 snapshot_id 要拒')

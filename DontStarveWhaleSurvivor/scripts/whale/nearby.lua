@@ -608,13 +608,39 @@ local function new_key(actor, info, opts, identity)
     }, "|")
 end
 
+-- ═══ 编号复用（OBSERVATION-02）═══
+-- 为什么需要：scan_seq 每次重扫就 +1。把 scan_seconds 降到 1 秒后，**每秒都换新编号**，
+-- 而真实模型从读到 snapshot_id 到发出动作要 3~5 秒 —— 于是必然 stale_snapshot。
+-- 真机会话证据（session-403656e9，15 步里 5 次 stale_snapshot，只有 1 次动作成功）：
+--   n11 → n15 → n16 → n20 → n27 → n29 → n43 → n45，模型每次拿到的都是过期编号。
+--
+-- 修法：**内容没变就复用同一个编号**。引用是否有效应该取决于"东西还在不在"，
+-- 而不是"我们扫了几次"。这样模型手里的 #N 在东西没变时一直有效。
+-- 注意：这**没有放宽** stale_snapshot —— 内容一变（实体增删、位置变化）就立刻换新编号，
+-- 旧编号照样失效。
+local last_fingerprint = nil
+local last_snapshot_id = nil
+
+local function fingerprint_of(list)
+    local parts = {}
+    for i = 1, #list do
+        local e = list[i].ent
+        if e ~= nil then
+            local x, _, z = e.Transform:GetWorldPosition()
+            parts[#parts + 1] = string.format("%s@%d,%d", tostring(e.GUID), math.floor(x / 4), math.floor(z / 4))
+        end
+    end
+    table.sort(parts)
+    return table.concat(parts, ";")
+end
+
 local function build(actor, info, now, opts, identity)
-    scan_seq = scan_seq + 1
-    local snapshot_id = RUNTIME_ID .. "-n" .. tostring(scan_seq)
     local started_ms, timer_source = clock_ms()
 
     local scanned, err = scan(actor, opts.radius)
     if scanned == nil then
+        scan_seq = scan_seq + 1
+        local snapshot_id = RUNTIME_ID .. "-n" .. tostring(scan_seq)
         prev = { key = nil, by_guid = nil } -- 失败 → 下次重建基线
         return {
             status = "error",
@@ -640,6 +666,19 @@ local function build(actor, info, now, opts, identity)
 
     local list = scanned.entities
     sort_entities(list)
+
+    -- ★ 内容指纹没变就复用上一个编号（详见上面 last_fingerprint 的说明）。
+    --   这样模型手里的 #N 在"东西没变"时一直有效，不会因为扫了几次就作废。
+    local fp = fingerprint_of(list)
+    local snapshot_id
+    if fp == last_fingerprint and last_snapshot_id ~= nil then
+        snapshot_id = last_snapshot_id   -- 复用：编号不变，refs 也继续有效
+    else
+        scan_seq = scan_seq + 1
+        snapshot_id = RUNTIME_ID .. "-n" .. tostring(scan_seq)
+        last_fingerprint = fp
+        last_snapshot_id = snapshot_id
+    end
 
     -- 上限：先按桶截断，再按总量截断（顺序确定）
     local buckets = {}

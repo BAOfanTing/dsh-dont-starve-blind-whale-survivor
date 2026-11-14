@@ -662,7 +662,9 @@ test('harvest-28 回归：move_to / stop / pickup 语义未变，白名单只多
   assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'inspect', 'kill', 'lookup', 'mine', 'move_to', 'pickup', 'probe', 'recipes', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
   assert.equal(validateArgs(ACTION_SPECS.move_to, { x: 1, z: 2 }).ok, true)
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
-  assert.deepEqual(ACTION_SPECS.pickup.args.target_ref.pattern, '^#[0-9]{1,4}$')
+  // OBSERVATION-02：引用 1 起
+  assert.deepEqual(ACTION_SPECS.pickup.args.target_ref.pattern, '^#[1-9][0-9]{0,3}$')
+  assert.equal(validateArgs(ACTION_SPECS.pickup, { target_ref: '#0', snapshot_id: 's' }).ok, false, '#0 要拒')
   assert.equal(ACTION_SPECS.harvest.requiresSnapshot, true)
 })
 

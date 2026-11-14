@@ -133,7 +133,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -143,7 +143,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -153,7 +153,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -209,7 +209,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -217,7 +217,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -225,7 +225,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -233,7 +233,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -242,7 +242,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             times = { type = "number", min = 1, max = 50, integer = true },
         },
@@ -251,7 +251,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -289,7 +289,7 @@ G.ACTIONS = {
         risk = "R1",
         required_components = { "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             item = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
         },
@@ -298,7 +298,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             action = { type = "string", pattern = "^[A-Z_]+$", max_len = 16 },
         },
@@ -307,7 +307,7 @@ G.ACTIONS = {
         risk = "R1",
         required_components = {},
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
         },
     },
@@ -316,7 +316,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             item = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
             count = { type = "number", min = 1, max = 40, integer = true },
@@ -326,7 +326,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
         },
@@ -335,7 +335,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
         },
@@ -344,7 +344,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             items = { type = "string", max_len = 120 },
         },

@@ -437,12 +437,11 @@ test('M2.2-16 ref 全局唯一且连续（跨八个桶）', async () => {
   assert.equal(new Set(refs).size, refs.length)
 })
 
-test('M2.2-17 同一快照 reused：不重新编号；新扫描：旧 ref 失效', async () => {
+test('M2.2-17 编号复用：内容没变就沿用旧编号；内容一变旧 ref 立刻失效', async () => {
   const env = await load()
   const flat = env.flat
   env.run('NEARBY = { mkent({ prefab = "twigs", guid = 701, x = 8, z = 0, item = true, canbepickedup = true }) }', '首次')
   const first = env.observe()
-  // 立刻再观察一次（缓存窗口内）→ 应当复用同一快照
   const reused = env.observe()
   assert.equal(reused.nearby.snapshot_id, first.nearby.snapshot_id, '缓存窗口内应复用')
   assert.equal(reused.nearby.scan.reused, true)
@@ -451,14 +450,29 @@ test('M2.2-17 同一快照 reused：不重新编号；新扫描：旧 ref 失效
     Object.fromEntries(flat(first.nearby).map((e) => [e.prefab, e.ref])),
     'reused 不能重新编号',
   )
-  // 时间前进 → 新扫描 → 旧快照的 #1 必须失效
+
+  // OBSERVATION-02：时间前进、但东西没变 → 沿用同一个编号。
+  // 旧契约是"时间一到就换编号"；真机上模型思考 3~5 秒，回来时编号已经换了两轮，
+  // 于是 15 步里 5 次 stale_snapshot（session-403656e9）。复用编号才是对的：
+  // 引用绑的是"那一格的那个实体"，实体在、位置没变，引用就仍然有效。
   env.run('NOW = NOW + 30', '时间前进')
   const second = env.observe()
-  assert.notEqual(second.nearby.snapshot_id, first.nearby.snapshot_id, '要有新 snapshot_id')
+  assert.equal(second.nearby.snapshot_id, first.nearby.snapshot_id,
+    '内容没变时不该换编号（换了就等于把模型手里的 #N 作废）')
+  env.run(`local ent, why = Whale.nearby.Resolve("${first.nearby.snapshot_id}", "#1")
+            OUT_SAME = tostring(ent ~= nil) .. "|" .. tostring(why)`, '引用仍然有效')
+  assert.match(env.get('OUT_SAME'), /^true\|/, '内容没变时旧引用必须仍然解析得到：' + env.get('OUT_SAME'))
+
+  // 内容一变（多一个实体）→ 必须换编号，旧引用立刻失效（fail-closed 没变）
+  // 先让缓存过期，否则 observe 会直接复用上一个结果、根本不会重扫（看不到新实体）
+  env.run('NOW = NOW + 30', '再等一会儿')
+  env.run('NEARBY = { mkent({ prefab = "twigs", guid = 701, x = 8, z = 0, item = true, canbepickedup = true }), mkent({ prefab = "flint", guid = 702, x = 12, z = 0, item = true, canbepickedup = true }) }', '多一样东西')
+  const third = env.observe()
+  assert.notEqual(third.nearby.snapshot_id, first.nearby.snapshot_id, '内容变了必须换新 snapshot_id')
   env.run(`local ent, why = Whale.nearby.Resolve("${first.nearby.snapshot_id}", "#1")
             OUT_RESOLVE = tostring(ent) .. "|" .. tostring(why)`, '旧引用')
   const resolved = env.get('OUT_RESOLVE')
-  assert.match(resolved, /^nil\|/, '旧快照的引用必须解析不到：' + resolved)
+  assert.match(resolved, /^nil\|/, '内容变了以后旧快照的引用必须解析不到：' + resolved)
 })
 
 // ═══════════════════════ Delta ═══════════════════════
