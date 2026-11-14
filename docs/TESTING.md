@@ -11,7 +11,7 @@ powershell -ExecutionPolicy Bypass -File test.ps1
 ```
 
 它会：找 Node → 缺 `fengari`/`luaparse` 就装上 → 跑全部单测。
-最后一次实测（SURVIVAL-02.1）：**562 passed / 0 failed，退出码 0**。
+最后一次实测（SURVIVAL-02.1）：**565 passed / 0 failed，退出码 0**。
 
 等价的直接命令（不用 PowerShell 包装）：
 
@@ -29,14 +29,14 @@ node --test --test-force-exit "tests/*.test.mjs"
 
 | 类 | 需要的环境 | 命令 | 数量 | 本次 |
 |---|---|---|---|---|
-| **单元 / 沙箱** | 只要 Node | `node --test tests/*.test.mjs` | **562** | ✅ 已跑 |
-| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在 562 里 | ✅ 已跑 |
-| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在 562 里 | ✅ 已跑 |
-| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在 562 里 | ✅ 已跑 |
-| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6 | 脚本，不算进 562 | 见 §6.8 |
+| **单元 / 沙箱** | 只要 Node | `node --test tests/*.test.mjs` | **565** | ✅ 已跑 |
+| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在 565 里 | ✅ 已跑 |
+| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在 565 里 | ✅ 已跑 |
+| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在 565 里 | ✅ 已跑 |
+| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6 | 脚本，不算进 565 | 见 §6.8 |
 | **端到端（模型→游戏）** | 游戏 + DSH 会话 + API Key | 见 §6.5 | — | **NOT_RUN** |
 
-趋势：479（M2.2.1）→ 531（SURVIVAL-02）→ **562（SURVIVAL-02.1，新增 27）**。测试只增不减。
+趋势：479（M2.2.1）→ 531（SURVIVAL-02）→ **565（SURVIVAL-02.1，新增 30）**。测试只增不减。
 
 ---
 
@@ -244,8 +244,8 @@ node tools/m12-roundtrip.mjs        # 往返读写一次（会在 tests/artifact
 
 **前置（缺一不可）**
 
-1. 游戏里模组版本必须是 **0.32.0**（看状态文件 `mod` 字段，或服务器日志
-   `Loading mod: DontStarveWhaleSurvivor ... Version:0.32.0`）。
+1. 游戏里模组版本必须是 **0.32.1**（看状态文件 `mod` 字段，或服务器日志
+   `Loading mod: DontStarveWhaleSurvivor ... Version:0.32.1`）。
 2. **`REFLEX` 必须是 `true`**：检查 `Cluster_1/{Master,Caves}/modoverrides.lua`。
    旧存档默认是 `false`（本阶段把真实死因查出来的关键一条，见 `STATUS.md` §3.5.3），
    改完必须**重新读档**才生效。
@@ -276,11 +276,11 @@ node tools/m12-roundtrip.mjs        # 往返读写一次（会在 tests/artifact
 - 没跑 → 写 **`NOT_RUN`**，不要写"应该没问题"。
 - 换过代码但只跑了旧版本的真机 → 那是旧版本的证据，不能算新版本的。
 
-诚实结论（截至 SURVIVAL-02.1，模组 **0.32.0**；下表历史动作项仍是 0.17.2 的旧证据，未继承）：
+诚实结论（截至 SURVIVAL-02.1，模组 **0.32.1**；下表历史动作项仍是 0.17.2 的旧证据，未继承）：
 
 | 项 | 结论 |
 |---|---|
-| 单测 **562** 项（含 SURVIVAL-02.1 新增 27） | **UNIT：通过**（562/562） |
+| 单测 **565** 项（含 SURVIVAL-02.1 新增 30） | **UNIT：通过**（565/565） |
 | 干净检出（没有 `dist`/`bwc_config`/`.runtime`）后跑单测 | **通过**（479/479，M2.2.1 与 STABILITY-01 都验过） |
 | 真实游戏：模组加载（两个分片无 Lua 错误） | **RUNTIME：通过** |
 | 真实游戏：`get_state` / `nearby` | **RUNTIME：通过**（9 桶、`#N` 唯一、上限生效） |

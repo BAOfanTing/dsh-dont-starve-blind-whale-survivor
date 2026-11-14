@@ -8,11 +8,11 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.32.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.32.1** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
-模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.32.0`）。
+模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.32.1`）。
 判断"磁盘上的模组装没装进游戏"请看 `install-mod.mjs` 的输出（`installedVersion`）。
 
 > 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.30.x。M2.2.1 决定**不建同步机制**，
@@ -91,7 +91,7 @@
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
-| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（562/562）；RUNTIME 见 §4.6 | 本节 §4.6 |
+| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（565/565）；RUNTIME 见 §4.6 | 本节 §4.6 |
 
 ---
 
@@ -136,7 +136,7 @@ Loading mod: DontStarveWhaleSurvivor (大肥鱼饿不死 (Blind Whale Survivor))
 ```
 
 即：**默认开启 ≠ 旧存档实际开启**；这 10 次死亡全程 `Whale.reflex_on=false`，反射一次都没跑。
-（另一个证据：状态文件 `mod:"0.30.0"`，说明当时跑的是旧版本，本次改完已升到 0.32.0、需重新读档。）
+（另一个证据：状态文件 `mod:"0.30.0"`，说明当时跑的是旧版本，本次改完已升到 0.32.1、需重新读档。）
 
 即使反射开着，旧代码还有这些问题（本次已修）：
 `reflex_stock_light` 采够材料就 `return false`（从不做火把）；白天不做火把；除黑暗/被贴脸外，
@@ -312,7 +312,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 
 #### 4.6.4 自动化测试
 
-`node --test tests/*.test.mjs` → **562 passed / 0 failed**（基线 535 + 新增 27）。
+`node --test tests/*.test.mjs` → **565 passed / 0 failed**（基线 535 + 新增 30）。
 新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
 
 | 要求 | 用例 |
@@ -335,6 +335,10 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 | 16 不每秒重复启动同一动作 | RF-13 |
 | 17 Plan/Reflex 不同时冲突 | RF-9（单槽 job 结构）|
 | 18 死亡/复活/Actor 无效重置 | RF-14、RF-15 |
+
+真机补测（0.32.1）追加 3 条回归：
+RF-17（附近没草时要去采能采到的树苗）、RF-18（诊断限频且不污染 get_state 提示）、
+RF-19（torch 用 `fueled`，烧空了不算可用光源）。
 
 #### 4.6.5 真实游戏验证（RUNTIME）
 

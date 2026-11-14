@@ -115,19 +115,25 @@ local function mark_fail(key, seconds)
     fail_until[key] = U.now() + (seconds or 6)
 end
 
---- 诊断日志：同一段内容 30 秒内不重复打；写进 server_log，也留一份给 get_state。
+local DIAG_GAP = 20         -- 同一个诊断 section 至少隔 20 秒才再打一条
+local DIAG_GAP_SAME = 45    -- 内容完全没变时隔得更久
+
+--- 诊断日志：**按 section 限频**（不看文本，防止两种文本交替绕过限频）。
+--- 只进 server_log，不塞进 get_state 的"最近做过的事"里 —— 那条通道只放真正做过的动作，
+--- 否则模型每轮看到的提示会被诊断刷满（真机实测踩到）。
 local function diag(section, lines)
     local now = U.now()
     lines = lines or {}
     local joined = table.concat(lines, " ")
     local prev = last_log[section]
-    if prev ~= nil and prev.text == joined and now - prev.at < 30 then return end
+    if prev ~= nil then
+        local gap = (prev.text == joined) and DIAG_GAP_SAME or DIAG_GAP
+        if now - prev.at < gap then return end
+    end
     last_log[section] = { at = now, text = joined }
     local out = "[Reflex] " .. section .. ":"
     for _, line in ipairs(lines) do out = out .. "\n  " .. tostring(line) end
     pcall(function() print(out) end)
-    recent[#recent + 1] = { t = now, text = "[Reflex] " .. section }
-    while #recent > 8 do table.remove(recent, 1) end
 end
 
 local function say(p, key, text)
@@ -164,19 +170,34 @@ end
 -- ─────────────────────────── 光源判断 ───────────────────────────
 
 --- 手上有"还能用"的便携光源（有耐久就看耐久，烧光的不算）
+--- 光源物品还有没有燃料/耐久：torch 用 fueled，工具用 finiteuses。
+--- 两者都读不到时按可用处理（不因为拿不到字段就误判成"没光"）。
+local function item_usable(item)
+    if item == nil then return false end
+    local comps = item.components or {}
+    local fueled = comps.fueled
+    if fueled ~= nil then
+        local ok, empty = pcall(function() return fueled:IsEmpty() end)
+        if ok and empty == true then return false end
+        local ok_p, pct = pcall(function() return fueled:GetPercent() end)
+        if ok_p and type(pct) == "number" and pct <= 0 then return false end
+    end
+    local uses = comps.finiteuses
+    if uses ~= nil then
+        local ok, cur = pcall(function() return uses:GetUses() end)
+        if ok and type(cur) == "number" and cur <= 0 then return false end
+    end
+    return true
+end
+
 local function hand_light(p)
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
     if inv == nil then return nil end
     local hands = nil
     pcall(function() hands = inv:GetEquippedItem(GLOBAL.EQUIPSLOTS.HANDS) end)
     if hands == nil then return nil end
-    local prefab = tostring(hands.prefab or "")
-    if not LIGHT_PREFABS[prefab] then return nil end
-    local uses = hands.components ~= nil and hands.components.finiteuses or nil
-    if uses ~= nil then
-        local ok, cur = pcall(function() return uses:GetUses() end)
-        if ok and type(cur) == "number" and cur <= 0 then return nil end
-    end
+    if not LIGHT_PREFABS[tostring(hands.prefab or "")] then return nil end
+    if not item_usable(hands) then return nil end
     return hands
 end
 
@@ -188,12 +209,8 @@ local function inventory_light(p)
     pcall(function()
         inv:ForEachItem(function(item)
             if found ~= nil or item == nil or not item:IsValid() then return end
-            local prefab = tostring(item.prefab or "")
-            if not LIGHT_PREFABS[prefab] then return end
-            local uses = item.components ~= nil and item.components.finiteuses or nil
-            if uses == nil then found = item return end
-            local ok, cur = pcall(function() return uses:GetUses() end)
-            if not ok or type(cur) ~= "number" or cur > 0 then found = item end
+            if not LIGHT_PREFABS[tostring(item.prefab or "")] then return end
+            if item_usable(item) then found = item end
         end)
     end)
     return found
@@ -509,7 +526,9 @@ local function reflex_heal(p)
     return reflex_eat(p)
 end
 
---- 白天补火把材料（P2，只采缺的那一种，一次一个）
+--- 白天补火把材料（P2）：**在缺的材料里，挑一个附近真能采到的**。
+--- 真机踩到：只盯第一个缺的（cutgrass）时，附近没草就一直空转，
+--- 而树苗明明在 1.7 格也不去采，2 分半钟背包还是空的。
 local function reflex_stock_light(p, rep)
     if rep == nil then rep = light_report(p) end
     if rep.portable then return false end          -- 已经有能带走的光源
@@ -520,28 +539,35 @@ local function reflex_stock_light(p, rep)
     local cost = cr ~= nil and cr.NeededIngredients("torch") or nil
     if cost == nil then return false end
     local counts = cr.Counts(p)
-    local prefab, want = nil, nil
-    for pf, need in pairs(cost) do
-        if (counts[pf] or 0) < need then
-            prefab = pf
-            if pf == "cutgrass" then want = "grass"
-            elseif pf == "twigs" then want = "sapling" end
-            break
+
+    local candidates = {}
+    for prefab, need in pairs(cost) do
+        if (counts[prefab] or 0) < need then
+            local source = nil
+            if prefab == "cutgrass" then source = "grass"
+            elseif prefab == "twigs" then source = "sapling" end
+            if source ~= nil then
+                candidates[#candidates + 1] = { prefab = prefab, source = source }
+            end
         end
     end
-    if want == nil then return false end
+    table.sort(candidates, function(a, b) return a.prefab < b.prefab end)
 
-    local target = exact_ready(p, want, 10)
-    if target == nil then
-        diag("light_materials", { "need=" .. tostring(prefab), "nearby=none" })
-        mark_fail("stock", 5)
-        return false
+    for _, c in ipairs(candidates) do
+        -- 用附近观察半径（16 格）找，但不走出安全区（不 move_to）
+        local target = exact_ready(p, c.source, 16)
+        if target ~= nil then
+            if push_pick(p, target) then
+                mark("stock")
+                say(p, "stock", c.source == "grass" and "先采点草，凑火把材料" or "先采点树枝，凑火把材料")
+                return true
+            end
+            return false
+        end
     end
-    if push_pick(p, target) then
-        mark("stock")
-        say(p, "stock", want == "grass" and "先采点草，凑火把材料" or "先采点树枝，凑火把材料")
-        return true
-    end
+
+    diag("light_materials", { "nearby=none", "missing=" .. table.concat(rep.missing or {}, ", ") })
+    mark_fail("stock", 5)
     return false
 end
 

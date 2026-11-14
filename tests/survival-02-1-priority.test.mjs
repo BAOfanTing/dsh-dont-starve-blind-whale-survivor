@@ -692,6 +692,67 @@ test('RF-15（要求18）：变成鬼魂（playerghost 标签）也重置', asyn
   assert.equal(global('JOB'), 'nil')
 })
 
+test('RF-17（真机 bug）：附近只有树苗没有草时，反射应该采能采到的那一种，而不是卡在 cutgrass 空转', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    local sapling = newent("sapling", 2 * 4, 0, { "pickable" }, {
+        pickable = { CanBePicked = function() return true end },
+    })
+    NEARBY = { sapling }        -- 故意不放 grass
+  `, '附近只有树苗，没有草')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    PUSH_PREFAB = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
+    ACTION = PUSHED ~= nil and PUSHED.action ~= nil and PUSHED.action.id or "nil"
+  `)
+  assert.equal(global('PUSH_PREFAB'), 'sapling', '附近没有草就去采树枝，别一直空转')
+  assert.equal(global('ACTION'), 'PICK')
+})
+
+test('RF-18（真机 bug）：诊断日志限频，且不把诊断塞进 get_state 的「最近做过的事」', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`NEARBY = {}`, '附近什么都没有')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(50)}                  -- 模拟 10 秒的空转
+    RECENT_N = #Whale.reflex.Recent()
+    HAS_DIAG = 0
+    for _, t in ipairs(Whale.reflex.Recent()) do
+        if string.find(t, "[Reflex]", 1, true) ~= nil then HAS_DIAG = HAS_DIAG + 1 end
+    end
+  `)
+  assert.equal(global('HAS_DIAG'), '0', '诊断不该出现在给模型看的提示里')
+  assert.equal(global('RECENT_N'), '0', '没做任何动作就不该有"我自己刚干的"记录')
+})
+
+test('RF-19：fueled 烧空的火把不算可用光源（torch 用 fueled，不是 finiteuses）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+        { fueled = { IsEmpty = function() return true end,
+                     GetPercent = function() return 0 end } })
+    PLAYER.components.inventory._items[1] = mkitem("cutgrass", 2)
+    PLAYER.components.inventory._items[2] = mkitem("twigs", 2)
+  `, '手里一把烧空的火把 + 材料齐')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    local d = Whale.reflex.Diagnose()
+    PORTABLE = tostring(d.portable_light)
+    USABLE = tostring(d.has_usable_light)
+    CANCRAFT = tostring(d.can_craft_torch)
+  `)
+  assert.equal(global('PORTABLE'), 'false', '烧空的火把不是便携光源')
+  assert.equal(global('USABLE'), 'false')
+  assert.equal(global('CANCRAFT'), 'true', '应该重新做一把火把')
+})
+
 test('RF-16：Diagnose() 能说清"当前光源是否可用 / 是否该准备"', async () => {
   const fengari = await import('fengari')
   const { run, runFile, global } = loadReflex(fengari)
