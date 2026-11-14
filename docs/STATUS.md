@@ -91,7 +91,7 @@
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
-| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（573/573）；RUNTIME 见 §4.6 | 本节 §4.6 |
+| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（574/574）；RUNTIME 见 §4.6 | 本节 §4.6 |
 
 ---
 
@@ -312,7 +312,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 
 #### 4.6.4 自动化测试
 
-`node --test tests/*.test.mjs` → **573 passed / 0 failed**（基线 535 + 新增 38）。
+`node --test tests/*.test.mjs` → **574 passed / 0 failed**（基线 535 + 新增 39）。
 新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
 
 | 要求 | 用例 |
@@ -340,14 +340,50 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 RF-17（附近没草时要去采能采到的树苗）、RF-18（诊断限频且不污染 get_state 提示）、
 RF-19（torch 用 `fueled`，烧空了不算可用光源）、RF-20（制作结果用独立 section，不被限频吞掉）。
 
-另有 **REC-1..7**（`tests/session-recorder.test.mjs`）覆盖旁路会话记录器：
+另有 **REC-1..8**（`tests/session-recorder.test.mjs`）覆盖旁路会话记录器：
 KLEI 头、命令/回执/状态/反射/死亡入时间线、按 id 去重、日志增量与截断、`--from-start`、
-以及"记录器绝不改写桥文件"这条硬约束。记录器用法见 `docs/TESTING.md` §6.9。
+GBK 中文兜底解码、以及"记录器绝不改写桥文件"这条硬约束。记录器用法见 `docs/TESTING.md` §6.9。
 
-#### 4.6.5 真实游戏验证（RUNTIME）
+#### 4.6.5 真实游戏验证（RUNTIME，2026-11-14，Cluster_2 新世界）
 
-> 详见最终交付报告。要点：验证前必须把 `Cluster_1/modoverrides.lua` 的 `REFLEX` 改为 `true`
-> 并重新读档（旧存档默认是 `false`，见 §3.5.3）。真机结果填写在本节（未跑到的会标 `NOT_RUN`）。
+**环境**（逐条由服务器日志 / 状态文件确认，不是推断）：
+
+| 项 | 值 |
+|---|---|
+| 世界 | `Cluster_2`（用户新建的专用测试世界），第 1 天开始 |
+| 游戏 Mod 版本 | 运行中世界加载 **0.32.1**（日志 `Loading mod: ... Version:0.32.1`）；仓库/安装目录为 **0.32.2**（仅诊断 section 改名，行为不变，需重进才会显示） |
+| REFLEX 实际配置 | **`true`**（日志逐字 `Overriding mod DontStarveWhaleSurvivor's option REFLEX with value true`）；`get_state` 顶部不再出现"⚠ 保命反射被关掉了" |
+| 世界设置 | `game_mode=survival`、`darkness=default`（**黑暗会打死人**，与旧 Cluster_1 的 `nonlethal` 不同）、`ghostenabled=none`（死了不化魂，直接重生成） |
+| 排查工具 | `tools/session-recorder.mjs`，只读旁路，记录命令/回执/反射/死亡/状态（§6.9） |
+
+**逐场景结果：**
+
+| 场景 | 结果 | 证据 |
+|---|---|---|
+| A 白天材料收集 | ✅ **RUNTIME 通过** | 反射自己采到 `树枝 ×2` 与 `采下的草 ×2`；`get_state` 提示「先采点草，凑火把材料」 |
+| 材料齐立即做火把 | ✅ **RUNTIME 通过** | 日志 `priority=P1 reason=light_preparation` → `craft_torch: started=true`；随后状态**手持 火炬(62%)**，背包 3 格→1 格（cutgrass/twigs 被真实消耗） |
+| 火把材料保护 | ✅ **RUNTIME 通过** | 做出火把后计划立刻从 `prep_light` 切到 `tool_axe`（保护解除）；做出前斧头目标不出现 |
+| B 黄昏/装备 | ⚠️ **部分观测** | 火把在白天做出即自动装备（DoBuild 空手直装）；黄昏时若火把不在手上，日志出现 `[Reflex] protection: ... reason=dark_no_light`（P0 抢占）。未单独构造"背包有火把但没装备"的黄昏场景 |
+| C 第一夜 | ❌ **未通过** | 该世界是**夜晚散点出生**（`Spawning player at [Scatter]`、状态第 1 天·夜晚），出生背包只有哑铃、`cutgrass 0/2、twigs 0/2`。反射日志逐字 `craft_torch: started=false reason=ingredients_missing` → `[Death Announcement] ... 死于： 黑暗`（00:06:07）。**反射无法凭空造出材料** |
+| D 第二天 | ✅ **RUNTIME 通过** | 重生成后第 2 天白天：生命 200/200、理智 196/200、饥饿 183/200；反射补齐材料并做出火把；`light_check: has_usable_light=true` |
+| E 紧急抢占 | ✅ **RUNTIME 通过** | 模型 `gather_area grass` 期间被 P0 中断：回执 `dark_no_light`，日志 `[Reflex] protection: ... reason=dark_no_light`。但也暴露缺陷：反射在无材料时仍中断了模型动作却帮不上忙 |
+| 第二夜 | ✅ **RUNTIME 通过（第 2 个角色）** | 状态从第 2 天·白天 → **第 3 天·白天**，生命 200/200、理智 196/200，手持火把，期间无死亡 |
+| 第三夜 / 火把烧完 | ❌ **未通过** | 火把燃料耗尽后消失（背包只剩哑铃、手持空），且没有备用材料；黄昏→夜里日志一路 `craft_torch: ingredients_missing` / `no_light_materials` → 第 3 天·夜晚 **生命 0/200，死于黑暗** |
+| 当前进度 | 第 **4** 天·白天，第 3 个重生成角色，生命 200/200、理智 200/200、手持火把，存活 | 记录器 `STATE` 行 |
+
+**死亡统计（本次 RUNTIME）：2 次，均为「黑暗」**（`Death Announcement` + `Deleting user` + `reset: reason=dead`）。
+失败根因明确：世界夜晚出生 / 火把烧完后**没有备用光源或材料**，而反射被设计为
+"只在附近采集、不远离安全区"，造不出材料。这不是优先级或抢占逻辑失效——
+恰恰相反，P0/P1、白天做火把、材料保护、抢占、防抖都按预期触发了。
+
+**NOT_OBSERVED（不编造）**：饥饿紧急进食（饥饿最低 133/200=66%，未达 35% 阈值）、
+怪物攻击导致的抢占（本局青蛙始终 9 格外）、温度异常、固定营火/火坑照明、
+完全连续的"单个角色活过第一夜+第二夜"（这一局有 2 次死亡与重生成）。
+
+> 结论：**验收标准"连续真实度过第一夜和第二夜"未达成**。修复后的保命链在"有白天可准备"
+> 时工作正常，但"出生即夜晚 / 光源耗尽后无备用材料"仍会死于黑暗。
+> 下一步建议（本阶段未做）：火把点亮期间也在白天囤一份备用 `cutgrass+twigs`，
+> 或允许反射在 P0 且无材料时走向最近的草丛 / 或建固定营火。
 
 ## 5. 已知问题（都会真实影响体验）
 | # | 问题 | 影响 | 现状 |

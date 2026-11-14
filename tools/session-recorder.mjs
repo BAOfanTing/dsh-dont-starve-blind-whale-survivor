@@ -26,6 +26,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const KLEI = /^KLEI\s+\d+\s*/
 const stripKlei = (text) => String(text ?? '').replace(KLEI, '')
 
+/**
+ * 日志编码兜底：DST 的 server_log.txt 中文是 **GBK**，而 chat log 是 UTF-8。
+ * 先按 UTF-8 解；出现替换符（U+FFFD）说明不是 UTF-8，改用 GBK 再解一次。
+ * 不做这个兜底会把字节替换成 U+FFFD，中文全丢（排查时看不出是谁重连了）。
+ */
+function decodeLogBytes(buf) {
+  const utf8 = buf.toString('utf8')
+  if (!utf8.includes('\uFFFD')) return utf8
+  try { return new TextDecoder('gbk', { fatal: false }).decode(buf) }
+  catch { return utf8 }
+}
+
 const DEFAULT_LOG_RE = /\[Reflex\]|Death Announcement|Resurrect|Spawn request|Loading mod:|Overriding mod|Server Auto|Sim unpaused|Sim paused|Deleting user|Serializing world|Lua error|stack traceback|WARNING|warning/i
 
 function parseArgs(argv) {
@@ -130,7 +142,8 @@ export class SessionRecorder {
     catch { return null }
   }
 
-  /** 增量读日志文件；处理截断/轮转，保留未成行的半截 */
+  /** 增量读日志文件；按**字节**处理（中文可能是多字节且跨两次读取），
+   *  处理文件截断/轮转，保留未成行的半截字节。 */
   _tail(file) {
     let size
     try { size = fs.statSync(file).size } catch { return [] }
@@ -139,17 +152,23 @@ export class SessionRecorder {
       offset = this.fromStart ? 0 : size
       this.offsets.set(file, offset)
     }
-    if (size < offset) { offset = 0; this.partials.set(file, '') }  // 被截断/轮转
+    if (size < offset) { offset = 0; this.partials.set(file, Buffer.alloc(0)) }  // 被截断/轮转
     if (size === offset) return []
     const fd = fs.openSync(file, 'r')
     const buf = Buffer.alloc(size - offset)
     let read = 0
     try { read = fs.readSync(fd, buf, 0, buf.length, offset) } finally { fs.closeSync(fd) }
     this.offsets.set(file, size)
-    const text = (this.partials.get(file) || '') + buf.subarray(0, read).toString('utf8')
-    const lines = text.split(/\r?\n/)
-    this.partials.set(file, lines.pop() || '')
-    return lines.filter((line) => line.length > 0)
+
+    const prev = this.partials.get(file) || Buffer.alloc(0)
+    const all = Buffer.concat([prev, buf.subarray(0, read)])
+    const end = all.lastIndexOf(0x0a)
+    if (end < 0) { this.partials.set(file, all); return [] }
+    this.partials.set(file, all.subarray(end + 1))
+    return decodeLogBytes(all.subarray(0, end))
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\r$/, ''))
+      .filter((line) => line.length > 0)
   }
 
   _scanCmdResult() {

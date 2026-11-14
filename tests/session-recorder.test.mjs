@@ -144,6 +144,24 @@ test('REC-6：记录器只读桥文件，绝不改写它们', () => {
   assert.equal(fs.readFileSync(f.state, 'utf8'), stateText, '状态文件不能被动过')
 })
 
+test('REC-8：server_log 的 GBK 中文能正确解码（不变成 U+FFFD 乱码，JSON 仍合法）', () => {
+  const f = fixture()
+  fs.writeFileSync(f.state, 'KLEI     1 ' + stateJson())
+  const line = Buffer.concat([
+    Buffer.from('[00:00:01]: Spawn request: wolfgang from ', 'utf8'),
+    Buffer.from([0xC0, 0xED, 0xCC, 0xC1]),  // GBK: 理塘
+    Buffer.from('\n', 'utf8'),
+  ])
+  fs.writeFileSync(f.log, line)
+  const rec = makeRecorder(f)
+  const logs = rec.tick().filter((e) => e.kind === 'game_log')
+  assert.equal(logs.length, 1)
+  assert.match(logs[0].line, /理塘/, '中文不该被替换成 U+FFFD')
+  assert.doesNotMatch(logs[0].line, /\uFFFD/)
+  const parsed = fs.readFileSync(f.out, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  assert.ok(parsed.some((e) => e.line && e.line.includes('理塘')), '产物必须是合法 JSON 且保留中文')
+})
+
 test('REC-7：人工标注与产物文件（jsonl + 可读 txt）都对', () => {
   const f = fixture()
   fs.writeFileSync(f.state, 'KLEI     1 ' + stateJson())
