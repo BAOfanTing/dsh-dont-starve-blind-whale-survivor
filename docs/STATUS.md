@@ -234,6 +234,10 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 | 16 | ~~**`recipes` 一调就崩**~~ **已修（0.26.0）** | 凭印象用了不存在的帮助函数 `U.g` / `U.try` / `U.best_tool` / `U.best_fuel` | 真机 session-b159b09a：#4 recipes → `actions.lua:3046: attempt to call field 'g' (a nil value)`。这四个**从来不存在**（`U.try` 旧实现有、本版 util 重写时漏了）。已改用 `GLOBAL.AllRecipes` + `craftrules.Counts` 并补上 `U.try`；新增 `tests/lua-module-calls.test.mjs` 做静态审计（已用注入 bug 验证它真能抓到） |
 | 17 | ~~**多步动作被外层超时砍成"结果未知"**~~ **已修（0.26.0）** | Lua 内部预算 240 秒 > Node 外层 120 秒 → 必然 `result_timeout` | 真机 session-b159b09a：#5 `gather_area` → `结果未知（result_timeout）`（也就是用户看到的"浆果采不了卡住了"）。现在 Node 通过命令信封把 `budget_s` 告诉 Lua，`A.Tick` 通用兜底：超预算就自己收尾、如实报 `budget_exceeded`，而不是被砍掉 |
 
+| 18 | ~~**`gather_area` 目标在脚边时崩**~~ **已修（0.27.0）** | `next` 阶段把**候选表** `pick` 存进了 `j.data.current`，`acting` 阶段却当实体用 | 真机 Cluster_1：`actions.lua:2136: attempt to call method 'IsValid' (a nil value)`。**只在这条路上踩到**：目标远 → 先 walking（current 是实体）没事；目标近 → 直接 acting → 崩。所以现象是"有的能采有的必崩"。已改成 `j.data.current = pick.ent`，并在 `acting` 加防御（不是实体就跳过该目标，不打挂模组） |
+| 19 | ~~**`walking` 阶段 busy 恒为真时永不超时**~~ **已修（0.27.0）** | 12 秒超时判定写在"busy 就 return run"**之后**，于是永远走不到 | 真机 Cluster_1：一条 `gather_area` 排队 **137 秒没回执**（命令在、结果不在）。已把超时判定提到 busy 早退之前 |
+| 20 | ~~**旧客户端不带 `budget_s` 时兜底失效**~~ **已修（0.27.0）** | `A.Tick` 的兜底要求 `budget_s ~= nil`，旧客户端不发就完全不兜底 | 真机那条 137 秒的命令里确实没有 `budget_s` 字段。已改成默认 45 秒也兜底 |
+
 ### 4.2 guide 一致性审计结论（STABILITY-01）
 
 **指南确实会进模型上下文**（有代码证据）：

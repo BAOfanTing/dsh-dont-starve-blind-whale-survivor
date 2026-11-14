@@ -1226,4 +1226,50 @@ test('S8-4：预算够用时不该误伤（正常做完就是成功）', async (
   `)
   const text = String(global('OUT_TEXT'))
   assert.ok(!/budget_exceeded/.test(text), `预算充足时不该报超预算，实际：${text}`)
+  // ★ 这几条是补上的：原来只查"不是超预算"，结果漏掉了真机的崩溃
+  //   （current 存了候选表 → cur:IsValid() → attempt to call method 'IsValid'）
+  assert.equal(global('OUT_OK'), 'true', `脚边有成熟浆果时必须采成功，实际：${text}`)
+  assert.match(text, /采了 [1-9]/, `要真的采到，实际：${text}`)
+  assert.ok(!/attempt to call/.test(text), `不许出 Lua 崩溃，实际：${text}`)
+  assert.ok(!/动作出错/.test(text), `不许报"动作出错"，实际：${text}`)
+})
+
+test('S8-5：目标就在脚边（不走 walking 直接 acting）也不能崩 —— 真机 Cluster_1 的崩溃点', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  // 距离 1 格（4 单位）：远小于 APPROACH_UNITS(6.4) → next 直接进 acting
+  run(`
+    NEAR = mkent("berrybush", 93, 12 * 4 + 2 + 4, 45 * 4 + 2)
+    NEAR.components.pickable.CanBePicked = function() return true end
+    NEARBY = { NEAR }
+  `, '脚边 1 格放一丛成熟浆果')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    PUSHED = nil
+    local ctx = { survival_area = true, radius = 12, limit = 1, budget_s = 60 }
+    Whale.actions.Start("gather_area", { radius = 12, limit = 1 }, "c-near", ctx)
+    local pushed_once = false
+    for i = 1, 40 do
+        if Whale.job == nil then break end
+        Whale.actions.Tick()
+        if PUSHED ~= nil and not pushed_once then
+            pushed_once = true
+            PUSHED_TARGET_OK = tostring(PUSHED.target ~= nil and PUSHED.target.prefab == "berrybush")
+            -- 采成功：CanBePicked 翻成 false
+            NEAR.components.pickable.CanBePicked = function() return false end
+        end
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
+    OUT_PUSHED = tostring(pushed_once)
+  `)
+  assert.equal(global('OUT_PUSHED'), 'true', '应该真的推了 PICK 动作')
+  assert.equal(global('PUSHED_TARGET_OK'), 'true', '推的动作目标要对着那丛浆果')
+  assert.equal(global('OUT_OK'), 'true', `不该崩、应该采成功，实际：${global('OUT_TEXT')}`)
+  assert.ok(!/attempt to call/.test(String(global('OUT_TEXT'))), '不许出 IsValid 那类崩溃')
 })

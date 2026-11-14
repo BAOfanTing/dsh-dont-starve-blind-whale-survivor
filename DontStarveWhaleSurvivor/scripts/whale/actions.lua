@@ -2089,7 +2089,11 @@ JOBS.gather_area = function(j, p)
         end
         if busy(p) then return "run" end   -- 手上还有动作，等它做完
         j.data.done[pick.ent] = true
-        j.data.current = pick
+        -- ★ 必须是**实体**，不是候选表 pick。
+        --   真机 bug（Cluster_1）：写成 pick 之后，acting 阶段 cur:IsValid() 直接崩
+        --   （"attempt to call method 'IsValid' (a nil value)"），而且只有"目标近、
+        --   不走 walking 直接 acting"时才会踩到 —— 所以现象是"有的能采有的必崩"。
+        j.data.current = pick.ent
         j.data.phase_start = U.now()
         j.data.pushes = 1
         push(p, BufferedAction(p, pick.ent, ACTIONS.PICK, nil))
@@ -2104,6 +2108,15 @@ JOBS.gather_area = function(j, p)
             return "run"
         end
         local d = U.dist(p, target) or 99999
+        -- ★ 超时判定必须放在 busy 早退**之前**。
+        --   真机 bug：busy 恒为真时，每个 tick 都在下面那句 return run 掉头，
+        --   永远走不到 12 秒超时 → 任务永不结束（真机那条 gather_area 排队 137 秒没回执）。
+        if U.now() - j.data.walk_start > 12 then
+            j.data.done[target] = true
+            j.data.failed = j.data.failed + 1
+            j.step = "next"
+            return "run"
+        end
         if d <= APPROACH_UNITS then
             if busy(p) then return "run" end
             j.data.done[target] = true
@@ -2132,8 +2145,14 @@ JOBS.gather_area = function(j, p)
 
     if j.step == "acting" then
         local cur = j.data.current
-        local pickable = cur ~= nil and cur.components ~= nil and cur.components.pickable or nil
-        local alive = cur ~= nil and cur:IsValid()
+        -- 防御：current 必须是**实体**。真机踩过一次（把候选表塞进来 → 整个动作崩掉），
+        -- 这里宁可跳过这个目标，也不让一条命令把模组打挂。
+        if cur == nil or type(cur.IsValid) ~= "function" then
+            j.step = "next"
+            return "run"
+        end
+        local pickable = cur.components ~= nil and cur.components.pickable or nil
+        local alive = cur:IsValid()
         local ok_can, can = pcall(function() return pickable ~= nil and pickable:CanBePicked() end)
         local flipped = (ok_can and can == false)
         if flipped or not alive then
@@ -3391,11 +3410,14 @@ function A.Tick()
     -- ★ 通用预算兜底：外层等不了更久，超了就把控制权交回去、如实说"没做完"，
     --   别让外层把整条命令判成 result_timeout（真机：gather_area 内部 240 秒、
     --   外层 120 秒 → 必然超时，模型只看到"结果未知"，不知道该干嘛）。
-    if ok and status == "run" and j.budget_s ~= nil and j.t0 ~= nil then
-        if (U.now() - j.t0) > j.budget_s then
+    -- 默认 45 秒：旧客户端不发 budget_s（真机上就有一条），这时也必须兜底，
+    -- 否则任何"卡住不返回"的动作都会一直挂到外层超时、变成"结果未知"。
+    local budget = tonumber(j.budget_s) or 45
+    if ok and status == "run" and j.t0 ~= nil then
+        if (U.now() - j.t0) > budget then
             status = "fail"
             text = string.format("budget_exceeded: 这一步用了 %d 秒还没完（上限 %d 秒），先停下。已经做了一部分，用 get_state 看现在的真实状态再决定下一步",
-                math.floor(U.now() - j.t0), math.floor(j.budget_s))
+                math.floor(U.now() - j.t0), math.floor(budget))
         end
     end
     if not ok then
