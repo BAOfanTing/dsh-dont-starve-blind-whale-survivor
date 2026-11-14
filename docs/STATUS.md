@@ -8,7 +8,7 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.18.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.19.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
@@ -22,7 +22,7 @@
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（11 个）
+### 2.1 模型可见的工具（13 个）
 
 > 分类：`get_state` / `get_guide` = **只读**；`update_notes` = **本地写入**（会覆盖写笔记文件）；
 > `move_to` / `stop` / `pickup` / `harvest` / `gather` / `eat` / `craft` / `equip` = **游戏动作**。
@@ -40,6 +40,8 @@
 | **`eat`** | 动作 R1 | **SURVIVAL-01 新增**：吃背包里的白名单食物（不填 = 服务端挑最该吃的） |
 | **`craft`** | 动作 R2 | **SURVIVAL-01 新增**：只做 `torch`(2 草+2 树枝) / `axe`(1 树枝+1 燧石) / `pickaxe`(2 树枝+2 燧石) |
 | **`equip`** | 动作 R1 | **SURVIVAL-01 新增**：把 `torch` / `axe` / `pickaxe` 拿在手里 |
+| **`gather_area`** | 动作 R2 | **SURVIVAL-02 新增**：一次采完附近能采的（可只采某一种）—— 省调用次数 |
+| **`seek`** | 动作 R2 | **SURVIVAL-02 新增**：8 方向 × 多环走出去找东西，只报位置、不自动动手 |
 
 **未开放**（Lua 里有实现、但 guard 不放行、工具表也不暴露）：
 `chop / mine / hammer / dig / attack / pick / cook / build / make_fire / add_fuel / heal / drop /
