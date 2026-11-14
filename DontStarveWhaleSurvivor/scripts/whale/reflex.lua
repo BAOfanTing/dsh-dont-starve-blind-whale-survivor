@@ -773,7 +773,9 @@ local function confirm_pending(p)
         local have = cr ~= nil and (cr.Counts(p)["torch"] or 0) or 0
         local hand = hand_light(p)
         local ok = (have > 0) or (hand ~= nil)
-        diag("craft_torch", {
+        -- 用独立 section：否则会被上面 "craft_torch: started=true" 的 20 秒限频吞掉，
+        -- 真机就出现过"只看到 started、看不到 result / inventory_confirmed"。
+        diag("craft_torch_result", {
             "started=true",
             "result=" .. (ok and "succeeded" or "failed"),
             "inventory_confirmed=" .. bool_str(have > 0),

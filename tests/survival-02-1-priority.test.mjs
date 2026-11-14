@@ -753,6 +753,39 @@ test('RF-19：fueled 烧空的火把不算可用光源（torch 用 fueled，不�
   assert.equal(global('CANCRAFT'), 'true', '应该重新做一把火把')
 })
 
+test('RF-20（真机 bug）：制作结果用独立 section，不被 started 的 20 秒限频吞掉', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    PLAYER.components.inventory._items[1] = mkitem("cutgrass", 2)
+    PLAYER.components.inventory._items[2] = mkitem("twigs", 2)
+    MAKE_RECIPE_IMPL = function(recipe)
+        if recipe.name == "torch" then
+            PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+                { fueled = { IsEmpty = function() return false end,
+                             GetPercent = function() return 0.62 end } })
+        end
+        return true
+    end
+  `, '白天 + 材料齐 + 自动装备')
+  runFile(`
+    LOG_CAPTURE = ""
+    print = function(s) LOG_CAPTURE = LOG_CAPTURE .. tostring(s) .. "\\n" end
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}                                   -- 触发 craft_torch: started=true
+    Whale.actions.Tick()                             -- MakeRecipe
+    Whale.actions.Tick()                             -- 核对成功
+    ${eachTick(5)}                                   -- confirm_pending 打结果
+    HAS_RESULT = string.find(LOG_CAPTURE, "craft_torch_result", 1, true) ~= nil and "yes" or "no"
+    HAS_SUCCEEDED = string.find(LOG_CAPTURE, "result=succeeded", 1, true) ~= nil and "yes" or "no"
+    HAS_CONFIRMED = string.find(LOG_CAPTURE, "in_hand=true", 1, true) ~= nil and "yes" or "no"
+  `)
+  assert.equal(global('HAS_RESULT'), 'yes', '结果必须是独立的诊断 section')
+  assert.equal(global('HAS_SUCCEEDED'), 'yes')
+  assert.equal(global('HAS_CONFIRMED'), 'yes')
+})
+
 test('RF-16：Diagnose() 能说清"当前光源是否可用 / 是否该准备"', async () => {
   const fengari = await import('fengari')
   const { run, runFile, global } = loadReflex(fengari)
