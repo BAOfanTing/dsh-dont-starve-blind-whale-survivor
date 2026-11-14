@@ -2614,8 +2614,25 @@ local function unequip_by_slot(j, p, slot_name)
         end
         j.data.prefab = tostring(before.prefab)
         j.data.slot = slot
-        local ok, err = pcall(function() inv:Unequip(slot) end)
-        if not ok then return "fail", "unequip_failed: " .. tostring(err) end
+        -- ★ 真机 bug（0.35.0）：DST 的 Inventory:Unequip(slot) 只把物品从 equipslots 摘掉
+        --   并 **return item**，不会自动放回 itemslots。原版 player_common.lua 也是
+        --   `local item = inv:Unequip(...)` 然后自己 GiveItem / 存起来。
+        --   我们以前直接丢掉返回值 → 火把被摘下后没进背包，DST 把它丢到地上/销毁。
+        --   于是"白天把火把收起来省燃料"变成"火把凭空消失"，夜里 portable=false 直接黑死。
+        local ok, item = pcall(function() return inv:Unequip(slot) end)
+        if not ok then return "fail", "unequip_failed: " .. tostring(item) end
+        if item ~= nil and item:IsValid() then
+            -- 装备栏已摘掉，但物品必须显式回到背包
+            local given = false
+            pcall(function()
+                local free = inv:GetNextAvailableSlot()
+                given = inv:GiveItem(item, free) ~= nil
+            end)
+            if not given then
+                -- 兜底：GiveItem 失败就别假装成功，避免"收纳成功但火把没了"
+                return "fail", string.format("unequip_no_space: %s 没放回背包（背包满了？）", j.data.prefab)
+            end
+        end
         j.step = "acting"
         j.data.phase_start = U.now()
         return "run"
@@ -2624,6 +2641,16 @@ local function unequip_by_slot(j, p, slot_name)
         local now = nil
         pcall(function() now = inv:GetEquippedItem(slot) end)
         if now == nil then
+            -- 必须核对物品真的进了背包（ForEachItem 会同时遍历 itemslots 和 equipslots）
+            local in_bag = false
+            pcall(function()
+                inv:ForEachItem(function(item)
+                    if item ~= nil and tostring(item.prefab or "") == j.data.prefab then in_bag = true end
+                end)
+            end)
+            if not in_bag then
+                return "fail", string.format("unequip_failed: %s 没在背包里", j.data.prefab)
+            end
             return "done", string.format("把 %s 放回背包了", j.data.prefab)
         end
         if U.now() - j.data.phase_start > 5 then

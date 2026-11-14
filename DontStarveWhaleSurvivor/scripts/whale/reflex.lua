@@ -582,6 +582,22 @@ local function firepit_ready(p)
     return ok == true
 end
 
+--- 反射现在**真的**能弄出光吗？用于抢占前的预判（见 try_action 的 canRun）。
+--- 缺关键材料时返回 false：此时 P0 绝不该打断模型正在进行的采集，
+--- 否则"模型采不到料 + 反射造不出光"互相锁死（真机第 10 天黄昏）。
+local function light_action_available(p)
+    if has_light(p) then return false end
+    if inventory_light(p) ~= nil then return true end
+    local cr = Whale ~= nil and Whale.craftrules or nil
+    if cr ~= nil then
+        local ok = cr.HasIngredients(p, "torch")
+        if ok == true then return true end
+    end
+    if firepit_ready(p) then return true end
+    if A.count_item(p, "log") >= 2 and A.count_item(p, "cutgrass") >= 3 then return true end
+    return false
+end
+
 --- 天黑没光（P0）：举火把 → 做火把 → 建火坑（不用草）→ 生营火
 local function reflex_light(p)
     if has_light(p) then return false end
@@ -901,13 +917,20 @@ local function interrupt_current(reason)
     return cleared and not buffered
 end
 
---- 尝试执行一个反射动作：防抖 → 冷却 → 抢占判断 → 中断 → 执行
-local function try_action(p, key, priority, reason, fn)
+--- 尝试执行一个反射动作：防抖 → 冷却 → **能否真的帮上忙** → 抢占判断 → 中断 → 执行
+--- canRun（可选）必须在中断旧任务**之前**判断：真机第 10 天黄昏出现过死锁 ——
+--- 反射缺 twigs 造不出火把，却每 6 秒以 P0 打断一次模型的 gather_area，
+--- 结果谁都采不到那 2 根树枝，最后黑死。帮不上忙就别抢。
+local function try_action(p, key, priority, reason, fn, canRun)
     -- 同一意图已经在跑：不重复建任务
     if inflight ~= nil and inflight.key == key and Whale.job == inflight.job then
         return false
     end
     if not cooldown_ok(key) then return false end
+    if canRun ~= nil and not canRun() then
+        diag("skipped", { "reason=action_not_available", "intent=" .. key })
+        return false
+    end
 
     local job = Whale.job
     if job ~= nil then
@@ -1058,7 +1081,9 @@ local function run(p)
         if try_action(p, "flee", P0, "critical_health", function() return reflex_flee(p) end) then return end
     end
     if (phase == "dusk" or phase == "night") and not rep.has_usable then
-        if try_action(p, "light", P0, "dark_no_light", function() return reflex_light(p) end) then return end
+        if try_action(p, "light", P0, "dark_no_light",
+                      function() return reflex_light(p) end,
+                      function() return light_action_available(p) end) then return end
     end
 
     -- ── P1：高优先生存需求（可在安全时中断普通采集/探索）

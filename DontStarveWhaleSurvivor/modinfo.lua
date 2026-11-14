@@ -9,7 +9,7 @@ description = [[
 不需要截图，也不需要视觉模型。只在本地主机（自己开的世界）里生效。
 ]]
 author = "大肥鱼（参考 dsh-stardew-blind-whale-farmer 做的饥荒版）"
-version = "0.35.0"
+version = "0.36.0"
 
 api_version = 10
 dst_compatible = true

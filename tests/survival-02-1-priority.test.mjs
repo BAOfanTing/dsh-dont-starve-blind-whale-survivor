@@ -170,14 +170,30 @@ function newinventory(items, equipped)
         for k, v in pairs(self._items) do if v == item then self._items[k] = nil end end
         self._equipped[GLOBAL.EQUIPSLOTS.HANDS] = item
     end
-    -- unequip 走的是原生 inventory:Unequip(slot)，桩里必须也有，否则"收火把"永远失败
+    -- 真机 Inventory:Unequip(slot) 只摘掉 equipslots 并 **return item**，
+    -- 不自动放回 itemslots（原版也是调用方自己 GiveItem）。桩必须忠实模拟，
+    -- 否则"收纳成功但火把消失"这个 bug 单测永远抓不到。
     function inv:Unequip(slot)
         local item = self._equipped[slot]
-        if item == nil then return end
+        if item == nil then return nil end
         self._equipped[slot] = nil
+        return item
+    end
+    function inv:GetNextAvailableSlot()
         local n = 0
         for _ in pairs(self._items) do n = n + 1 end
-        self._items[n + 1] = item
+        return n + 1
+    end
+    function inv:GiveItem(item, slot)
+        if item == nil then return nil end
+        local s = slot
+        if s == nil then
+            s = 0
+            for _ in pairs(self._items) do s = s + 1 end
+            s = s + 1
+        end
+        self._items[s] = item
+        return item
     end
     function inv:IsFull() return false end
     return inv
@@ -1112,6 +1128,92 @@ test('RF-31（安全不放宽）：真正贴脸的活怪仍阻止白天收火把
     JOB = Whale.job ~= nil and Whale.job.name or "nil"
   `)
   assert.notEqual(global('JOB'), 'unequip', '真有活怪贴脸时不能为了收火把而分心')
+})
+
+test('RF-32（真机 bug：收纳成功但火把消失）：unequip 后火把必须真的在背包里', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+        { fueled = { IsEmpty = function() return false end,
+                     GetPercent = function() return 0.9 end },
+          inventoryitem = {}, equippable = {} })
+  `, '白天 + 手上举着火把')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    Whale.actions.Tick()
+    Whale.actions.Tick()
+    Whale.actions.Tick()
+    HAND = PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] ~= nil
+             and PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS].prefab or "nil"
+    IN_BAG = (Whale.craftrules.Counts(PLAYER)["torch"] or 0)
+    RESULT_OK = REPORTS[#REPORTS] ~= nil and tostring(REPORTS[#REPORTS].ok) or "?"
+    RESULT_TEXT = REPORTS[#REPORTS] ~= nil and tostring(REPORTS[#REPORTS].text) or "?"
+  `)
+  assert.equal(global('JOB'), 'unequip')
+  assert.equal(global('HAND'), 'nil', '手上应该空了')
+  assert.equal(global('IN_BAG'), '1', '★ 火把必须真的进背包，不能"收纳成功但东西没了"')
+  assert.equal(global('RESULT_OK'), 'true', '收纳必须报成功')
+  assert.match(global('RESULT_TEXT'), /放回背包/)
+})
+
+test('RF-33：unequip 只在火把确认进背包后才报成功（不许谎报）', () => {
+  const src = readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8')
+  assert.match(src, /local ok, item = pcall\(function\(\) return inv:Unequip\(slot\) end\)/, '必须接住 Unequip 的返回值')
+  assert.match(src, /inv:GiveItem\(item, free\)/, '必须显式放回 itemslots')
+  assert.match(src, /unequip_no_space|没放回背包/, 'GiveItem 失败要报失败')
+  assert.match(src, /in_bag/, '完成前要核对背包里真有这件物品')
+})
+
+test('RF-34（真机 bug：黄昏死锁）：缺火把材料时 P0 不许打断模型的采集', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "dusk"
+    -- 天黑没光、且一点火把材料都没有（缺 twigs），反射帮不上忙
+    -- 模型正在采树枝，正是解开死锁的唯一机会
+  `, '黄昏 + 零材料')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    Whale.actions.Start("gather_area", {}, "model-gather", { survival_area = true })
+    BEFORE = Whale.job ~= nil and tostring(Whale.job.cmd_id) or "nil"
+    ${eachTick(5)}
+    AFTER = Whale.job ~= nil and tostring(Whale.job.cmd_id) or "nil"
+    INTERRUPTED = 0
+    for _, r in ipairs(REPORTS) do
+        if r.text ~= nil and string.find(tostring(r.text), "打断") ~= nil then INTERRUPTED = INTERRUPTED + 1 end
+    end
+    ERR = tostring(Whale.last_reflex_error or "none")
+  `)
+  assert.equal(global('BEFORE'), 'model-gather')
+  assert.equal(global('AFTER'), 'model-gather', '★ 反射帮不上忙时绝不能抢占，模型必须能继续采集')
+  assert.equal(global('INTERRUPTED'), '0', '不该产生任何"被打断"回执')
+  assert.equal(global('ERR'), 'none')
+})
+
+test('RF-35：有火把材料时 P0 仍正常抢占（不放宽安全）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "night"
+    PLAYER.components.inventory._items[1] = mkitem("cutgrass", 2)
+    PLAYER.components.inventory._items[2] = mkitem("twigs", 2)
+  `, '夜里 + 材料齐')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    Whale.actions.Start("wait", { seconds = 10 }, "model-wait")
+    ${eachTick(5)}
+    AFTER = Whale.job ~= nil and Whale.job.name or "nil"
+    ID = Whale.job ~= nil and tostring(Whale.job.cmd_id) or "nil"
+  `)
+  assert.equal(global('AFTER'), 'craft', '能造火把时必须抢占')
+  assert.equal(global('ID'), 'reflex')
 })
 
 test('RF-16：Diagnose() 能说清"当前光源是否可用 / 是否该准备"', async () => {

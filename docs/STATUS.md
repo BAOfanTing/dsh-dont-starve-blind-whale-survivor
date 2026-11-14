@@ -8,11 +8,11 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.35.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.36.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
-模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.35.0`）。
+模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.36.0`）。
 判断"磁盘上的模组装没装进游戏"请看 `install-mod.mjs` 的输出（`installedVersion`）。
 
 > 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.30.x。M2.2.1 决定**不建同步机制**，
@@ -91,7 +91,7 @@
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
-| **SURVIVAL-02.1** | 先查真实死因；修 prep_light；白天做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志；白天不点火 + 按整夜囤料；没草时改走 firepit + 有界找料；**固定巢穴不挡收纳 + 捡地上现成材料** | UNIT（590/590）；RUNTIME 见 §4.6 | 本节 §4.6 |
+| **SURVIVAL-02.1** | 先查真实死因；修 prep_light；白天做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志；白天不点火 + 按整夜囤料；没草时改走 firepit + 有界找料；固定巢穴不挡收纳 + 捡地上现成材料；**修 unequip 丢物品 + 黄昏不抢占死锁** | UNIT（594/594）；RUNTIME 见 §4.6 | 本节 §4.6 |
 
 ---
 
@@ -312,7 +312,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 
 #### 4.6.4 自动化测试
 
-`node --test tests/*.test.mjs` → **590 passed / 0 failed**（基线 535 + 新增 55）。
+`node --test tests/*.test.mjs` → **594 passed / 0 failed**（基线 535 + 新增 59）。
 新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
 
 | 要求 | 用例 |
@@ -351,7 +351,7 @@ GBK 中文兜底解码、以及"记录器绝不改写桥文件"这条硬约束�
 | 项 | 值 |
 |---|---|
 | 世界 | `Cluster_2`（用户新建的专用测试世界），第 1 天开始 |
-| 游戏 Mod 版本 | 运行中世界加载 **0.32.1**（日志 `Loading mod: ... Version:0.32.1`）；仓库/安装目录为 **0.35.0** |
+| 游戏 Mod 版本 | 运行中世界加载 **0.32.1**（日志 `Loading mod: ... Version:0.32.1`）；仓库/安装目录为 **0.36.0** |
 | REFLEX 实际配置 | **`true`**（日志逐字 `Overriding mod DontStarveWhaleSurvivor's option REFLEX with value true`）；`get_state` 顶部不再出现"⚠ 保命反射被关掉了" |
 | 世界设置 | `game_mode=survival`、`darkness=default`（**黑暗会打死人**，与旧 Cluster_1 的 `nonlethal` 不同）、`ghostenabled=none`（死了不化魂）。**每次死亡后世界在死亡界面暂停，必须由玩家手动重新选人才能继续**——不是自动重生（用户确认）。 |
 | 排查工具 | `tools/session-recorder.mjs`，只读旁路，记录命令/回执/反射/死亡/状态（§6.9） |
@@ -466,7 +466,7 @@ RF-23（有火把但零备料 → `reserve_ok=false` 且必须继续囤）、RF-
 ④ 最省草的方案：**先做斧头砍树 → 木头+草建营火**，营火 `CAMPFIRE_FUEL_START=135s`、
 `MAX=270s`，比 3 把火把（6 草 + 6 树枝）省得多。
 
-#### 4.6.8 第四个 bug：**没草时完全没有破局路线**（0.35.0 修）
+#### 4.6.8 第四个 bug：**没草时完全没有破局路线**（0.36.0 修）
 
 0.33.0 复验里第 8 夜仍死于黑暗，且死因非常纯粹：出生点 **40 格内一株草都没有**
 （`probe grass radius 30/40` 都返回 0）。而火把要 2 草、营火要 3 草 —— 所有光源路线都卡在草上。
@@ -483,7 +483,7 @@ FIREPIT_FUEL_START = night_time + dusk_time = 180 秒   ← 正好盖住整夜
 **火坑是唯一不依赖 cutgrass 的开局光源**（TECH.NONE，木头和石头遍地都是），
 而且燃料 180 秒 = 一整夜，比 3 把火把（6 草 + 6 树枝）省得多。
 
-**0.35.0 的三处改动**
+**0.36.0 的三处改动**
 
 | 文件 | 改动 |
 |---|---|
@@ -497,9 +497,9 @@ FIREPIT_FUEL_START = night_time + dusk_time = 180 秒   ← 正好盖住整夜
 RF-26（16 格外 20 格内有草 → 有界 move_to）、RF-27（夜里/有敌人/26 格太远三种场景都不许走）、
 RF-28（上限与边界的静态断言）。
 
-> 0.35.0 的真机复验待重新读档后进行。
+> 0.36.0 的真机复验待重新读档后进行。
 
-#### 4.6.9 0.34.0 真机复验暴露的两个新 bug（0.35.0 修）
+#### 4.6.9 0.34.0 真机复验暴露的两个新 bug（0.36.0 修）
 
 0.34.0 真机（第 9 天白天）日志里又抓到两条：
 
@@ -523,7 +523,7 @@ RF-28（上限与边界的静态断言）。
 只找 `exact_ready(p, "grass", 16)`（可采的**草丛**），完全看不见地上已割好的材料，
 于是 `missing=cutgrass 0/2` 一直补不上。
 
-**0.35.0 改动（都在 `reflex.lua`）**
+**0.36.0 改动（都在 `reflex.lua`）**
 
 | # | 改动 |
 |---|---|
@@ -533,7 +533,47 @@ RF-28（上限与边界的静态断言）。
 **新增 3 条测试**：RF-29（蜘蛛巢不挡收纳）、RF-30（地上 cutgrass 被 `PICKUP`）、
 RF-31（真活怪贴脸仍阻止收纳 —— 安全不放宽）。
 
-> 0.35.0 的真机复验待重新读档后进行。
+> 0.36.0 的真机复验待重新读档后进行。
+
+#### 4.6.10 0.35.0 真机复验：收进背包的火把「凭空消失」（0.36.0 修）
+
+0.35.0 的两个修复**真机都生效了**，证据确凿：
+
+- `cutgrass 0→4`（捡地上现成材料）
+- `whale_result.json` 里 `ok=true` 的「把 torch 放回背包了」回执
+- `get_state` 提示里出现「天还亮着，先把火把收起来省燃料」
+
+但第 9、10 夜仍死于黑暗，夜里诊断 `has_usable_light=false portable=false` ——
+**火把既不在手上、也不在背包**。而回执的背包净变化是 **`（背包：torch-1）`**，
+即火把数量**减少 1**。
+
+查游戏原生 `scripts/components/inventory.lua` 找到根因：
+
+```lua
+function Inventory:Unequip(equipslot, slip, force)
+    ...
+    self.equipslots[equipslot] = nil
+    self.inst:PushEvent("unequip", ...)
+    return item          -- ★ 只把物品从 equipslots 摘掉并 return，不自动放回 itemslots
+end
+```
+
+原版 `player_common.lua` 的用法是 `local item = inv:Unequip(slot)` 再自己 `GiveItem` / 存起来。
+而我们的 `unequip_by_slot` **直接丢弃了返回值** → 火把被摘下后没进背包。
+（单文件测试桩里我自己实现了 Unequip 搬回背包，所以这个 bug 单测一直抓不到。）
+
+**0.36.0 改动**
+
+| 文件 | 改动 |
+|---|---|
+| `actions.lua` | `unequip_by_slot` 接住 `Unequip` 返回的 item，用 `inv:GiveItem(item, free)` 显式放回背包；完成前用 `ForEachItem` 核对物品真的在背包，否则报 `unequip_failed` / `unequip_no_space`，**不许谎报成功** |
+| `reflex.lua` | `try_action` 增加 `canRun` 预判：P0 光照动作先判 `light_action_available` —— 缺关键材料、帮不上忙时**不抢占**模型任务，避免「模型采不到料 + 反射造不出光」的黄昏死锁（真机第 10 天 `twigs 0/2`，`gather_area` 每 6 秒被打断一次） |
+| 测试桩 | `inv:Unequip` 改为忠实模拟原生语义（只摘掉、返回 item），新增 `GetNextAvailableSlot` / `GiveItem` |
+
+**新增 4 条测试**：RF-32（收纳后火把必须真的在背包）、RF-33（`GiveItem` 与背包核对的静态断言）、
+RF-34（缺材料时 P0 不许打断模型采集）、RF-35（有材料时仍正常抢占 —— 安全不放宽）。
+
+> 0.36.0 的真机复验待重新读档后进行。
 
 ## 5. 已知问题（都会真实影响体验）
 | # | 问题 | 影响 | 现状 |
