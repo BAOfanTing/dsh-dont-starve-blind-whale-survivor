@@ -270,6 +270,47 @@ G.ACTIONS = {
             item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
         },
     },
+    -- ═══════════ SURVIVAL-04：第二批 ═══════════
+    unequip = {
+        risk = "R1",
+        required_components = { "inventory" },
+        args = {
+            slot = { type = "string", pattern = "^[a-z_]+$", max_len = 16 },
+        },
+    },
+    say = {
+        risk = "R1",
+        required_components = {},
+        args = {
+            text = { type = "string", max_len = 120, required = true },
+        },
+    },
+    fuel = {
+        risk = "R1",
+        required_components = { "inventory" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+        },
+    },
+    use = {
+        risk = "R2",
+        required_components = { "locomotor" },
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            action = { type = "string", pattern = "^[A-Z_]+$", max_len = 16 },
+        },
+    },
+    inspect = {
+        risk = "R1",
+        required_components = {},
+        args = {
+            target_ref = { type = "string", pattern = "^#%d+$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+        },
+    },
 }
 
 --- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
@@ -700,6 +741,24 @@ function G.validate(cmd)
         local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
         if inv == nil then return false, "missing_component:inventory", nil end
         if qr.FindInInventory(inv, item) == nil then return false, "not_in_inventory", nil end
+    end
+
+    -- ═══════════ SURVIVAL-04：fuel / use / inspect 都要 #N 引用 ═══════════
+    if action == "fuel" or action == "use" or action == "inspect" then
+        if action ~= "inspect" and Whale.job ~= nil then return false, "actor_busy", nil end
+        local snapshot_id = tostring(cmd.args.snapshot_id)
+        local ref = tostring(cmd.args.target_ref)
+        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        if ent == nil then return false, why_t or "unknown_ref", nil end
+        if action == "fuel" then
+            if ent.components == nil or ent.components.fueled == nil then
+                return false, "target_not_fuelable", nil
+            end
+        end
+        -- 距离：交互类不要太远（4 格内比较稳，比 workable 的 6 格更保守）
+        local d = U.dist(actor, ent)
+        if d ~= nil and d > 4 * 4 then return false, "out_of_range", nil end
+        target = ent
     end
 
     -- ═══════════ SURVIVAL-03：chop / mine / dig / hammer / attack / kill ═══════════

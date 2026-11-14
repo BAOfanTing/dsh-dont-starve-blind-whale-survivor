@@ -2429,6 +2429,203 @@ local function drop_by_ref(j, p, item_name)
     return "run"
 end
 
+-- ═══════════════ SURVIVAL-04：第二批（装备/说话/加柴/通用交互/查看）═══════════════
+
+--- 脱下手上的/身上的装备（新路径：核对装备栏真的空了）
+local function unequip_by_slot(j, p, slot_name)
+    local SLOTS = { HANDS = "HANDS", BODY = "BODY", HEAD = "HEAD", BACK = "BACK", BACKPACK = "BACK" }
+    local key = SLOTS[string.upper(tostring(slot_name or "hands"))]
+    if key == nil then return "fail", "bad_slot: 不认识这个位置（hands/body/head/back）" end
+    local slot = EQUIPSLOTS[key]
+    local inv = p.components ~= nil and p.components.inventory or nil
+    if slot == nil or inv == nil then return "fail", "no_inventory" end
+    if j.step == "start" then
+        local before = nil
+        pcall(function() before = inv:GetEquippedItem(slot) end)
+        if before == nil then
+            return "done", string.format("%s 上本来就没东西", key)
+        end
+        j.data.prefab = tostring(before.prefab)
+        j.data.slot = slot
+        local ok, err = pcall(function() inv:Unequip(slot) end)
+        if not ok then return "fail", "unequip_failed: " .. tostring(err) end
+        j.step = "acting"
+        j.data.phase_start = U.now()
+        return "run"
+    end
+    if j.step == "acting" then
+        local now = nil
+        pcall(function() now = inv:GetEquippedItem(slot) end)
+        if now == nil then
+            return "done", string.format("把 %s 放回背包了", j.data.prefab)
+        end
+        if U.now() - j.data.phase_start > 5 then
+            return "fail", "unequip_failed: 装备栏没变化"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+JOBS.unequip = function(j, p)
+    local ctx = j.ctx or {}
+    if ctx.survival_unequip == true then
+        return unequip_by_slot(j, p, ctx.slot)
+    end
+    -- 旧路径（如果以后有人用 args.slot）
+    return unequip_by_slot(j, p, j.args.slot or "hands")
+end
+
+--- 在游戏里说一句话（人类玩家看得到）
+JOBS.say = function(j, p)
+    if j.step == "start" then
+        local text = tostring(j.args.text or "")
+        if text == "" then return "fail", "say 需要 text" end
+        local talker = p.components ~= nil and p.components.talker or nil
+        if talker == nil then return "fail", "现在说不了话" end
+        local ok = pcall(function() talker:Say(text) end)
+        if not ok then return "fail", "say_failed" end
+        return "done", "说了：" .. text
+    end
+    return "done", "说了"
+end
+
+--- 给火堆加燃料（需要 #N 引用指向火堆；燃料从背包挑，或指定白名单）
+JOBS.fuel = function(j, p)
+    local ctx = j.ctx or {}
+    local target = ctx.target
+    if target == nil then return "fail", "fuel 只能按 #N 引用调用" end
+    if not target:IsValid() then return "fail", "entity_gone: 火堆已经没了" end
+    local fueled = target.components ~= nil and target.components.fueled or nil
+    if fueled == nil then return "fail", "target_not_fuelable: 这个东西不能加柴" end
+
+    if j.step == "start" then
+        -- 选燃料：指定了就用指定的，否则自动挑最好的
+        local want = ctx.fuel_item
+        local item = nil
+        if want ~= nil and want ~= "" then
+            item = U.find_item(p, want)
+            if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(want) end
+        else
+            item = U.best_fuel(p, 3)
+            if item == nil then return "fail", "no_fuel: 背包里没有能烧的东西（木头、草、树枝都行）" end
+        end
+        j.data.fuel = item
+        j.data.fuel_prefab = tostring(item.prefab)
+        j.data.before = snapshot_counts(p)
+        j.data.phase_start = U.now()
+        push(p, BufferedAction(p, target, ACTIONS.ADDFUEL, item))
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local still = j.data.fuel ~= nil and j.data.fuel:IsValid()
+        local after = snapshot_counts(p)
+        local used = (j.data.before[j.data.fuel_prefab] or 0) - (after[j.data.fuel_prefab] or 0)
+        if (not still) or used > 0 then
+            return "done", string.format("添了柴：%s×%d", j.data.fuel_prefab, math.max(used, 1))
+        end
+        if U.now() - j.data.phase_start > 20 then
+            return "fail", "fuel_failed: 燃料没消耗（可能这团火已经灭了）"
+        end
+        return "run"
+    end
+    return "run"
+end
+
+--- 通用交互：对目标尝试 OPEN / READ / USE / ACTIVATE / TAKEITEM 之一
+--- 只允许这几个动作（不给模型任意 ACTIONS 名字）
+local USE_ALLOWED = { "OPEN", "READ", "USE", "ACTIVATE", "TAKEITEM" }
+
+JOBS.use = function(j, p)
+    local ctx = j.ctx or {}
+    local target = ctx.target
+    if target == nil then return "fail", "use 只能按 #N 引用调用" end
+    if not target:IsValid() then return "fail", "entity_gone: 目标已经没了" end
+
+    if j.step == "start" then
+        local want = ctx.use_action
+        local chosen = nil
+        if want ~= nil and want ~= "" then
+            local up = string.upper(tostring(want))
+            local allowed = false
+            for _, a in ipairs(USE_ALLOWED) do if a == up then allowed = true break end end
+            if not allowed then
+                return "fail", "action_not_allowed: 只支持 " .. table.concat(USE_ALLOWED, "/")
+            end
+            if ACTIONS[up] == nil then return "fail", "action_unavailable: 这个版本里没有 " .. up end
+            chosen = up
+        else
+            for _, a in ipairs(USE_ALLOWED) do
+                if ACTIONS[a] ~= nil then chosen = a break end
+            end
+        end
+        if chosen == nil then return "fail", "action_unavailable: 这个目标没有能用的动作" end
+        j.data.action_id = chosen
+        j.data.label = U.pretty(target)
+        j.data.phase_start = U.now()
+        j.data.before = snapshot_counts(p)
+        push(p, BufferedAction(p, target, ACTIONS[chosen], nil))
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        local after = snapshot_counts(p)
+        -- 交互成功的判据：背包变了 / 目标消失 / 超时前游戏没报错
+        local changed = false
+        for prefab, n in pairs(after) do
+            if n > (j.data.before[prefab] or 0) then changed = true break end
+        end
+        if changed then
+            return "done", string.format("%s 了 %s", j.data.action_id, j.data.label)
+        end
+        if not target:IsValid() then
+            return "done", string.format("%s 了 %s（目标消失了）", j.data.action_id, j.data.label)
+        end
+        if U.now() - j.data.phase_start > 8 then
+            return "done", string.format("对 %s 用了 %s（没有可见变化）", j.data.label, j.data.action_id)
+        end
+        return "run"
+    end
+    return "run"
+end
+
+--- 查看一个目标的详细信息（只读，不改世界）
+JOBS.inspect = function(j, p)
+    local ctx = j.ctx or {}
+    local target = ctx.target
+    if target == nil or not target:IsValid() then return "fail", "entity_gone: 目标已经没了" end
+    local lines = { string.format("%s（%s）", U.pretty(target), tostring(target.prefab)) }
+    local x, _, z = U.pos(target)
+    if x ~= nil then
+        lines[#lines + 1] = string.format("位置 (%.1f, %.1f)，离你 %.1f 格", x, z, (U.dist(p, target) or 0) / 4)
+    end
+    local comps = target.components or {}
+    if comps.health ~= nil then
+        local cur = U.try(function() return comps.health.currenthealth end) or 0
+        local max = U.try(function() return comps.health.maxhealth end) or 0
+        lines[#lines + 1] = string.format("生命 %d/%d", cur, max)
+    end
+    if comps.edible ~= nil then
+        lines[#lines + 1] = string.format("能吃：饥饿 +%d", math.floor(tonumber(comps.edible.hungervalue or 0)))
+    end
+    if comps.workable ~= nil then
+        local left = U.try(function() return comps.workable.workleft end)
+        if left ~= nil then lines[#lines + 1] = string.format("还要干 %d 下", left) end
+    end
+    if comps.pickable ~= nil then
+        local can = U.try(function() return comps.pickable:CanBePicked() end)
+        lines[#lines + 1] = can == true and "现在能采" or "现在不能采"
+    end
+    if comps.fueled ~= nil then
+        local pct = U.try(function() return comps.fueled:GetPercent() end)
+        if pct ~= nil then lines[#lines + 1] = string.format("燃料 %d%%", math.floor(pct * 100)) end
+    end
+    return "done", table.concat(lines, "；")
+end
+
 --- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable
 JOBS.harvest = function(j, p)
     -- M2.3：带 ctx.target 时走"按 #N 收获"的新路径（只认 guard 解析出来的真实实体，

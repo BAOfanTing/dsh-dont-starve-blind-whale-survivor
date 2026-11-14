@@ -309,6 +309,12 @@ local function handle_command(json_text)
             -- SURVIVAL-03
             times = cmd.args ~= nil and cmd.args.times or nil,
             seconds = cmd.args ~= nil and cmd.args.seconds or nil,
+            -- SURVIVAL-04
+            survival_unequip = (action == "unequip") or nil,
+            slot = cmd.args ~= nil and cmd.args.slot or nil,
+            text = cmd.args ~= nil and cmd.args.text or nil,
+            fuel_item = cmd.args ~= nil and cmd.args.item or nil,
+            use_action = cmd.args ~= nil and cmd.args.action or nil,
         }
     )
     if not started then
