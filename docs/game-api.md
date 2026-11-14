@@ -469,7 +469,7 @@ scripts/whale/
 ├─ observe.lua  状态 → 给 AI 看的文字（[编号] + 坐标 + 能做什么）
 ├─ actions.lua  30 个动作的状态机（BufferedAction + PushAction + 结果事件）
 ├─ bridge.lua   文件桥（双通道 + 分片规则）+ 主循环 + 看门狗
-└─ client.lua   走路动画 RPC / 小窗 / F8·F7 / 可选暂停
+└─ client.lua   走路动画 RPC / 小窗 / F8（AI 开停）·F7（开关小窗）/ 可选暂停
 ```
 
 改模组时请顺手做两件事：

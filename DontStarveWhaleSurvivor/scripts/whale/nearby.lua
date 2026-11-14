@@ -621,13 +621,27 @@ end
 local last_fingerprint = nil
 local last_snapshot_id = nil
 
+-- 会自己乱跑的桶（普通生物、杂物）不把位置放进指纹：
+-- 真机里一只红雀每 2 秒换个地方，snapshot_id 就跟着换，模型手里的 #N 全部作废
+-- （8 次动作 6 次 stale_snapshot）。这些桶本来也不是"按 #N 去采/捡"的目标；
+-- 真正要操作的桶（可拾取/可采/资源/食物/容器/建筑）仍然把位置算进去，
+-- 所以"东西挪了 → 换新编号"这条安全边界没有放宽。
+local MOBILE_CATEGORIES = { creatures = true, other = true }
+
 local function fingerprint_of(list)
     local parts = {}
     for i = 1, #list do
-        local e = list[i].ent
+        local entry = list[i]
+        local e = entry.ent
         if e ~= nil then
-            local x, _, z = e.Transform:GetWorldPosition()
-            parts[#parts + 1] = string.format("%s@%d,%d", tostring(e.GUID), math.floor(x / 4), math.floor(z / 4))
+            local category = entry.block ~= nil and entry.block.category or nil
+            if MOBILE_CATEGORIES[category] then
+                -- 只记"它还在不在"；移动不算内容变化。
+                parts[#parts + 1] = string.format("%s@*", tostring(e.GUID))
+            else
+                local x, _, z = e.Transform:GetWorldPosition()
+                parts[#parts + 1] = string.format("%s@%d,%d", tostring(e.GUID), math.floor(x / 4), math.floor(z / 4))
+            end
         end
     end
     table.sort(parts)

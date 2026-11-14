@@ -313,6 +313,15 @@ local function nearest_hostile(p, radius)
     return ent
 end
 
+--- 有怪正在打我（combat.target 指向我）。范围采集/砍树这种长任务要能自己停下来。
+local function being_attacked(p, radius)
+    local foe = nearest_hostile(p, radius or 3)
+    if foe == nil then return false end
+    local c = foe.components ~= nil and foe.components.combat or nil
+    local ok, target = pcall(function() return c ~= nil and c.target or nil end)
+    return ok and target == p
+end
+
 -- ─────────────────────────── 动作 ───────────────────────────
 
 JOBS.move_to = function(j, p)
@@ -2059,8 +2068,10 @@ JOBS.gather_area = function(j, p)
         return "fail", "gather_area 只能按白名单调用"
     end
     if j.step == "start" then
-        j.data.radius = tonumber(ctx.radius) or 12
-        j.data.limit = math.min(tonumber(ctx.limit) or 15, 30)   -- 硬上限，别让它无限跑
+        -- 默认范围/数量都收小：真机里"半径 12 + 30 个"会变成 5 分钟的原地采集，
+        -- 期间被青蛙围住也不停。宁可多调几次，也别把一轮动作拖成一条命。
+        j.data.radius = tonumber(ctx.radius) or 8
+        j.data.limit = math.min(tonumber(ctx.limit) or 8, 30)   -- 硬上限，别让它无限跑
         j.data.want = ctx.prefab ~= nil and tostring(ctx.prefab) or nil
         j.data.done = {}
         j.data.count = 0
@@ -2071,6 +2082,23 @@ JOBS.gather_area = function(j, p)
         -- 内部预算：外层给多少就用多少（再留 5 秒自己收尾）。没给就保守取 45 秒。
         j.data.budget = math.max(10, (tonumber(ctx.budget_s) or 50) - 5)
         j.step = "next"
+    end
+
+    -- ★ 两个"立刻停"的出口必须放在所有 step 之前：
+    --   · 时间到：旧版只在 next 检查，卡在 walking/acting 时会一直跑
+    --   · 被怪打：采集中被青蛙咬，不能还站着把这一片采完
+    if j.step ~= "start" then
+        if U.now() - (j.data.t0 or U.now()) > (j.data.budget or 45) then
+            local text = area_summary(j.data.count or 0, j.data.products, j.data.failed) .. "（时间到，先停）"
+            if (j.data.count or 0) == 0 then return "fail", "gather_area_failed: " .. text end
+            return "done", text
+        end
+        if j.data.attack_check == nil or U.now() - j.data.attack_check > 1 then
+            j.data.attack_check = U.now()
+            if being_attacked(p, 3) then
+                return "fail", "有怪在打我，先停下：用 get_state 看敌人在哪，先 move_to 离开，别继续采"
+            end
+        end
     end
 
     if j.step == "next" then

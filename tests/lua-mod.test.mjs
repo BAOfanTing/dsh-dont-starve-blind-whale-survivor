@@ -971,6 +971,82 @@ test('reflex：已放置的南瓜灯即使还带 inventoryitem 也算光源', as
   assert.equal(global('JOB'), 'nil', '有南瓜灯时不该启动做火把/营火任务')
 })
 
+test('reflex：正在被怪打时，打断模型任务先撤（不再等任务跑完）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8'), 'reflex.lua')
+
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    Whale.bridge = {
+        Report = function(ok, text, id) REPORTED = { ok = ok, text = text, id = id } end,
+        WriteState = function() end,
+    }
+    -- 模型正在跑一个低价值任务
+    Whale.actions.Start("wait", { seconds = 10 }, "model-1")
+    BEFORE = Whale.job ~= nil and Whale.job.name or "nil"
+    -- 一只青蛙贴脸，而且 combat.target 指向我们（血还很足，靠"正在被打"触发）
+    local foe = NEARBY[3]
+    foe._x = PLAYER._x + 2 * 4
+    foe._z = PLAYER._z
+    foe.components.combat.target = PLAYER
+    PLAYER.components.health.currenthealth = 120
+    CRIT = tostring(Whale.reflex.CriticalDanger(PLAYER))
+    for _ = 1, 5 do Whale.reflex.Tick() end
+    AFTER = Whale.job ~= nil and Whale.job.name or "nil"
+    AFTER_ID = Whale.job ~= nil and tostring(Whale.job.cmd_id) or "nil"
+    OLD_CMD = REPORTED ~= nil and tostring(REPORTED.id) or "nil"
+    ERR = tostring(Whale.last_reflex_error or "none")
+  `)
+
+  assert.equal(global('BEFORE'), 'wait', '前提：模型任务在跑')
+  assert.equal(global('CRIT'), 'true', '青蛙贴着并且 target=我，应该判成危险')
+  assert.equal(global('ERR'), 'none', '反射层内部不能报错')
+  assert.equal(global('AFTER'), 'move_to', '正在被打时反射层应该抢占并起一个撤离')
+  assert.equal(global('AFTER_ID'), 'reflex', '撤离必须是反射层发起的')
+  assert.equal(global('OLD_CMD'), 'model-1', '旧任务必须收到回执（不能悄悄消失）')
+})
+
+test('gather_area：正在被怪打时立刻停（不许站着把一片采完）', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadMod(fengari)
+
+  runFile(`
+    Whale.bridge = { Report = function(ok, text) REPORTED = { ok = ok, text = text } end, WriteState = function() end }
+    local foe = NEARBY[3]
+    foe._x = PLAYER._x + 2 * 4
+    foe._z = PLAYER._z
+    foe.components.combat.target = PLAYER
+    Whale.actions.Start("gather_area", {}, "cmd-area", { survival_area = true })
+    Whale.actions.Tick()
+    OUT_JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    OUT_TEXT = REPORTED ~= nil and tostring(REPORTED.text) or ""
+  `)
+
+  assert.equal(global('OUT_JOB'), 'nil', '被怪打时 gather_area 必须结束')
+  assert.match(global('OUT_TEXT'), /有怪在打我/)
+})
+
+test('gather_area：默认范围/数量收小（8 格 / 8 个），否则一轮能拖好几分钟', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run('NEARBY = { mkent("berrybush", 2, PLAYER._x + 8, PLAYER._z) }', '一丛可采浆果')
+
+  runFile(`
+    Whale.bridge = { Report = function(ok, text) REPORTED = { ok = ok, text = text } end, WriteState = function() end }
+    Whale.actions.Start("gather_area", {}, "cmd-area-2", { survival_area = true })
+    Whale.actions.Tick()
+    OUT_RADIUS = tostring(Whale.job ~= nil and Whale.job.data.radius or "nil")
+    OUT_LIMIT = tostring(Whale.job ~= nil and Whale.job.data.limit or "nil")
+    OUT_WHY = REPORTED ~= nil and tostring(REPORTED.text) or "none"
+  `)
+
+  assert.equal(global('OUT_RADIUS'), '8', '默认半径必须是 8 格（' + global('OUT_WHY') + '）')
+  assert.equal(global('OUT_LIMIT'), '8', '默认上限必须是 8 个')
+})
+
 test('摆建筑：挑一块放得下的地，位置交给 MakeRecipe', async () => {
   const fengari = await import('fengari')
   const { runFile, run, global } = loadMod(fengari)
@@ -1031,8 +1107,10 @@ WRITTEN = {}
 KEYHANDLERS = {}
 GLOBAL.TheInput = { AddKeyHandler = function(self, fn) KEYHANDLERS[#KEYHANDLERS + 1] = fn end }
 local function fakewidget()
-    local widget = { _pos = nil }
+    local widget = { _pos = nil, _visible = true }
     function widget:SetPosition(x, y, z) self._pos = { x, y, z } end
+    widget.Show = function(self) self._visible = true end
+    widget.Hide = function(self) self._visible = false end
     widget.SetSize = function() end
     widget.SetTint = function() end
     widget.SetString = function() end
@@ -1074,6 +1152,13 @@ Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(ms
     assert(type(Whale.hud.Attach) == "function", "少了 Attach")
     Whale.hud.BindKeys()
     assert(#KEYHANDLERS == 1, "应该绑一个按键处理器，实际 " .. #KEYHANDLERS)
+    -- F7 只管小窗：挂载前按也不能写 AI 开关，更不能停 AI
+    KEYHANDLERS[1](GLOBAL.KEY_F7, true)
+    assert(WRITTEN["whale_toggle.json"] == nil, "F7 不能写 whale_toggle.json（它只开关小窗）")
+    assert(Whale.hud.Status().visible == false, "F7 应该把小窗隐藏")
+    -- 再按一次恢复显示
+    KEYHANDLERS[1](GLOBAL.KEY_F7, true)
+    assert(Whale.hud.Status().visible == true, "F7 再按一次应该重新显示")
     -- 按 F8：应该写出一份 "让 AI 开始玩" 的开关
     KEYHANDLERS[1](GLOBAL.KEY_F8, true)
     local raw = WRITTEN["whale_toggle.json"]
@@ -1084,10 +1169,11 @@ Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(ms
     KEYHANDLERS[1](GLOBAL.KEY_F8, true)
     local data2 = Whale.json.decode(WRITTEN["whale_toggle.json"])
     assert(data2.ai == false, "再按一次应该关掉")
-    -- 按 F7：停手
+    -- F7 不能改变 F8 写下的 AI 状态
+    local before_f7 = WRITTEN["whale_toggle.json"]
     KEYHANDLERS[1](GLOBAL.KEY_F7, true)
-    local data3 = Whale.json.decode(WRITTEN["whale_toggle.json"])
-    assert(data3.stop == true and data3.ai == false, "F7 应该是停手")
+    assert(WRITTEN["whale_toggle.json"] == before_f7, "F7 不能改 AI 开关")
+    KEYHANDLERS[1](GLOBAL.KEY_F7, true)   -- 再按一次恢复显示（给后面的挂载断言用）
     -- 服务端挪人时的"补动画"判定（纯视觉，不参与移动）
     assert(type(Whale.hud.anim_for) == "function", "少了 anim_for")
     assert(Whale.hud.anim_for(8, true) == nil, "自己在走的时候别插手，交给状态机")
@@ -1114,6 +1200,11 @@ Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(ms
         "文字必须设置 region size，否则 SetHAlign(LEFT) 不生效，左半截会被裁掉")
     local root_x = screen.child._pos[1]
     assert(root_x >= 165, "HUD 位置太靠左，面板会被推出屏幕：x=" .. tostring(root_x))
+    assert(screen.child._visible == true, "挂上后小窗默认应该可见")
+    KEYHANDLERS[1](GLOBAL.KEY_F7, true)
+    assert(screen.child._visible == false, "F7 应该真的隐藏 HUD 根节点")
+    KEYHANDLERS[1](GLOBAL.KEY_F7, true)
+    assert(screen.child._visible == true, "再按 F7 应该把 HUD 重新显示出来")
     OUT = "ok"
   `))
   assert.equal(lua.lua_pcall(L, 0, 0, 0), lua.LUA_OK, 'HUD 行为不对：' + fail())
@@ -1140,6 +1231,11 @@ function mkent(prefab, guid, x, z, ready)
         IsStuck = function() return false end,
         IsBarren = function() return false end,
     }
+    return e
+end
+function mkcreature(prefab, guid, x, z)
+    local e = mkent(prefab, guid, x, z, false)
+    e.components.health = { currenthealth = 20, maxhealth = 20, IsDead = function() return false end }
     return e
 end
 `
@@ -1206,6 +1302,25 @@ test('OBS2-3：实体只是移动了 → 也换新编号（位置进了指纹）
     ID_2 = Whale.nearby.Observe(ACTOR, {}, 2, opts).snapshot_id
   `)
   assert.notEqual(global('ID_2'), global('ID_1'), '位置变了必须换编号（引用的是"那一格的东西"）')
+})
+
+test('OBS2-3b：普通生物只是移动 → 编号不换（红雀乱飞不该让 #N 全部作废）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  run(`
+    ACTOR = mkent("wilson", 1, 0, 0)
+    ROBIN = mkcreature("robin", 5, 20, 0)
+    NEARBY = { ROBIN }
+  `, '一只红雀')
+
+  runFile(`
+    local opts = { radius = 16, scan_seconds = 1, max_total = 60, max_per_bucket = 12, force = true }
+    ID_1 = Whale.nearby.Observe(ACTOR, {}, 1, opts).snapshot_id
+    ROBIN._x = ROBIN._x + 8        -- 飞了 2 格
+    ID_2 = Whale.nearby.Observe(ACTOR, {}, 2, opts).snapshot_id
+  `)
+  assert.equal(global('ID_2'), global('ID_1'), '普通生物移动不算内容变化（否则鸟一飞 #N 就全废）')
 })
 
 test('OBS2-4：gather_area 目标太远时先走过去，不许隔着老远推动作', async () => {

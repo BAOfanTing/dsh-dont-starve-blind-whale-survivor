@@ -38,6 +38,11 @@ P.PREFABS = {
     twigs = true,
     cutgrass = true,
     flint = true,
+    -- 地上的食物：真机里复活后只有 25% 血，就是靠捡胡萝卜/浆果续命的。
+    -- 这三个都有 inventoryitem + canbepickedup，走原生 ACTIONS.PICKUP。
+    carrot = true,
+    berries = true,
+    berries_juicy = true,
 }
 
 local function comp(ent, name)

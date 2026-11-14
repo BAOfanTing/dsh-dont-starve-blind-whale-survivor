@@ -511,7 +511,7 @@ end
 
 function B.start_client(world)
     world:DoPeriodicTask(0.5, client_tick)
-    -- 客户端的快捷键：F8 让内置 AI 开始/停下，F7 让它停手
+    -- 客户端的快捷键：F8 让内置 AI 开始/停下，F7 只开关小窗
     if Whale.hud ~= nil and Whale.hud.BindKeys ~= nil then
         Whale.hud.BindKeys()
     end

@@ -1,7 +1,8 @@
 -- 游戏里的小窗（HUD）：显示大肥鱼现在在干什么，并提供快捷键自己玩
 --
--- 画面上的东西全在客户端：模组在客户端建一个 widget，读插件写出来的 whale_hud.json（文字），
--- 按键 F8 让内置 AI 开始/停下、F7 让它停手（写 whale_toggle.json 给插件看）。
+-- 画面上的东西全在客户端：模组在客户端建一个 widget，读插件写出来的 whale_hud.json（文字）。
+-- 按键：F8 让内置 AI 开始/停下（写 whale_toggle.json 给插件看）；
+--       F7 只显示/隐藏这个小窗，不碰 AI，也不打断正在做的事。
 --
 -- 所有绘图都包在 pcall 里：HUD 出问题最多不显示，绝不能把游戏搞崩。
 
@@ -40,6 +41,7 @@ local cached_hud = nil
 local reading = false
 local last_render = ""
 local ai_wanted = false
+local hud_visible = true       -- F7 只控制这个：隐藏后照常刷新，下次显示就是最新的
 local attach_fail_logged = false
 
 -- ─────────────────── 文件读写（io 优先，退回持久化字符串） ───────────────────
@@ -150,9 +152,9 @@ end
 
 local function default_lines()
     if ai_wanted then
-        return { "启动中…", "等插件接手", "F8 停下" }
+        return { "启动中…", "等插件接手", "F8 停下 · F7 隐藏" }
     end
-    return { "插件没连上（DSH 没开着？）", "F8 试试让 AI 玩" }
+    return { "插件没连上（DSH 没开着？）", "F8 让 AI 玩 · F7 隐藏小窗" }
 end
 
 local function render(lines, title)
@@ -206,16 +208,38 @@ end
 local function toggle_ai()
     write_toggle(not ai_wanted, false)
     refresh()
-    if GLOBAL.ThePlayer ~= nil and GLOBAL.ThePlayer.components.talker ~= nil then
+    if GLOBAL.ThePlayer ~= nil and GLOBAL.ThePlayer.components ~= nil
+            and GLOBAL.ThePlayer.components.talker ~= nil then
         pcall(function()
             GLOBAL.ThePlayer.components.talker:Say(ai_wanted and "开始自己玩了" or "先停下", 2)
         end)
     end
 end
 
-local function take_over()
-    write_toggle(false, true)
-    refresh()
+--- F7：只显示/隐藏 HUD。隐藏不写 whale_toggle.json，AI 该干嘛还干嘛。
+--- 隐藏时被人按 F7 显示，如果小窗还没挂上（读档晚于屏幕创建），这里顺手重试挂载。
+function H.SetVisible(on)
+    hud_visible = on and true or false
+    if hud_visible and root == nil then
+        pcall(H.AttachFromPlayer, GLOBAL.ThePlayer)
+    end
+    if root ~= nil then
+        pcall(function()
+            if hud_visible then root:Show() else root:Hide() end
+        end)
+    end
+    return hud_visible
+end
+
+function H.ToggleVisible()
+    local on = H.SetVisible(not hud_visible)
+    if GLOBAL.ThePlayer ~= nil and GLOBAL.ThePlayer.components ~= nil
+            and GLOBAL.ThePlayer.components.talker ~= nil then
+        pcall(function()
+            GLOBAL.ThePlayer.components.talker:Say(on and "小窗打开了" or "小窗关了（F7 再开）", 2)
+        end)
+    end
+    return on
 end
 
 -- ─────────────────── 客户端：服务端在挪我的时候，把动画补上 ───────────────────
@@ -308,7 +332,7 @@ function H.BindKeys()
             if key == GLOBAL.KEY_F8 then
                 toggle_ai()
             elseif key == GLOBAL.KEY_F7 then
-                take_over()
+                H.ToggleVisible()
             end
         end)
     end)
@@ -351,6 +375,11 @@ function H.Attach(screen, player)
         return false
     end
     attached = true
+    if root ~= nil then
+        pcall(function()
+            if hud_visible then root:Show() else root:Hide() end
+        end)
+    end
     Whale.util.log("HUD 已挂上（画面左侧）")
     pcall(function()
         p:DoPeriodicTask(0.5, function()
@@ -380,7 +409,7 @@ function H.AttachFromPlayer(player)
 end
 
 function H.Status()
-    return { attached = attached, failed = failed, ai = ai_wanted }
+    return { attached = attached, failed = failed, ai = ai_wanted, visible = hud_visible }
 end
 
 Whale = Whale or {}

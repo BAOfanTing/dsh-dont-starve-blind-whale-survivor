@@ -23,6 +23,7 @@ local E = {}
 --- 保命反射/自动 eat 不能为了 +12.5 饥饿把角色送进更危险的状态。
 E.FOODS = {
     berries = "浆果",
+    berries_juicy = "多汁浆果",
     carrot = "胡萝卜",
     corn = "玉米",
     pumpkin = "南瓜",
@@ -41,6 +42,7 @@ E.FOODS = {
 --- 手动 eat 仍可指定 E.FOODS 里的蘑菇；蘑菇应该先烤再吃。
 E.AUTO_SAFE = {
     berries = true,
+    berries_juicy = true,
     carrot = true,
     corn = true,
     pumpkin = true,

@@ -257,7 +257,7 @@ test('M2.2-04 flint 不再进 food（ELEMENTAL 不是玩家食物），而是进
   assert.equal(flat(nearby)[0].edible, undefined, '既然不是玩家食物，就不该标 edible')
 })
 
-test('M2.2-05 真食物仍然进 food（落地的 VEGGIE、可采的浆果丛）', async () => {
+test('M2.2-05 地上的浆果进 pickupables（能捡），胡萝卜苗仍在 food', async () => {
   const env = await load()
   env.run(`NEARBY = {
     mkent({ prefab = "berries", guid = 41, x = 8, z = 0, item = true, edible = true, edible_type = "VEGGIE" }),
@@ -268,8 +268,10 @@ test('M2.2-05 真食物仍然进 food（落地的 VEGGIE、可采的浆果丛）
   }`, '食物')
   const { nearby } = env.observe()
   const foodPrefabs = nearby.buckets.food.map((f) => f.prefab).sort()
-  assert.deepEqual(foodPrefabs, ['berries', 'carrot_planted'], '食物桶仍然认得真食物（浆果丛已归入可收获桶）')
-  assert.equal(nearby.buckets.pickupables.length, 0, 'berries 不在拾取白名单里')
+  assert.deepEqual(foodPrefabs, ['carrot_planted'], '胡萝卜苗不是可捡物，仍然留在 food')
+  assert.deepEqual(nearby.buckets.pickupables.map((p) => p.prefab), ['berries'],
+    '落地的浆果现在可以捡（复活后 25% 血就靠它续命）')
+  assert.equal(nearby.buckets.pickupables[0].item_kind, 'food', '语义仍然是食物')
   assert.deepEqual(nearby.buckets.harvestables.map((h) => h.prefab), ['berrybush'], 'M2.3：浆果丛进可收获桶')
   assert.equal(nearby.buckets.harvestables[0].item_kind, 'food', '语义仍然是食物来源')
 })
@@ -543,7 +545,8 @@ test('M2.2-21 guard 与 Observer 共用同一份白名单（同一张表，不�
             OUT_LIST = table.concat(Whale.pickuprules.PrefabList(), ",")
             OUT_MAX = tostring(Whale.guard.PICKUP_MAX_TILES)`, '一致性')
   assert.equal(env.get('OUT_SAME'), 'true', '必须是同一张表（杜绝两份规则漂移）')
-  assert.equal(env.get('OUT_LIST'), 'cutgrass,flint,twigs', '白名单保持不扩')
+  assert.equal(env.get('OUT_LIST'), 'berries,berries_juicy,carrot,cutgrass,flint,twigs',
+    '只多放行了地上的基础食物（其它 prefab 仍然拒绝）')
   assert.equal(env.get('OUT_MAX'), '2.5', '执行距离上限仍在执行侧')
 })
 
@@ -664,7 +667,8 @@ test('M2.2-29 文本渲染顺序由 N.BUCKETS 决定（威胁 → 可拾取物 �
   env.run(`NEARBY = {
     mkent({ prefab = "spider", guid = 1, x = 16, z = 0, hp = 25, tags = { hostile = true } }),
     mkent({ prefab = "flint", guid = 2, x = 8, z = 0, item = true, canbepickedup = true }),
-    mkent({ prefab = "berries", guid = 3, x = 24, z = 0, item = true, edible = true, edible_type = "VEGGIE" }),
+    -- canbepickedup=false：地上但捡不起来（比如被挡住），仍然算"食物"桶，用来验证文本顺序
+    mkent({ prefab = "berries", guid = 3, x = 24, z = 0, item = true, canbepickedup = false, edible = true, edible_type = "VEGGIE" }),
     mkent({ prefab = "evergreen", guid = 4, x = 32, z = 0, work = "CHOP" }),
   }`, '四类')
   const { text } = env.observe()
