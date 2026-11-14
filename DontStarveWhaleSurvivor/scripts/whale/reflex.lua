@@ -8,19 +8,18 @@
 -- 用真实状态核对结果、失败后冷却而不是反复重试。区别是这里跑在 Lua 服务端，
 -- 动作直接走原生 BufferedAction，没有文件桥延迟。
 --
--- 默认只在"没有任务在跑"的时候动手；但有两条会**抢占**模型的任务：
---   · 入夜没光：查理不会等模型想完，先点火
---   · 正在被怪打 / 残血 + 敌人贴脸：先撤，别把最后 50 血交给一个 gather_area
--- 其余优先级：
---   1. 敌人贴脸（血少/理智低）→ 往反方向 / 往最近的营地、永久光源退
---   2. 血/饿见底 → 吃（治疗类优先；包里没有安全食物就不启动注定失败的 eat）
---   3. 入夜没光 → 举火把 / 做火把 / 生营火
---   4. 火要灭 → 添柴
---   5. 饿/血低且没有安全食物 → 采浆果、捡地上的胡萝卜/浆果
---   6. 理智太低 → 采花（白天/有光时）
---   7. 白天没火把材料 → 先采 2 草 + 2 树枝（别等黄昏）
+-- ── SURVIVAL-02.1 重做（见 docs/STATUS.md）────────────────────────────────
+-- 旧版三个真问题（都在真机日志里对得上）：
+--   1) 白天 reflex_stock_light 采够材料后 -> return false，**永远不做火把**；
+--   2) 只有黄昏/夜里 reflex_light 才做火把，白天不提前准备；
+--   3) 除"黑暗/被贴脸"外，全部逻辑都被 `if Whale.job ~= nil then return end` 挡住，
+--      采集/寻路时饥饿、生命、理智处理被整体跳过。
+-- 现在改成规则判定的 P0/P1/P2/P3 优先级 + 走 A.Abort 的安全抢占 + 防抖 + 诊断日志。
 --
--- 失败不刷屏：每种反射有自己的冷却，只有真的"开始做了"才在聊天里说一句。
+-- 重要事实（这局真实死亡统计，见 docs/STATUS.md §死亡分析）：
+--   世界设置 darkness=nonlethal —— 黑暗本身杀不死人（grue 伤害停在下限 20% 血）；
+--   真正打死它的是**理智崩溃后刷出来的暗影怪（爬行恐惧/恐怖尖喙）** 和 青蛙群。
+--   所以"火把/光源"依然关键（夜里没光 = 理智暴跌 = 暗影怪），但理智本身也要盯。
 
 local GLOBAL = GLOBAL
 local pcall = GLOBAL.pcall
@@ -33,9 +32,33 @@ local R = {}
 --- 反射自己发起的动作，用固定 id，别跟外面正在等的指令抢结果
 local REFLEX_ID = "reflex"
 
+-- ── 优先级（数值越小越优先）───────────────────────────────────────────────
+local P0, P1, P2, P3 = 0, 1, 2, 3
+
+-- 便携光源：手上/背包里有、且还有耐久/燃料才算数
+local LIGHT_PREFABS = { torch = true, lantern = true, minerhat = true }
+-- 已放置的永久光源：有时仍保留 inventoryitem 组件（真机快照里出现过），不能因此当"背包里的东西"排除
+local PERMANENT_LIGHTS = {
+    pumpkin_lantern = true,
+    mushroom_light = true,
+    mushroom_light2 = true,
+    nightlight = true,
+    wall_light = true,
+}
+
+-- ── 阈值（用角色真实上限的百分比，不写死绝对饥饿值）────────────────────────
+local EAT_EMERGENCY = 0.35     -- 饥饿 < 35%：P1 紧急进食
+local HEAL_EMERGENCY = 0.35    -- 生命 < 35%：P1 回血
+local FORAGE_AHEAD = 0.45      -- 没有安全食物且饥饿 < 45%：提前去采
+local SANITY_LOW = 0.35        -- 理智 < 35%：P3 采花（暗影怪前兆）
+
 local last = {}          -- 上一次真的开始做的时间（防抖）
 local recent = {}        -- 最近做过的事（给 get_state 看）
 local last_said = {}     -- 同一条话不重复刷屏
+local last_log = {}      -- 诊断日志限频
+local fail_until = {}    -- 失败退避（材料不足/目标不存在时别每秒重试）
+local inflight = nil     -- 当前在跑的反射意图 { key, job, priority }
+local pending = nil      -- 已发起、待核对的意图 { kind, ... }
 local COOLDOWN = {
     heal = 8,
     eat = 5,
@@ -45,43 +68,11 @@ local COOLDOWN = {
     forage = 6,
     sanity = 8,
     stock = 3,
+    craft_light = 4,
+    temperature = 10,
 }
 
-local function cooldown_ok(key)
-    local now = U.now()
-    local previous = last[key]
-    if previous ~= nil and now - previous < (COOLDOWN[key] or 10) then return false end
-    return true
-end
-
-local function mark(key)
-    last[key] = U.now()
-end
-
-local function say(p, key, text)
-    if p == nil then return end
-    local now = U.now()
-    local previous = last_said[key]
-    if previous ~= nil and now - previous < 20 then return end
-    last_said[key] = now
-    -- 透明化：反射层做过的事要能被 AI 看到（写进 get_state），
-    -- 不然模型会看到"状态自己变了"却不知道为什么，容易误判。
-    recent[#recent + 1] = { t = now, text = text }
-    while #recent > 5 do table.remove(recent, 1) end
-    pcall(function()
-        if p.components.talker ~= nil then p.components.talker:Say(text, 3) end
-    end)
-end
-
---- 最近 60 秒内反射层自己做过的事（observe 会读）
-function R.Recent()
-    local out = {}
-    local now = U.now()
-    for _, item in ipairs(recent) do
-        if now - item.t <= 60 then out[#out + 1] = item.text end
-    end
-    return out
-end
+-- ─────────────────────────── 基础小工具 ───────────────────────────
 
 local function percent_of(comp)
     if comp == nil then return nil end
@@ -102,66 +93,115 @@ local function sanity_percent(p)
     return percent_of(p ~= nil and p.components ~= nil and p.components.sanity or nil)
 end
 
---- 最近的活着的敌对生物（radius 单位是"格"，U.find_nearest 会自己乘 4）
-local function nearest_hostile(p, radius_tiles)
-    -- 引擎的 FindEntities 本来就会按 radius 过滤；这里再核对一次距离，
-    -- 是为了不让"附近列表没过滤干净"的环境（测试桩/特殊脚本）把远处的怪算成贴脸。
-    local limit = radius_tiles * U.TILE
-    return U.find_nearest(p, radius_tiles, { "hostile" }, nil, function(e)
-        local h = e ~= nil and e.components ~= nil and e.components.health or nil
-        if h == nil or h:IsDead() then return false end
-        return U.dist(p, e) <= limit
+local function current_phase()
+    local world = GLOBAL.TheWorld
+    local state = world ~= nil and world.state or nil
+    return state ~= nil and state.phase or nil
+end
+
+local function cooldown_ok(key)
+    local now = U.now()
+    if fail_until[key] ~= nil and now < fail_until[key] then return false end
+    local previous = last[key]
+    if previous ~= nil and now - previous < (COOLDOWN[key] or 10) then return false end
+    return true
+end
+
+local function mark(key)
+    last[key] = U.now()
+end
+
+local function mark_fail(key, seconds)
+    fail_until[key] = U.now() + (seconds or 6)
+end
+
+--- 诊断日志：同一段内容 30 秒内不重复打；写进 server_log，也留一份给 get_state。
+local function diag(section, lines)
+    local now = U.now()
+    lines = lines or {}
+    local joined = table.concat(lines, " ")
+    local prev = last_log[section]
+    if prev ~= nil and prev.text == joined and now - prev.at < 30 then return end
+    last_log[section] = { at = now, text = joined }
+    local out = "[Reflex] " .. section .. ":"
+    for _, line in ipairs(lines) do out = out .. "\n  " .. tostring(line) end
+    pcall(function() print(out) end)
+    recent[#recent + 1] = { t = now, text = "[Reflex] " .. section }
+    while #recent > 8 do table.remove(recent, 1) end
+end
+
+local function say(p, key, text)
+    if p == nil then return end
+    local now = U.now()
+    local previous = last_said[key]
+    if previous ~= nil and now - previous < 20 then return end
+    last_said[key] = now
+    recent[#recent + 1] = { t = now, text = text }
+    while #recent > 8 do table.remove(recent, 1) end
+    pcall(function()
+        if p.components.talker ~= nil then p.components.talker:Say(text, 3) end
     end)
 end
 
---- 这只怪是不是正在打我（combat.target 指向我）。
---- 有些怪没有 hostile 标签，但 combat.target 这个信号最直接。
-local function combat_targeting(foe, p)
-    local c = foe ~= nil and foe.components ~= nil and foe.components.combat or nil
-    if c == nil then return false end
-    local ok, target = pcall(function() return c.target end)
-    return ok and target == p
+--- 最近 60 秒内反射层自己做过的事（observe 会读）
+function R.Recent()
+    local out = {}
+    local now = U.now()
+    for _, item in ipairs(recent) do
+        if now - item.t <= 60 then out[#out + 1] = item.text end
+    end
+    return out
 end
 
---- 背包里第一个治疗物品的 prefab（药膏/腺体等）。
---- 反射层只把它交给 heal 动作，不自己决定吃哪个食物。
-local function find_healer_prefab(p)
+--- 反射到底开没开（模组默认开，但**旧存档的 modoverrides 里可能被设成 false**）
+function R.Enabled()
+    if Whale.reflex_force_off == true then return false, "force_off" end
+    if Whale.reflex_on == false then return false, "config_disabled" end
+    if Whale.reflex_on == nil then return false, "config_missing" end
+    return true, "config_enabled"
+end
+
+-- ─────────────────────────── 光源判断 ───────────────────────────
+
+--- 手上有"还能用"的便携光源（有耐久就看耐久，烧光的不算）
+local function hand_light(p)
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
     if inv == nil then return nil end
-    local prefab = nil
-    pcall(function()
-        inv:ForEachItem(function(item)
-            if prefab ~= nil or item == nil or not item:IsValid() then return end
-            if item.components ~= nil and item.components.healer ~= nil then
-                prefab = tostring(item.prefab or "")
-            end
-        end)
-    end)
-    if prefab == "" then return nil end
-    return prefab
+    local hands = nil
+    pcall(function() hands = inv:GetEquippedItem(GLOBAL.EQUIPSLOTS.HANDS) end)
+    if hands == nil then return nil end
+    local prefab = tostring(hands.prefab or "")
+    if not LIGHT_PREFABS[prefab] then return nil end
+    local uses = hands.components ~= nil and hands.components.finiteuses or nil
+    if uses ~= nil then
+        local ok, cur = pcall(function() return uses:GetUses() end)
+        if ok and type(cur) == "number" and cur <= 0 then return nil end
+    end
+    return hands
 end
 
--- 已放置的永久光源有时仍保留 inventoryitem 组件（真机快照里出现过）。
--- 这些 prefab 本身是设施，不能因为还带 inventoryitem 就被当成"背包里的东西"排除。
-local PERMANENT_LIGHTS = {
-    pumpkin_lantern = true,
-    mushroom_light = true,
-    mushroom_light2 = true,
-    nightlight = true,
-    wall_light = true,
-}
+--- 背包里"还能用"的便携光源
+local function inventory_light(p)
+    local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
+    if inv == nil then return nil end
+    local found = nil
+    pcall(function()
+        inv:ForEachItem(function(item)
+            if found ~= nil or item == nil or not item:IsValid() then return end
+            local prefab = tostring(item.prefab or "")
+            if not LIGHT_PREFABS[prefab] then return end
+            local uses = item.components ~= nil and item.components.finiteuses or nil
+            if uses == nil then found = item return end
+            local ok, cur = pcall(function() return uses:GetUses() end)
+            if not ok or type(cur) ~= "number" or cur > 0 then found = item end
+        end)
+    end)
+    return found
+end
 
-local function has_light(p)
-    local inv = p.components.inventory
-    if inv == nil then return false end
-    local hands = inv:GetEquippedItem(GLOBAL.EQUIPSLOTS.HANDS)
-    if hands ~= nil and (hands:HasTag("light") or hands.prefab == "torch"
-            or hands.prefab == "lantern" or hands.prefab == "minerhat") then
-        return true
-    end
-    -- 不只找火：南瓜灯/蘑菇灯/夜灯这类永久光源也要算。
-    -- 有 fueled 的（营火/火坑）必须还有燃料；没有 fueled 的照明设施按已点亮算。
-    local light = U.find_nearest(p, 8, { "light" }, nil, function(e)
+--- 附近点着的固定光源（营火/火坑/南瓜灯…）
+local function nearby_light(p)
+    return U.find_nearest(p, 8, { "light" }, nil, function(e)
         if e == nil or e == p or e:HasTag("player") then return false end
         local permanent = PERMANENT_LIGHTS[tostring(e.prefab or "")] == true
         if not permanent and e.components ~= nil and e.components.inventoryitem ~= nil then
@@ -170,11 +210,66 @@ local function has_light(p)
         local fueled = e.components ~= nil and e.components.fueled or nil
         return fueled == nil or not fueled:IsEmpty()
     end)
-    return light ~= nil
 end
 
+--- 眼下是否被照亮（手上有效光源 或 附近点着的固定光源）。注意：背包里有一把火把不算"现在有光"。
+local function has_light(p)
+    if hand_light(p) ~= nil then return true end
+    return nearby_light(p) ~= nil
+end
+
+--- 综合光源状态：一个表，供决策与诊断共用
+local function light_report(p)
+    local cr = Whale ~= nil and Whale.craftrules or nil
+    local cost = cr ~= nil and cr.NeededIngredients("torch") or nil
+    local counts = cr ~= nil and cr.Counts(p) or {}
+    local can_craft = cost ~= nil
+    local missing = {}
+    if cost ~= nil then
+        for prefab, need in pairs(cost) do
+            local have = counts[prefab] or 0
+            if have < need then
+                can_craft = false
+                missing[#missing + 1] = string.format("%s %d/%d", prefab, have, need)
+            end
+        end
+    end
+    table.sort(missing)
+    local hand = hand_light(p)
+    local inbag = inventory_light(p)
+    local near = nearby_light(p)
+    return {
+        phase = current_phase(),
+        hand = hand,
+        in_bag = inbag,
+        near = near,
+        has_usable = (hand ~= nil) or (near ~= nil),
+        portable = (hand ~= nil) or (inbag ~= nil),
+        can_craft = can_craft,
+        missing = missing,
+    }
+end
+
+local function bool_str(v) return v and "true" or "false" end
+
+local function log_light_check(rep)
+    diag("light_check", {
+        "has_usable_light=" .. bool_str(rep.has_usable),
+        "portable=" .. bool_str(rep.portable),
+        "time_of_day=" .. tostring(rep.phase),
+    })
+    if not rep.portable then
+        diag("light_materials", {
+            "ready=" .. bool_str(rep.can_craft),
+            "missing=" .. (#rep.missing > 0 and table.concat(rep.missing, ", ") or "none"),
+        })
+    end
+end
+
+-- ─────────────────────────── 原生小动作（不建 Whale.job）───────────────────────────
+
 local function exact_ready(p, prefab, radius)
-    local found = U.find_nearest(p, radius or 10, nil, nil, function(e)
+    return U.find_nearest(p, radius or 10, nil, nil, function(e)
         if e == nil or e.prefab ~= prefab then return false end
         if e:HasTag("barren") then return false end
         local pickable = e.components ~= nil and e.components.pickable or nil
@@ -182,22 +277,17 @@ local function exact_ready(p, prefab, radius)
         local ok, can = pcall(function() return pickable:CanBePicked() end)
         return ok and can == true
     end)
-    return found
 end
 
---- 反射层的"采一个"直接推原生动作，不创建 Whale.job。
---- 这样不会让模型刚发来的命令撞上 actor_busy；引擎忙的时候我们自己让开。
 local function push_pick(p, ent)
     if p == nil or ent == nil then return false end
     local ok_busy, buffered = pcall(function() return p:GetBufferedAction() end)
     if ok_busy and buffered ~= nil then return false end
     local ok_ba, ba = pcall(function() return GLOBAL.BufferedAction(p, ent, GLOBAL.ACTIONS.PICK, nil) end)
     if not ok_ba or ba == nil then return false end
-    local ok_push = pcall(function() A.push(p, ba) end)
-    return ok_push
+    return pcall(function() A.push(p, ba) end)
 end
 
---- 采成熟浆果丛（原生 HARVEST 动作）。和 push_pick 一样不创建 Whale.job。
 local function push_harvest(p, ent)
     if p == nil or ent == nil then return false end
     local ok_busy, buffered = pcall(function() return p:GetBufferedAction() end)
@@ -207,7 +297,6 @@ local function push_harvest(p, ent)
     return pcall(function() A.push(p, ba) end)
 end
 
---- 捡地上的食物（胡萝卜/浆果）。白名单仍是 Whale.pickuprules 的唯一来源。
 local function push_pickup(p, ent)
     if p == nil or ent == nil then return false end
     local ok_busy, buffered = pcall(function() return p:GetBufferedAction() end)
@@ -232,116 +321,75 @@ local function ready_berry(p, radius)
     end)
 end
 
---- 地上能捡、能吃、且在 pickuprules 白名单里的东西（胡萝卜/浆果）。
 local function ready_ground_food(p, radius)
     local rules = Whale ~= nil and Whale.pickuprules or nil
     local eat = Whale ~= nil and Whale.eatrules or nil
     if rules == nil or eat == nil then return nil end
     return U.find_nearest(p, radius, nil, nil, function(e)
-        local ok_candidate = rules.IsCandidate(e, p)
-        if not ok_candidate then return false end
+        if not rules.IsCandidate(e, p) then return false end
         local edible = e.components ~= nil and e.components.edible or nil
         if edible == nil then return false end
-        local ok_food = eat.IsAllowedPrefab(tostring(e.prefab or ""))
-        return ok_food == true
+        return eat.IsAllowedPrefab(tostring(e.prefab or "")) == true
     end)
 end
 
---- 1) 快见底/饿坏了：吃药或吃东西（heal 自己会挑：治疗类优先，其次吃的）
-local function reflex_heal(p)
-    local hp = health_percent(p)
-    local hunger = hunger_percent(p)
-    -- 40% 就开始吃，给模型思考和动作留出时间；等到 25% 常常已经来不及。
-    local need_heal = hp ~= nil and hp < 0.45
-    local need_eat = hunger ~= nil and hunger < 0.35
-    if not need_heal and not need_eat then return false end
+-- ─────────────────────────── 威胁判断 ───────────────────────────
 
-    local key = need_heal and "heal" or "eat"
-    if not cooldown_ok(key) then return false end
+local function nearest_hostile(p, radius_tiles)
+    local limit = radius_tiles * U.TILE
+    return U.find_nearest(p, radius_tiles, { "hostile" }, nil, function(e)
+        local h = e ~= nil and e.components ~= nil and e.components.health or nil
+        if h == nil or h:IsDead() then return false end
+        return U.dist(p, e) <= limit
+    end)
+end
 
-    local healer = need_heal and find_healer_prefab(p) or nil
-    -- ★ 真机 bug：包里没有安全食物时，旧的 eat 会先启动、再失败，然后还要吃 5 秒冷却，
-    --   结果"该去采浆果"的那几秒被白白烧掉。没有安全食物就交给 reflex_forage。
-    local rules = Whale ~= nil and Whale.eatrules or nil
+local function combat_targeting(foe, p)
+    local c = foe ~= nil and foe.components ~= nil and foe.components.combat or nil
+    if c == nil then return false end
+    local ok, target = pcall(function() return c.target end)
+    return ok and target == p
+end
+
+local function find_healer_prefab(p)
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
-    local safe_food = rules ~= nil and inv ~= nil and rules.PickBest(inv) ~= nil
-    if healer == nil and not safe_food then return false end
-
-    local started = false
-    if healer ~= nil then
-        started = A.Start("heal", { item = healer }, REFLEX_ID)
-    else
-        -- 不填食物的 eat 会走旧 best_food 路径，可能挑到怪物肉或生红/绿蘑菇。
-        -- survival_eat 强制使用 eatrules 的安全白名单。
-        started = A.Start("eat", {}, REFLEX_ID, { survival_eat = true })
-    end
-    if started then
-        mark(key)
-        say(p, key, need_heal and healer ~= nil and "血不多了，先上药" or "饿了/血少了，先吃点安全的东西")
-        return true
-    end
-    return false
+    if inv == nil then return nil end
+    local prefab = nil
+    pcall(function()
+        inv:ForEachItem(function(item)
+            if prefab ~= nil or item == nil or not item:IsValid() then return end
+            if item.components ~= nil and item.components.healer ~= nil then
+                prefab = tostring(item.prefab or "")
+            end
+        end)
+    end)
+    if prefab == "" then return nil end
+    return prefab
 end
 
---- 2) 入夜没光：举火把 / 做火把 / 生营火
-local function reflex_light(p)
-    local world = GLOBAL.TheWorld
-    local state = world ~= nil and world.state or nil
-    local phase = state ~= nil and state.phase or nil
-    if phase ~= "dusk" and phase ~= "night" then return false end
-    if has_light(p) then return false end
-    if not cooldown_ok("light") then return false end
-
-    local inv = p.components.inventory
-    if inv == nil then return false end
-
-    local torch = U.find_item(p, "torch")
-    if torch ~= nil then
-        pcall(function() inv:Equip(torch) end)
-        mark("light")
-        say(p, "light", "天黑了，先把火把举起来")
-        return true
-    end
-
-    -- 有材料就做火把（空手做会直接装备到手上）。
-    if A.count_item(p, "cutgrass") >= 2 and A.count_item(p, "twigs") >= 2 then
-        -- 走 SURVIVAL-01 的 craft 路径：做之前用 craftrules 精确核对材料，
-        -- 避免旧路径在材料不够时先把材料扣掉。
-        local started = A.Start("craft", { recipe = "torch", count = 1 }, REFLEX_ID,
-            { survival_craft = true, recipe = "torch" })
-        if started then
-            mark("light")
-            say(p, "light", "没火了，先做把火把")
-            return true
-        end
-    end
-
-    -- 没火把材料：有木头+草就先生营火，至少别在黑暗里挨打。
-    if A.count_item(p, "log") >= 2 and A.count_item(p, "cutgrass") >= 3 then
-        local started = A.Start("make_fire", {}, REFLEX_ID)
-        if started then
-            mark("light")
-            say(p, "light", "材料不够做火把，先生一堆营火")
-            return true
-        end
-    end
-    return false
+--- 残血 + 敌人已经贴脸：允许抢占模型正在跑的任务。
+function R.CriticalDanger(p)
+    local attacker = nearest_hostile(p, 3)
+    if attacker ~= nil and combat_targeting(attacker, p) then return true end
+    local hp = health_percent(p)
+    if hp == nil or hp >= 0.35 then return false end
+    if nearest_hostile(p, 2.5) ~= nil then return true end
+    return hp < 0.2 and nearest_hostile(p, 5) ~= nil
 end
 
---- 3) 敌人贴脸：血少、或者理智低到刷暗影怪时，先拉开
+-- ─────────────────────────── 具体反射动作 ───────────────────────────
+
+--- 撤退（P0）
 local function reflex_flee(p)
     local hp = health_percent(p)
     local sanity = sanity_percent(p)
-    -- 和计划层对齐：半血以下就不硬拼；理智见底时暗影怪贴脸也必须先撤。
     local danger_low_hp = hp ~= nil and hp < 0.5
     local danger_shadow = sanity ~= nil and sanity < 0.25
-
     local radius = danger_low_hp and 4 or 5
     local foe = nearest_hostile(p, radius)
     local attacked = foe ~= nil and combat_targeting(foe, p)
     if not danger_low_hp and not danger_shadow and not attacked then return false end
     if foe == nil then return false end
-    if not cooldown_ok("flee") then return false end
 
     local fx, _, fz = U.pos(foe)
     local px, _, pz = U.pos(p)
@@ -350,8 +398,6 @@ local function reflex_flee(p)
     local len = math.sqrt(dx * dx + dz * dz)
     if len < 0.01 then dx, dz, len = 1, 0, 1 end
 
-    -- 优先往"比现在更远离威胁"的营地/永久光源撤；没有就往反方向跑远一点。
-    -- 旧的 2.5 格只够退出攻击圈，青蛙两步又追上来 —— 真机就是这样被反复耗死的。
     local cur = U.dist(p, foe)
     local base = U.find_nearest(p, 40, nil, nil, function(e)
         if e == nil or e == p or e:HasTag("player") then return false end
@@ -377,7 +423,6 @@ local function reflex_flee(p)
     end
     local started = A.Start("move_to", { x = tx, z = tz, timeout = 8 }, REFLEX_ID)
     if started then
-        mark("flee")
         local why = danger_shadow and "暗影怪贴上来了，先撤"
             or (danger_low_hp and "血不多了，先撤到安全的地方" or "有怪在打我，先撤")
         say(p, "flee", why)
@@ -386,14 +431,126 @@ local function reflex_flee(p)
     return false
 end
 
---- 3.5) 饿了/血低但背包里没有安全食物：先采成熟浆果，或捡地上的胡萝卜/浆果。
---- 这条只在没有可吃食物时触发，避免抢模型正在做的存粮计划。
+--- 做一把火把（用原生 craft 路径 + craftrules 精确核对材料）—— 白天也做。
+local function craft_torch(p)
+    local cr = Whale ~= nil and Whale.craftrules or nil
+    if cr == nil then return false end
+    local ok_ing, missing = cr.HasIngredients(p, "torch")
+    if not ok_ing then
+        diag("craft_torch", { "started=false", "reason=" .. tostring(missing) })
+        mark_fail("craft_light", 6)
+        return false
+    end
+    local started = A.Start("craft", { recipe = "torch", count = 1 }, REFLEX_ID,
+        { survival_craft = true, recipe = "torch" })
+    if started then
+        pending = { kind = "craft_torch", t0 = U.now() }
+        say(p, "craft_light", "先把火把做出来，别等天黑")
+        diag("craft_torch", { "started=true" })
+        return true
+    end
+    return false
+end
+
+--- 天黑没光（P0）：举火把 → 做火把 → 生营火
+local function reflex_light(p)
+    if has_light(p) then return false end
+
+    local bag = inventory_light(p)
+    if bag ~= nil then
+        local started = A.Start("equip", { item = "torch" }, REFLEX_ID)
+        if started then say(p, "light", "天黑了，先把火把举起来") end
+        return started
+    end
+
+    if craft_torch(p) then return true end
+
+    if A.count_item(p, "log") >= 2 and A.count_item(p, "cutgrass") >= 3 then
+        local started = A.Start("make_fire", {}, REFLEX_ID)
+        if started then say(p, "light", "材料不够做火把，先生一堆营火") end
+        return started
+    end
+
+    diag("light_check", { "has_usable_light=false", "action=none", "reason=no_light_materials" })
+    mark_fail("light", 6)
+    return false
+end
+
+--- 吃（安全白名单）
+local function reflex_eat(p)
+    local rules = Whale ~= nil and Whale.eatrules or nil
+    local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
+    if rules == nil or inv == nil then return false end
+    local item = rules.PickBest(inv)
+    if item == nil then return false end
+    local hungry = hunger_percent(p)
+    if hungry ~= nil and hungry > 0.98 then return false end  -- 吃饱了，别浪费食物
+    local started = A.Start("eat", {}, REFLEX_ID, { survival_eat = true })
+    if started then
+        pending = { kind = "eat", hunger_before = hungry, t0 = U.now() }
+        say(p, "eat", "饿了/血少了，先吃点安全的东西")
+        return true
+    end
+    return false
+end
+
+--- 回血（有治疗物品优先生药，否则靠吃）
+local function reflex_heal(p)
+    local healer = find_healer_prefab(p)
+    if healer ~= nil then
+        local started = A.Start("heal", { item = healer }, REFLEX_ID)
+        if started then
+            pending = { kind = "heal", hp_before = health_percent(p), t0 = U.now() }
+            say(p, "heal", "血不多了，先上药")
+            return true
+        end
+        return false
+    end
+    return reflex_eat(p)
+end
+
+--- 白天补火把材料（P2，只采缺的那一种，一次一个）
+local function reflex_stock_light(p, rep)
+    if rep == nil then rep = light_report(p) end
+    if rep.portable then return false end          -- 已经有能带走的光源
+    if rep.can_craft then return false end          -- 材料够 → 交给 P1 的 craft，不再采
+    if not cooldown_ok("stock") then return false end
+
+    local cr = Whale ~= nil and Whale.craftrules or nil
+    local cost = cr ~= nil and cr.NeededIngredients("torch") or nil
+    if cost == nil then return false end
+    local counts = cr.Counts(p)
+    local prefab, want = nil, nil
+    for pf, need in pairs(cost) do
+        if (counts[pf] or 0) < need then
+            prefab = pf
+            if pf == "cutgrass" then want = "grass"
+            elseif pf == "twigs" then want = "sapling" end
+            break
+        end
+    end
+    if want == nil then return false end
+
+    local target = exact_ready(p, want, 10)
+    if target == nil then
+        diag("light_materials", { "need=" .. tostring(prefab), "nearby=none" })
+        mark_fail("stock", 5)
+        return false
+    end
+    if push_pick(p, target) then
+        mark("stock")
+        say(p, "stock", want == "grass" and "先采点草，凑火把材料" or "先采点树枝，凑火把材料")
+        return true
+    end
+    return false
+end
+
+--- 没安全食物时去采浆果/捡地上的吃的（P2）
 local function reflex_forage(p)
     local hp = health_percent(p)
     local hunger = hunger_percent(p)
-    local need_food = (hunger ~= nil and hunger < 0.35) or (hp ~= nil and hp < 0.5)
+    local need_food = (hunger ~= nil and hunger < FORAGE_AHEAD) or (hp ~= nil and hp < 0.5)
     if not need_food then return false end
-
     local rules = Whale ~= nil and Whale.eatrules or nil
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
     if rules ~= nil and inv ~= nil and rules.PickBest(inv) ~= nil then return false end
@@ -411,10 +568,11 @@ local function reflex_forage(p)
         say(p, "forage", "先把地上的吃的捡起来")
         return true
     end
+    mark_fail("forage", 4)
     return false
 end
 
---- 4) 火快灭了：添柴
+--- 火快灭了（P2）
 local function reflex_fuel(p)
     local fire = U.find_nearest(p, 8, { "fire" }, nil, function(e)
         local fueled = e.components ~= nil and e.components.fueled or nil
@@ -433,22 +591,15 @@ local function reflex_fuel(p)
     return false
 end
 
---- 5) 理智太低：白天/有光时采花（每朵 +5 理智）。
---- 不用生绿蘑菇兜底：生绿蘑菇会掉理智，反而把人推向暗影怪。
+--- 理智太低（P3）：白天/有光时采花
 local function reflex_sanity(p)
     local sanity = sanity_percent(p)
-    if sanity == nil or sanity >= 0.35 then return false end
+    if sanity == nil or sanity >= SANITY_LOW then return false end
     if not cooldown_ok("sanity") then return false end
-
-    -- 黑暗里掉理智最快；先让 reflex_light 处理光。
-    local world = GLOBAL.TheWorld
-    local phase = world ~= nil and world.state ~= nil and world.state.phase or nil
+    local phase = current_phase()
     if (phase == "dusk" or phase == "night") and not has_light(p) then return false end
-
-    -- 只采普通花；恶花（flower_evil）会掉理智，绝不能碰。
     local flower = exact_ready(p, "flower", 10)
-    local started = flower ~= nil and push_pick(p, flower) or false
-    if started then
+    if flower ~= nil and push_pick(p, flower) then
         mark("sanity")
         say(p, "sanity", "理智太低了，先补一点")
         return true
@@ -456,93 +607,291 @@ local function reflex_sanity(p)
     return false
 end
 
---- 6) 白天提前备火把材料：2 草 + 2 树枝。
----    只在白天、没光、没火把、材料不够、附近真的有目标时做，每次只采一个。
-local function reflex_stock_light(p)
-    local world = GLOBAL.TheWorld
-    local phase = world ~= nil and world.state ~= nil and world.state.phase or nil
-    if phase == "dusk" or phase == "night" then return false end
-    -- 有固定光源也要备一把能带走的火把；只有背包里已经有火把才停。
-    if A.count_item(p, "torch") > 0 then return false end
-    if not cooldown_ok("stock") then return false end
+--- 温度异常（P1，只做安全的"靠近/远离火"）
+local function temperature_need(p)
+    local comp = p ~= nil and p.components ~= nil and p.components.temperature or nil
+    if comp == nil then return nil end
+    local ok, t = pcall(function() return comp:GetCurrent() end)
+    if not ok or type(t) ~= "number" then return nil end
+    local cold = t < 5
+    local hot = t > 65
+    if not cold and not hot then return nil end
+    return {
+        reason = cold and "temperature_cold" or "temperature_hot",
+        run = function(p2)
+            local fire = U.find_nearest(p2, 20, { "fire" }, nil, function(e)
+                local fueled = e.components ~= nil and e.components.fueled or nil
+                return fueled == nil or not fueled:IsEmpty()
+            end)
+            if fire == nil then
+                diag("temperature", { "too_" .. (cold and "cold" or "hot") .. "=true", "fire=none" })
+                mark_fail("temperature", 10)
+                return false
+            end
+            local fx, _, fz = U.pos(fire)
+            local px, _, pz = U.pos(p2)
+            if fx == nil or px == nil then return false end
+            local tx, tz
+            if cold then
+                tx, tz = U.tile_of(fx, fz)
+            else
+                local dx, dz = px - fx, pz - fz
+                local len = math.sqrt(dx * dx + dz * dz)
+                if len < 0.01 then dx, dz, len = 1, 0, 1 end
+                tx, tz = U.tile_of(px + dx / len * 6 * U.TILE, pz + dz / len * 6 * U.TILE)
+            end
+            local started = A.Start("move_to", { x = tx, z = tz, timeout = 8 }, REFLEX_ID)
+            if started then
+                say(p2, "temperature", cold and "太冷了，先去火边暖和一下" or "太热了，先离火远一点")
+            end
+            return started
+        end,
+    }
+end
 
-    local grass = A.count_item(p, "cutgrass")
-    local twigs = A.count_item(p, "twigs")
-    if grass >= 2 and twigs >= 2 then return false end
+-- ─────────────────────────── 优先级与安全抢占 ───────────────────────────
 
-    local want = grass < 2 and "grass" or "sapling"
-    local target = exact_ready(p, want, 10)
-    if target == nil then return false end
-    local started = push_pick(p, target)
+--- 当前任务的优先级（模型任务一律 P3；反射任务看自己标的等级）
+local function job_priority(job)
+    if job == nil then return nil end
+    if job.cmd_id == REFLEX_ID then return job.reflex_priority or P1 end
+    return P3
+end
+
+--- 通过 A.Abort（唯一正式取消路径）中断当前任务；确认旧任务已停、且没有遗留 buffered action。
+--- 绝不直接清 Whale.job，也绝不在旧动作没清干净时启动第二个动作。
+local function interrupt_current(reason)
+    local job = Whale.job
+    if job == nil then return true end
+    local old_name = tostring(job.name)
+    local ok = pcall(function() A.Abort(reason) end)
+    local cleared = (Whale.job == nil)
+    local p = U.player()
+    local buffered = false
+    if p ~= nil then
+        local ok_b, ba = pcall(function() return p:GetBufferedAction() end)
+        if ok_b then buffered = (ba ~= nil) end
+    end
+    diag("protection", {
+        "current_job=" .. old_name,
+        "interrupt=true",
+        "reason=" .. tostring(reason),
+        "job_cleared=" .. bool_str(cleared),
+        "buffered_action=" .. bool_str(buffered),
+        "ok=" .. bool_str(ok),
+    })
+    return cleared and not buffered
+end
+
+--- 尝试执行一个反射动作：防抖 → 冷却 → 抢占判断 → 中断 → 执行
+local function try_action(p, key, priority, reason, fn)
+    -- 同一意图已经在跑：不重复建任务
+    if inflight ~= nil and inflight.key == key and Whale.job == inflight.job then
+        return false
+    end
+    if not cooldown_ok(key) then return false end
+
+    local job = Whale.job
+    if job ~= nil then
+        if priority > P1 then
+            diag("skipped", { "reason=job_running", "intent=" .. key, "current_job=" .. tostring(job.name) })
+            return false
+        end
+        local cur = job_priority(job) or P3
+        if priority >= cur then
+            diag("skipped", { "reason=lower_or_equal_priority", "intent=" .. key,
+                              "current_job=" .. tostring(job.name) })
+            return false
+        end
+        if not interrupt_current(reason) then
+            diag("skipped", { "reason=interrupt_failed", "intent=" .. key })
+            return false
+        end
+    end
+
+    local started = fn()
     if started then
-        mark("stock")
-        say(p, "stock", want == "grass" and "白天先把做火把的草备好" or "白天先把做火把的树枝备好")
+        mark(key)
+        local j = Whale.job
+        if j ~= nil and j.cmd_id == REFLEX_ID then
+            j.reflex_key = key
+            j.reflex_priority = priority
+            inflight = { key = key, job = j, priority = priority }
+        end
         return true
     end
     return false
 end
 
---- 残血 + 敌人已经贴脸：允许抢占模型正在跑的任务。
---- 阈值刻意比普通 flee 更严（残血 2.5 格；20% 以下 5 格），
---- 避免远处一只蜘蛛就让 AI 一直逃跑、什么也做不成。
-function R.CriticalDanger(p)
-    -- 正在被怪打：不管血多少，先停下手里的事脱离（采集中被青蛙咬就是这个场景）。
-    local attacker = nearest_hostile(p, 3)
-    if attacker ~= nil and combat_targeting(attacker, p) then return true end
+-- ─────────────────────────── 状态同步 / 结果核对 ───────────────────────────
 
-    local hp = health_percent(p)
-    if hp == nil or hp >= 0.35 then return false end
-    if nearest_hostile(p, 2.5) ~= nil then return true end
-    return hp < 0.2 and nearest_hostile(p, 5) ~= nil
+local function sync_inflight()
+    local job = Whale.job
+    if job == nil or job.cmd_id ~= REFLEX_ID then
+        inflight = nil
+        return
+    end
+    if inflight == nil or inflight.job ~= job then
+        inflight = { key = job.reflex_key or "unknown", job = job, priority = job.reflex_priority or P1 }
+    end
 end
 
---- 服务端每 0.2 秒调一次；内部按 1 秒节流
+--- 反射发起的任务结束后，用**真实状态**核对结果（不许把失败说成成功）
+local function confirm_pending(p)
+    if pending == nil then return end
+    local job = Whale.job
+    if job ~= nil and job.cmd_id == REFLEX_ID then return end   -- 还在跑
+
+    if pending.kind == "craft_torch" then
+        local cr = Whale ~= nil and Whale.craftrules or nil
+        local have = cr ~= nil and (cr.Counts(p)["torch"] or 0) or 0
+        local hand = hand_light(p)
+        local ok = (have > 0) or (hand ~= nil)
+        diag("craft_torch", {
+            "started=true",
+            "result=" .. (ok and "succeeded" or "failed"),
+            "inventory_confirmed=" .. bool_str(have > 0),
+            "in_hand=" .. bool_str(hand ~= nil),
+        })
+        if not ok then mark_fail("craft_light", 8) end
+    elseif pending.kind == "eat" then
+        local now = hunger_percent(p)
+        local delta = (now ~= nil and pending.hunger_before ~= nil) and (now - pending.hunger_before) or nil
+        diag("eat", {
+            "result=" .. ((delta ~= nil and delta > 0.005) and "succeeded" or "unconfirmed"),
+            "hunger_delta=" .. (delta ~= nil and string.format("%.1f", delta) or "?"),
+        })
+    elseif pending.kind == "heal" then
+        local now = health_percent(p)
+        local delta = (now ~= nil and pending.hp_before ~= nil) and (now - pending.hp_before) or nil
+        diag("heal", { "result=" .. ((delta ~= nil and delta > 0.001) and "succeeded" or "unconfirmed") })
+    end
+    pending = nil
+end
+
+local function reset_state(reason)
+    inflight = nil
+    pending = nil
+    last = {}
+    fail_until = {}
+    last_log = {}
+    diag("reset", { "reason=" .. tostring(reason) })
+end
+
+--- 给 get_state / 诊断用：当前最高优先级需求（只判规则，不执行）
+function R.Priority(p)
+    if p == nil then return P3, "no_player" end
+    local phase = current_phase()
+    local hp = health_percent(p)
+    local hunger = hunger_percent(p)
+    local sanity = sanity_percent(p)
+    local rep = light_report(p)
+
+    local attacker = nearest_hostile(p, 3)
+    if attacker ~= nil and combat_targeting(attacker, p) then return P0, "under_attack" end
+    if hp ~= nil and hp < 0.25 and nearest_hostile(p, 2.5) ~= nil then return P0, "critical_health" end
+    if (phase == "dusk" or phase == "night") and not rep.has_usable then return P0, "dark_no_light" end
+
+    if phase ~= "dusk" and phase ~= "night" and not rep.portable then
+        if rep.can_craft then return P1, "light_preparation" end
+        return P2, "light_materials"
+    end
+    if hunger ~= nil and hunger < EAT_EMERGENCY then return P1, "hunger_emergency" end
+    if hp ~= nil and hp < HEAL_EMERGENCY then return P1, "health_low" end
+
+    local temp = temperature_need(p)
+    if temp ~= nil then return P1, temp.reason end
+    if sanity ~= nil and sanity < SANITY_LOW then return P3, "sanity_low" end
+    return P3, "idle"
+end
+
+-- ─────────────────────────── 主循环（每 0.2 秒调一次，内部 1 秒节流）───────────────────────────
+
+local function run(p)
+    local phase = current_phase()
+    local rep = light_report(p)
+    log_light_check(rep)
+
+    local hp = health_percent(p)
+    local hunger = hunger_percent(p)
+    local sanity = sanity_percent(p)
+
+    local prio, why = R.Priority(p)
+    if prio <= P1 then
+        diag("priority", { "priority=P" .. tostring(prio), "reason=" .. tostring(why) })
+    end
+
+    -- ── P0：立即保命（可抢占任何任务）
+    local attacker = nearest_hostile(p, 3)
+    if attacker ~= nil and combat_targeting(attacker, p) then
+        if try_action(p, "flee", P0, "under_attack", function() return reflex_flee(p) end) then return end
+    end
+    if hp ~= nil and hp < 0.25 and nearest_hostile(p, 2.5) ~= nil then
+        if try_action(p, "flee", P0, "critical_health", function() return reflex_flee(p) end) then return end
+    end
+    if (phase == "dusk" or phase == "night") and not rep.has_usable then
+        if try_action(p, "light", P0, "dark_no_light", function() return reflex_light(p) end) then return end
+    end
+
+    -- ── P1：高优先生存需求（可在安全时中断普通采集/探索）
+    if phase ~= "dusk" and phase ~= "night" and (not rep.portable) and rep.can_craft then
+        if try_action(p, "craft_light", P1, "light_preparation", function() return craft_torch(p) end) then return end
+    end
+    if hunger ~= nil and hunger < EAT_EMERGENCY then
+        if try_action(p, "eat", P1, "hunger_emergency", function() return reflex_eat(p) end) then return end
+    end
+    if hp ~= nil and hp < HEAL_EMERGENCY then
+        if try_action(p, "heal", P1, "health_low", function() return reflex_heal(p) end) then return end
+    end
+    local temp = temperature_need(p)
+    if temp ~= nil then
+        if try_action(p, "temperature", P1, temp.reason, temp.run) then return end
+    end
+
+    -- ── P2/P3：只在没有任务时做（不抢模型任务）
+    if Whale.job ~= nil then return end
+    if phase ~= "dusk" and phase ~= "night" and (not rep.portable) and (not rep.can_craft) then
+        if reflex_stock_light(p, rep) then return end
+    end
+    if reflex_forage(p) then return end
+    if reflex_fuel(p) then return end
+    if sanity ~= nil and sanity < SANITY_LOW then reflex_sanity(p) end
+end
+
 local tick = 0
 function R.Tick()
-    if Whale.reflex_force_off == true then return end
-    if Whale.reflex_on == false then return end   -- 模组配置里关掉了
+    local enabled, why = R.Enabled()
+    if not enabled then
+        tick = tick + 1
+        if tick % 5 == 0 then diag("enabled", { "enabled=false", "reason=" .. tostring(why) }) end
+        return
+    end
     tick = tick + 1
     if tick % 5 ~= 0 then return end       -- ≈1 秒一次
 
     local p = U.player()
-    if p == nil then return end
-    local hp = p.components.health
-    if hp ~= nil and hp:IsDead() then return end
+    if p == nil then
+        reset_state("no_player")
+        return
+    end
+    local hp_comp = p.components ~= nil and p.components.health or nil
+    if hp_comp == nil then return end
+    local dead, ghost, valid = false, false, true
+    pcall(function() dead = hp_comp:IsDead() end)
+    pcall(function() ghost = p:HasTag("playerghost") end)
+    pcall(function() valid = p:IsValid() end)
+    if dead or ghost or not valid then
+        reset_state(dead and "dead" or (ghost and "ghost" or "invalid_actor"))
+        return
+    end
 
-    -- 顺序有讲究：先处理"等不了"的两件事（黑暗、贴脸残血），再谈模型任务；
-    -- 没任务时才做吃/回血/保火/补给。
-    local ok, err = pcall(function()
-        local world = GLOBAL.TheWorld
-        local phase = world ~= nil and world.state ~= nil and world.state.phase or nil
-        -- 天黑没光：查理不会等模型想完，直接抢占（做火把/生营火）。
-        if (phase == "dusk" or phase == "night") and not has_light(p) then
-            if reflex_light(p) then return end
-        end
-        -- 残血被贴脸：也抢占，先撤。旧版在模型跑 gather_area 时完全不设防，真机就是这样被青蛙打死的。
-        if R.CriticalDanger(p) then
-            if reflex_flee(p) then return end
-        end
+    sync_inflight()
+    confirm_pending(p)
 
-        if Whale.job ~= nil then return end     -- 有正经任务在跑：不抢
-
-        -- 普通优先级：先脱战，再吃/回血，再保光，再保火，最后才是长期补给。
-        if reflex_flee(p) then return end
-        if Whale.job ~= nil then return end
-        if reflex_heal(p) then return end
-        if Whale.job ~= nil then return end
-        if reflex_light(p) then return end
-        if Whale.job ~= nil then return end
-        if reflex_fuel(p) then return end
-        if Whale.job ~= nil then return end
-        if reflex_forage(p) then return end
-        if Whale.job ~= nil then return end
-        if reflex_sanity(p) then return end
-        if Whale.job ~= nil then return end
-        reflex_stock_light(p)
-    end)
+    local ok, err = pcall(function() run(p) end)
     if not ok then
-        -- 留着给 get_state/诊断看：反射层出错不能让模型以为"什么都没发生"。
         Whale.last_reflex_error = tostring(err)
+        diag("error", { tostring(err) })
         U.log("保命反射出错：" .. tostring(err))
     end
 end
@@ -550,6 +899,35 @@ end
 function R.Status()
     local out = {}
     for k, v in pairs(last) do out[k] = v end
+    local enabled, why = R.Enabled()
+    out.enabled = enabled
+    out.enabled_reason = why
+    if inflight ~= nil then out.intent = inflight.key end
+    return out
+end
+
+--- 结构化诊断（给 get_state / 排查用）
+function R.Diagnose()
+    local p = U.player()
+    local enabled, why = R.Enabled()
+    local out = { enabled = enabled, enabled_reason = why }
+    if p == nil or p.components == nil or p.components.health == nil then
+        out.actor = "none"
+        return out
+    end
+    local rep = light_report(p)
+    local prio, reason = R.Priority(p)
+    out.phase = rep.phase
+    out.priority = "P" .. tostring(prio)
+    out.priority_reason = reason
+    out.has_usable_light = rep.has_usable
+    out.portable_light = rep.portable
+    out.can_craft_torch = rep.can_craft
+    out.light_missing = rep.missing
+    out.job = Whale.job ~= nil and tostring(Whale.job.name) or nil
+    out.health = health_percent(p)
+    out.hunger = hunger_percent(p)
+    out.sanity = sanity_percent(p)
     return out
 end
 

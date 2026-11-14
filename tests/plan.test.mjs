@@ -115,9 +115,12 @@ test('PLAN-5：饥饿低于 40% —— 先吃；背包 items 是对象也要数�
 })
 
 test('PLAN-6：目标仍然成立时保持稳定（不换方向、since 不变）', () => {
-  const first = derivePlan(makeSnapshot())
+  // 夹具里放一把火把：否则按 SURVIVAL-02.1 的正确语义，白天没光源时目标应当是 prep_light 而不是 explore。
+  // 这条测试要验的是"稳定性"，不是"有没有光源"，所以给它一个已备好的火把。
+  const torch = ITEMS(['torch', 1])
+  const first = derivePlan(makeSnapshot({ items: torch }))
   assert.equal(first.goalId, 'explore')
-  const later = makeSnapshot({ day: 3 })
+  const later = makeSnapshot({ day: 3, items: torch })
   const again = derivePlan(later, first)
   assert.equal(again.goalId, 'explore')
   assert.equal(again.changed, false)
@@ -125,9 +128,10 @@ test('PLAN-6：目标仍然成立时保持稳定（不换方向、since 不变�
 })
 
 test('PLAN-7：更高优先级的危险出现时立刻切换', () => {
-  const first = derivePlan(makeSnapshot())
+  const torch = ITEMS(['torch', 1])
+  const first = derivePlan(makeSnapshot({ items: torch }))
   assert.equal(first.goalId, 'explore')
-  const hungry = derivePlan(makeSnapshot({ hunger: 20 }), first)
+  const hungry = derivePlan(makeSnapshot({ hunger: 20, items: torch }), first)
   assert.equal(hungry.goalId, 'eat')
   assert.equal(hungry.changed, true)
 })
@@ -270,14 +274,15 @@ function makeCtx(over = {}) {
 }
 
 test('PLAN-11：get_state 文本模式带「当前计划」段', async () => {
-  const ctx = makeCtx()
+  // 带一把火把：确保"白天没光源"不会把目标顶成 prep_light（本测试只验计划段渲染）。
+  const ctx = makeCtx({ items: ITEMS(['torch', 1]) })
   const text = await executeTool('get_state', {}, ctx)
   assert.match(text, /## 当前计划/)
   assert.equal(ctx.lastPlan.goalId, 'explore')
 })
 
 test('PLAN-12：get_state JSON 模式仍是纯 JSON，计划在 plan 字段里', async () => {
-  const ctx = makeCtx()
+  const ctx = makeCtx({ items: ITEMS(['torch', 1]) })
   const text = await executeTool('get_state', { format: 'json' }, ctx)
   const payload = JSON.parse(text)
   assert.equal(payload.plan.schema, PLAN_SCHEMA)

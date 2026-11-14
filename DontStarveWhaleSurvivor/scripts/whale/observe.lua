@@ -308,6 +308,15 @@ local function warnings(p, player, world)
 
     -- 反射层自己做过的事（M1.1 接上；以前 R.Recent() 写了但没人读）
     local reflex = Whale ~= nil and Whale.reflex or nil
+    if reflex ~= nil and reflex.Enabled ~= nil then
+        -- 关键：模组默认开 ≠ 存档里真的开。旧存档的 modoverrides.lua 可能把它设成 false，
+        -- 这时模型必须知道"没有保命兜底"，不能以为危险会被自动处理。
+        local ok_e, enabled, why = pcall(reflex.Enabled)
+        if ok_e and enabled == false then
+            tips[#tips + 1] = "⚠ 保命反射被关掉了（REFLEX=" .. tostring(why)
+                .. "）：危险时不会自动吃东西/做火把/后撤，全靠你自己，务必提前准备"
+        end
+    end
     if reflex ~= nil and reflex.Recent ~= nil then
         local ok, recent = pcall(reflex.Recent)
         if ok and type(recent) == "table" then

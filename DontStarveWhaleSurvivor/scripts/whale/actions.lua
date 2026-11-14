@@ -3473,7 +3473,8 @@ function A.Start(name, args, cmd_id, ctx)
 end
 
 function A.Abort(reason)
-    if job ~= nil and Whale.actions ~= nil then
+    if job == nil then return false end
+    if Whale.actions ~= nil then
         local p = U.player()
         if p ~= nil then
             pcall(function()
@@ -3485,7 +3486,9 @@ function A.Abort(reason)
         client_stop(U.player())
         job = nil
         Whale.job = nil
+        return true
     end
+    return false
 end
 
 function A.Tick()

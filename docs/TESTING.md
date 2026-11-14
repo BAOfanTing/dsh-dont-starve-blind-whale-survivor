@@ -11,7 +11,7 @@ powershell -ExecutionPolicy Bypass -File test.ps1
 ```
 
 它会：找 Node → 缺 `fengari`/`luaparse` 就装上 → 跑全部单测。
-最后一次实测：**479 passed / 0 failed，退出码 0**，约 6 秒。
+最后一次实测（SURVIVAL-02.1）：**562 passed / 0 failed，退出码 0**。
 
 等价的直接命令（不用 PowerShell 包装）：
 
@@ -29,12 +29,14 @@ node --test --test-force-exit "tests/*.test.mjs"
 
 | 类 | 需要的环境 | 命令 | 数量 | 本次 |
 |---|---|---|---|---|
-| **单元 / 沙箱** | 只要 Node | `node --test tests/*.test.mjs` | **479** | ✅ 已跑 |
-| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在 479 里 | ✅ 已跑 |
-| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在 479 里 | ✅ 已跑 |
-| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在 479 里 | ✅ 已跑 |
-| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6 | 脚本，不算进 479 | **NOT_RUN** |
+| **单元 / 沙箱** | 只要 Node | `node --test tests/*.test.mjs` | **562** | ✅ 已跑 |
+| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在 562 里 | ✅ 已跑 |
+| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在 562 里 | ✅ 已跑 |
+| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在 562 里 | ✅ 已跑 |
+| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6 | 脚本，不算进 562 | 见 §6.8 |
 | **端到端（模型→游戏）** | 游戏 + DSH 会话 + API Key | 见 §6.5 | — | **NOT_RUN** |
+
+趋势：479（M2.2.1）→ 531（SURVIVAL-02）→ **562（SURVIVAL-02.1，新增 27）**。测试只增不减。
 
 ---
 
@@ -238,6 +240,33 @@ node tools/m12-roundtrip.mjs        # 往返读写一次（会在 tests/artifact
 让模型自己调 `get_state` → `move_to` → `pickup` / `harvest`。
 **本次瘦身没有做这一步**（`NOT_RUN`）——它需要真实模型配额和一段连续游戏时间。
 
+### 6.8 SURVIVAL-02.1：生存优先级 / 火源提前准备 / 紧急抢占（RUNTIME）
+
+**前置（缺一不可）**
+
+1. 游戏里模组版本必须是 **0.32.0**（看状态文件 `mod` 字段，或服务器日志
+   `Loading mod: DontStarveWhaleSurvivor ... Version:0.32.0`）。
+2. **`REFLEX` 必须是 `true`**：检查 `Cluster_1/{Master,Caves}/modoverrides.lua`。
+   旧存档默认是 `false`（本阶段把真实死因查出来的关键一条，见 `STATUS.md` §3.5.3），
+   改完必须**重新读档**才生效。
+3. 世界不暂停（窗口在前台 / 关掉"思考时暂停"），状态文件年龄应在几百毫秒级。
+
+**怎么判"能活过夜"（不靠感觉，看真实状态与诊断日志）**
+
+| 检查点 | 证据 |
+|---|---|
+| 白天提前做火把 | server_log 里出现 `[Reflex] craft_torch: started=true` 且随后 `result=succeeded inventory_confirmed=true`（或 `in_hand=true`）；`get_state` 背包/手持出现 torch |
+| 火把材料没被斧头抢 | 做出火把前，斧头目标不出现（`prep_light` 优先）；日志里没有"树枝被扣去做斧头、火把材料不够" |
+| 黄昏装备 | `get_state` 装备栏 hands = torch；诊断 `light_check: has_usable_light=true` |
+| 第一夜不被黑暗/暗影怪打死 | 角色存活且 `get_state` 里 phase 从 night 回到 day，血量没有持续下降到 0 |
+| 饥饿/生命处理 | 饥饿 <35% 时出现 `[Reflex] eat:`，或 `[Reflex] priority=P1 reason=hunger_emergency` |
+| 任务抢占 | 被攻击时 `[Reflex] protection: current_job=... interrupt=true reason=under_attack`，旧指令收到回执 |
+| 反射真开着 | `get_state` 顶部**没有**"⚠ 保命反射被关掉了"这句 |
+
+> 若只跑到某个白天/夜晚就中断，如实写"观测到第 N 天/夜"，不要把没跑到的第二夜说成跑到了。
+> 真实游戏里 `darkness=nonlethal`，所以"没死"本身不等于"光照对了"——必须同时看理智有没有崩、
+> 暗影怪有没有刷出来（见 §6.8 检查点）。
+
 ---
 
 ## 7. 标记规范（别把没跑的说成跑了）
@@ -247,11 +276,11 @@ node tools/m12-roundtrip.mjs        # 往返读写一次（会在 tests/artifact
 - 没跑 → 写 **`NOT_RUN`**，不要写"应该没问题"。
 - 换过代码但只跑了旧版本的真机 → 那是旧版本的证据，不能算新版本的。
 
-诚实结论（截至 STABILITY-01，2026-11-13，模组 **0.17.2**）：
+诚实结论（截至 SURVIVAL-02.1，模组 **0.32.0**；下表历史动作项仍是 0.17.2 的旧证据，未继承）：
 
 | 项 | 结论 |
 |---|---|
-| 单测 479 项 | **UNIT：通过** |
+| 单测 **562** 项（含 SURVIVAL-02.1 新增 27） | **UNIT：通过**（562/562） |
 | 干净检出（没有 `dist`/`bwc_config`/`.runtime`）后跑单测 | **通过**（479/479，M2.2.1 与 STABILITY-01 都验过） |
 | 真实游戏：模组加载（两个分片无 Lua 错误） | **RUNTIME：通过** |
 | 真实游戏：`get_state` / `nearby` | **RUNTIME：通过**（9 桶、`#N` 唯一、上限生效） |

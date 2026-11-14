@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：SURVIVAL-02（保命反射加固 + 计划层稳定目标 + HUD 挂载修复）｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：SURVIVAL-02.1（生存优先级 + 火源提前准备 + 紧急抢占 + 基础需求）｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -8,11 +8,11 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.31.1** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.32.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
-模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.31.1`）。
+模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.32.0`）。
 判断"磁盘上的模组装没装进游戏"请看 `install-mod.mjs` 的输出（`installedVersion`）。
 
 > 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.30.x。M2.2.1 决定**不建同步机制**，
@@ -91,6 +91,61 @@
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
+| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（562/562）；RUNTIME 见 §4.6 | 本节 §4.6 |
+
+---
+
+## 3.5 SURVIVAL-02.1：死亡原因（真实证据）
+
+**结论：这局小鲸鱼不是死于黑暗。** 依据是本机真实存档的聊天日志与服务器日志，不是推测。
+
+### 3.5.1 最近 10 次真实死亡（`Cluster_1/Master/backup/server_chat_log/*`，2026-11-14）
+
+| # | 时间 | 死因（游戏原生死亡播报） | 归类 |
+|---|---|---|---|
+| 1 | 00:28 | 爬行恐惧 | 暗影生物（低理智生成） |
+| 2 | 13:10 | 恐怖尖喙 | 暗影生物 |
+| 3 | 13:34 | 青蛙 | 群体敌对生物 |
+| 4 | 15:16 | 恐怖尖喙 | 暗影生物 |
+| 5 | 16:10 | 爬行恐惧 | 暗影生物 |
+| 6 | 16:51 | 爬行恐惧 | 暗影生物 |
+| 7 | 16:51 | 爬行恐惧 | 暗影生物 |
+| 8 | 17:40 | 爬行恐惧 | 暗影生物 |
+| 9 | 18:31 | 爬行恐惧 | 暗影生物 |
+| 10 | 18:45 | 青蛙 | 群体敌对生物 |
+
+**统计：爬行恐惧 6、恐怖尖喙 2、青蛙 2。黑暗 0、饥饿 0。**
+
+### 3.5.2 为什么"黑暗死亡"这条假设在这个世界不成立
+
+- 服务器日志里世界设置：`K: darkness V: nonlethal`。对应 `TUNING.NONLETHAL_DARKNESS=true`，
+  `scripts/components/grue.lua` 的非致命逻辑把黑暗伤害钳制在 `NONLETHAL_PERCENT(0.2)` ——
+  也就是**查理最多把你打到 20% 血，打不死**。（`GRUEDAMAGE = wilson_health*0.667`）
+- 另有 `healthpenalty=none`、`ghostsanitydrain=none`、`ghostenabled=always`。
+- 所以真正的致死链是：**夜里没光 → 理智暴跌 → 刷暗影怪（爬行恐惧/恐怖尖喙）→ 血量本就偏低 → 被打死**；
+  另外青蛙群在营地附近把残血角色围死。这与"火把/光源"仍然是强相关（没光=理智崩），
+  但**直接把死因归到"黑暗伤害"是错的**，必须同时盯理智。
+
+### 3.5.3 为什么"保命机制没起作用"——最重要的一条
+
+`Cluster_1/{Master,Caves}/modoverrides.lua` 里 **`REFLEX=false`**。服务器启动日志逐字确认：
+
+```
+Overriding mod DontStarveWhaleSurvivor's option REFLEX with value false
+Loading mod: DontStarveWhaleSurvivor (大肥鱼饿不死 (Blind Whale Survivor)) Version:0.30.0
+```
+
+即：**默认开启 ≠ 旧存档实际开启**；这 10 次死亡全程 `Whale.reflex_on=false`，反射一次都没跑。
+（另一个证据：状态文件 `mod:"0.30.0"`，说明当时跑的是旧版本，本次改完已升到 0.32.0、需重新读档。）
+
+即使反射开着，旧代码还有这些问题（本次已修）：
+`reflex_stock_light` 采够材料就 `return false`（从不做火把）；白天不做火把；除黑暗/被贴脸外，
+`if Whale.job ~= nil then return end` 把饥饿/生命/理智处理整体跳过；`prep_light` 的 `when`
+一旦材料够就消失。
+
+> 诊断补充：本阶段仍未拿到逐帧的"死亡前生命/饥饿/理智"曲线（旧版本不落这份数据）。
+> 已新增 `[Reflex]` 诊断日志与 `Whale.reflex.Diagnose()`，可在 server_log / get_state 里看到
+> 光源是否可用、材料是否齐、优先级与抢占原因，供下一次复盘。
 
 ---
 
@@ -222,8 +277,71 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
    现场看到 `cutgrass×2 + twigs×1` 凭空消失（结果文件里是 `{"id":"reflex","text":"torch 材料不够"}`）。
    属于 reflex 范围，本阶段**只记录**。
 
-## 5. 已知问题（都会真实影响体验）
+### 4.6 SURVIVAL-02.1：改了哪些、验证到哪
 
+#### 4.6.1 prep_light 修复前后（`lib/plan.js`）
+
+| | 旧逻辑（有缺陷） | 新逻辑（02.1） |
+|---|---|---|
+| 触发条件 | `!isDark && torch数==0 && !hasLightMaterials && lightMaterialNear` | `!isDark && !hasPortableLight` |
+| 材料不足 | 只有在"20 格内真的有草/树苗"时才触发 | 永远触发；`next` 指向"采缺的那一种"，附近没有就 `seek` |
+| 材料刚好够 | `!hasLightMaterials` 为假 → **目标直接消失**（所以永远不做火把） | 目标保留，`next` 变成 `craft torch` |
+| 完成条件 | 只要背包没有 torch 就算没准备（不看耐久、不看手上） | **唯一完成条件 = 拥有能带走且还能用的光源**（torch/lantern/minerhat，且耐久>0） |
+| 黄昏装备 | 不处理 | 黄昏/夜里 `light`(P90) 接管，`next` = `equip torch`（背包有火把但没举起时） |
+| 优先级 | 58（低于工具 55？不，58 略高，但材料一够就消失，等于没有） | 60（白天天天在，高于 axe 55 / pickaxe 50） |
+
+#### 4.6.2 火把材料保护
+
+- 火把还没做出来且没有其它可用光源时，`{cutgrass:2, twigs:2}` 被保留。
+- 计划层：`tool_axe` / `tool_pickaxe` 的 `when` 增加 `!wouldBreakTorchReserve(...)` ——
+  做这把工具会让火把材料不够时，先让位给 `prep_light`。
+- 反射层：材料够就**立刻做火把**（把它变成"已保护"的成品），不再出现"采集时被斧头抢走树枝"。
+- 火把做成后自动解除保护（`hasPortableLight` 为真 → `protectedMaterials` 返回 nil）。
+
+#### 4.6.3 反射层（`scripts/whale/reflex.lua`）重做要点
+
+- **优先级**：P0（被攻击 / 生命 <25% 且敌人贴脸 / 天黑无光）→ P1（白天材料够就做火把、紧急饥饿、
+  生命 <35%、温度异常）→ P2（补火把材料、采食、添柴）→ P3（理智/闲）。规则判定，不交给 LLM。
+- **安全抢占**：只有 P0/P1 能中断普通任务；一律走 `A.Abort(reason)`（唯一取消路径），
+  中断后核对 `Whale.job==nil` 且 `GetBufferedAction()==nil`，**旧动作没清干净就不启动第二个动作**。
+- **白天立即做火把**：`craft_torch` 用 `craftrules.HasIngredients`（读原生 `AllRecipes`）精确核对，
+  成功后核对"真的进了背包/手上"（`confirm_pending`），失败则退避、绝不误报完成。
+- **防抖**：同一意图在跑不重建；失败按原因退避；`[Reflex]` 日志 30 秒限频。
+- **死亡/复活重置**：`IsDead` / `playerghost` / `IsValid==false` 时清空意图与冷却。
+- **配置可见**：`Whale.reflex.Enabled()`；关掉时 `get_state` 顶部明确提示"反射被关掉了"。
+
+#### 4.6.4 自动化测试
+
+`node --test tests/*.test.mjs` → **562 passed / 0 failed**（基线 535 + 新增 27）。
+新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
+
+| 要求 | 用例 |
+|---|---|
+| 1 反射实际开启 | RF-1 |
+| 2 关闭时正确报告 | RF-2 |
+| 3 白天材料不足目标存在 | SP-1、SP-11 |
+| 4 材料够 prep_light 不消失 | SP-2、SP-4 |
+| 5 材料够能触发制作火把 | SP-3、RF-3 |
+| 6 制作失败不误报完成 | RF-4 |
+| 7 制作成功解除材料保护 | SP-8 |
+| 8 其它制作不抢火把材料 | SP-6、SP-7、RF-5、RF-6 |
+| 9 黄昏前检查并处理装备 | SP-9 |
+| 10 无光源时紧急逻辑生效 | SP-10、RF-7、RF-8 |
+| 11 普通任务期间安全抢占 | RF-9 |
+| 12 旧任务未清理不能启动第二个动作 | RF-10 |
+| 13 紧急进食不被无限阻塞 | RF-11 |
+| 14 食物不足不无限重试 | RF-12 |
+| 15 怪物攻击触发危险处理 | RF-9 |
+| 16 不每秒重复启动同一动作 | RF-13 |
+| 17 Plan/Reflex 不同时冲突 | RF-9（单槽 job 结构）|
+| 18 死亡/复活/Actor 无效重置 | RF-14、RF-15 |
+
+#### 4.6.5 真实游戏验证（RUNTIME）
+
+> 详见最终交付报告。要点：验证前必须把 `Cluster_1/modoverrides.lua` 的 `REFLEX` 改为 `true`
+> 并重新读档（旧存档默认是 `false`，见 §3.5.3）。真机结果填写在本节（未跑到的会标 `NOT_RUN`）。
+
+## 5. 已知问题（都会真实影响体验）
 | # | 问题 | 影响 | 现状 |
 |---|---|---|---|
 | 1 | **结果文件是单槽** | reflex 的报告可能覆盖动作回执 → `unknown / result_timeout` | 桥的既有设计（M1 起），未改；模型应先 `get_state` 看真实状态 |

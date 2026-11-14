@@ -1,21 +1,25 @@
--- 制作白名单（SURVIVAL-01 / craft）：只放行 3 个有直接生存价值的基础工具
+-- 制作白名单（SURVIVAL-01 / craft）+ 配方查询（SURVIVAL-02.1）
 --
--- 依据（本机 scripts.zip 的 scripts/recipes.lua 实测，构建 762172）：
---   Recipe2("axe",     {Ingredient("twigs",1), Ingredient("flint",1)},                       TECH.NONE)
---   Recipe2("pickaxe", {Ingredient("twigs",2), Ingredient("flint",2)},                       TECH.NONE)
---   Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)},                    TECH.NONE)
+-- 只放行 3 个有直接生存价值的基础工具。三者都是 TECH.NONE（不需要科学机器）。
+-- **不放行** campfire / firepit（建筑系统，不在本阶段范围；reflex 的 make_fire 走独立旧路径）。
 --
--- 三者都是 TECH.NONE（不需要科学机器），正好是"开局就能做"的东西。
--- **不放行** campfire / firepit（建筑系统，本阶段明确不做）。
+-- ★ SURVIVAL-02.1：材料需求现在**优先从游戏原生 Recipe 读取**（GLOBAL.AllRecipes）。
+--   下面 RECIPES 里的数字只是"读不到原生配方时的兜底"，且只用一份（全项目唯一来源）。
+--   依据（本机 scripts.zip scripts/recipes.lua 实测，构建 762172）：
+--     Recipe2("axe",     {Ingredient("twigs",1), Ingredient("flint",1)},                     TECH.NONE)
+--     Recipe2("pickaxe", {Ingredient("twigs",2), Ingredient("flint",2)},                     TECH.NONE)
+--     Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)},                  TECH.NONE)
+--     Recipe2("campfire",{Ingredient("cutgrass",3), Ingredient("log",2)},                    TECH.NONE, {placer=...})
 local GLOBAL = GLOBAL
 local pcall = GLOBAL.pcall
+local tonumber = GLOBAL.tonumber
 local tostring = tostring
 local type = type
+local pairs = pairs
 
 local C = {}
 
---- 白名单配方 → 材料表（**照抄** recipes.lua，不在这里另算）
---- 注意：这里的材料表只用于"提前告诉模型缺什么"；真正扣材料由游戏原生 builder 负责。
+--- 白名单配方 → 兜底材料表（读不到原生配方时才用；正常路径走 C.Ingredients）
 C.RECIPES = {
     axe = { ingredients = { twigs = 1, flint = 1 }, label = "斧头" },
     pickaxe = { ingredients = { twigs = 2, flint = 2 }, label = "镐" },
@@ -38,43 +42,72 @@ function C.RecipeList()
     return out
 end
 
---- 缺什么材料（返回 nil = 不缺；否则返回 "ingredients_missing: twigs 1/2, flint 0/1"）
---- 用**真实背包**统计，不信任模型给的数字。
-function C.MissingIngredients(player, recipeName)
-    local def = C.RECIPES[recipeName]
-    if def == nil then return "recipe_not_allowed" end
-    local inv = player ~= nil and player.components ~= nil and player.components.inventory or nil
-    if inv == nil then return "no_inventory" end
-
-    -- 先统计背包里每种 prefab 的数量
-    local counts = {}
-    pcall(function()
-        inv:ForEachItem(function(item)
-            if item == nil or not item:IsValid() then return end
-            local p = tostring(item.prefab or "")
-            local n = 1
-            local st = item.components ~= nil and item.components.stackable or nil
-            if st ~= nil then
-                local ok, v = pcall(function() return st:StackSize() end)
-                if ok and type(v) == "number" then n = v end
-            end
-            counts[p] = (counts[p] or 0) + n
-        end)
-    end)
-
-    local missing = {}
-    for prefab, need in pairs(def.ingredients) do
-        local have = counts[prefab] or 0
-        if have < need then
-            missing[#missing + 1] = string.format("%s %d/%d", prefab, have, need)
-        end
-    end
-    if #missing == 0 then return nil end
-    table.sort(missing)
-    return "ingredients_missing: " .. table.concat(missing, ", ")
+--- 配方标签（回执用）
+function C.Label(name)
+    local def = C.RECIPES[tostring(name)]
+    return def ~= nil and def.label or tostring(name)
 end
 
---- 背包里每种材料的数量（回执用）
+--- 这个 Ingredient 是不是"背包里的实物材料"（排除人物材料 health/sanity、科技材料）
+local function is_item_ingredient(ing)
+    if ing == nil or ing.type == nil then return false end
+    local ci = GLOBAL.IsCharacterIngredient
+    if type(ci) == "function" then
+        local ok, res = pcall(ci, ing.type)
+        if ok and res == true then return false end
+    end
+    local ti = GLOBAL.IsTechIngredient
+    if type(ti) == "function" then
+        local ok, res = pcall(ti, ing.type)
+        if ok and res == true then return false end
+    end
+    return true
+end
+
+--- ★ 从游戏原生 Recipe 读材料需求：返回 { prefab = amount } 或 nil（读不到）。
+--- 这是"材料需求"的**唯一真来源**；调用方不要自己再抄一份数字。
+function C.Ingredients(recipeName)
+    local name = recipeName ~= nil and tostring(recipeName) or nil
+    if name == nil then return nil end
+    local recipes = GLOBAL.AllRecipes
+    if type(recipes) ~= "table" then return nil end
+    local recipe = recipes[name]
+    if recipe == nil then
+        local lower = string.lower(name)
+        for k, r in pairs(recipes) do
+            if string.lower(tostring(k)) == lower then recipe = r break end
+        end
+    end
+    if recipe == nil then return nil end
+    local cost = {}
+    local ok = pcall(function()
+        for _, ing in pairs(recipe.ingredients or {}) do
+            if is_item_ingredient(ing) then
+                local t = tostring(ing.type)
+                cost[t] = (cost[t] or 0) + (tonumber(ing.amount) or 1)
+            end
+        end
+    end)
+    if not ok then return nil end
+    -- 空表 = 原生配方没有实物材料（不该发生）；当作读不到，让调用方走兜底
+    local count = 0
+    for _ in pairs(cost) do count = count + 1 end
+    if count == 0 then return nil end
+    return cost
+end
+
+--- 材料需求：原生优先，读不到才用兜底表（只此一处兜底）
+function C.NeededIngredients(recipeName)
+    local native = C.Ingredients(recipeName)
+    if native ~= nil then return native end
+    local def = C.RECIPES[tostring(recipeName)]
+    if def == nil then return nil end
+    local copy = {}
+    for k, v in pairs(def.ingredients) do copy[k] = v end
+    return copy
+end
+
+--- 背包里每种材料的数量（精确 prefab 匹配，不模糊）
 function C.Counts(player)
     local out = {}
     local inv = player ~= nil and player.components ~= nil and player.components.inventory or nil
@@ -93,6 +126,49 @@ function C.Counts(player)
         end)
     end)
     return out
+end
+
+--- 缺什么材料（返回 nil = 不缺；否则返回 "ingredients_missing: twigs 1/2, flint 0/1"）
+--- 用**真实背包**统计，不信任模型给的数字。
+function C.MissingIngredients(player, recipeName)
+    local need = C.NeededIngredients(recipeName)
+    if need == nil then return "recipe_not_allowed" end
+    local inv = player ~= nil and player.components ~= nil and player.components.inventory or nil
+    if inv == nil then return "no_inventory" end
+
+    local counts = C.Counts(player)
+    local missing = {}
+    for prefab, amount in pairs(need) do
+        local have = counts[prefab] or 0
+        if have < amount then
+            missing[#missing + 1] = string.format("%s %d/%d", prefab, have, amount)
+        end
+    end
+    if #missing == 0 then return nil end
+    table.sort(missing)
+    return "ingredients_missing: " .. table.concat(missing, ", ")
+end
+
+--- 现在能不能做这个配方（只查材料，不查科技/状态；返回 true/false, 缺料说明）
+function C.HasIngredients(player, recipeName)
+    local missing = C.MissingIngredients(player, recipeName)
+    if missing == nil then return true, nil end
+    return false, missing
+end
+
+--- 做一个配方会不会把"留给火把的材料"吃掉。
+--- reserve 是 { prefab = 数量 }（要保住的数量）；返回 true, prefab 表示会破坏。
+function C.WouldBreakReserve(player, recipeName, reserve)
+    if reserve == nil then return false, nil end
+    local need = C.Ingredients(recipeName) or C.NeededIngredients(recipeName)
+    if need == nil then return false, nil end
+    local counts = C.Counts(player)
+    for prefab, amount in pairs(need) do
+        local keep = reserve[prefab] or 0
+        local have = counts[prefab] or 0
+        if have - amount < keep then return true, prefab end
+    end
+    return false, nil
 end
 
 Whale.craftrules = C
