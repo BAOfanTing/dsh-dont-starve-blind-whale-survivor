@@ -125,11 +125,15 @@ local function ensure_widget(owner)
 
         local font = GLOBAL.DEFAULTFONT
         label = root:AddChild(Text(font, FONT_SIZE))
+        -- ★ 真机 bug：Text 不设置 region size 时，SetHAlign 只按文字自身中心排版。
+        --   多行文字会从 label 中心向左右两边长，左半截被推出屏幕（截图里只剩行尾）。
+        --   先给一个明确的文字区域，再左对齐，文字才会从区域左边开始画。
+        label:SetRegionSize(WIDTH - 28, LINE_H * 3 + 2)
         label:SetHAlign(GLOBAL.ANCHOR_LEFT)
         label:SetVAlign(GLOBAL.ANCHOR_TOP)
         label:SetColour(1, 1, 1, 1)
         label:SetString("")
-        label:SetPosition(-WIDTH / 2 + 14, LINE_H, 0)
+        label:SetPosition(0, 0, 0)
     end)
     if not ok then
         failed = true
@@ -166,8 +170,11 @@ local function render(lines, title)
     local height = LINE_H * #parts + 16
     pcall(function()
         label:SetString(text)
+        label:SetRegionSize(WIDTH - 28, height - 20)
+        label:SetHAlign(GLOBAL.ANCHOR_LEFT)
+        label:SetVAlign(GLOBAL.ANCHOR_TOP)
+        label:SetPosition(0, 0, 0)
         bg:SetSize(WIDTH, height)
-        label:SetPosition(-WIDTH / 2 + 14, height / 2 - 10, 0)
     end)
 end
 

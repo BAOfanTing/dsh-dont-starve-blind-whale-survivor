@@ -3,7 +3,7 @@
 > 本文只描述**现在真正在跑**的系统。历史架构（A 栈的 TypeScript bridge / mcp-server / agent、
 > HTTP 18788 那一套）已全部归档，见 [`archive/milestones/INDEX.md`](archive/milestones/INDEX.md)。
 >
-> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.29.0）+ `lib/`（DSH 插件，0.9.2）
+> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.30.0）+ `lib/`（DSH 插件，0.9.2）
 
 ---
 

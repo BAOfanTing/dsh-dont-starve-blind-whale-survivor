@@ -1038,6 +1038,7 @@ local function fakewidget()
     widget.SetString = function() end
     widget.SetHAlign = function() end
     widget.SetVAlign = function() end
+    widget.SetRegionSize = function(self, w, h) self._region = { w, h } end
     widget.SetColour = function() end
     widget.SetHAnchor = function() end
     widget.SetVAnchor = function() end
@@ -1109,6 +1110,8 @@ Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(ms
     assert(screen.child ~= nil, "HUD 根节点必须挂到 PlayerHud 屏幕上；日志：" .. table.concat(LOGS, " | "))
     assert(player.child == nil, "HUD 不能挂到玩家实体上（那样画面上看不到）")
     assert(screen.child._pos ~= nil, "HUD 根节点没设置位置")
+    assert(screen.child.child._region ~= nil and screen.child.child._region[1] > 0,
+        "文字必须设置 region size，否则 SetHAlign(LEFT) 不生效，左半截会被裁掉")
     local root_x = screen.child._pos[1]
     assert(root_x >= 165, "HUD 位置太靠左，面板会被推出屏幕：x=" .. tostring(root_x))
     OUT = "ok"
