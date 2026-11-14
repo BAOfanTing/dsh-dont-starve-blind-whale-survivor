@@ -8,11 +8,11 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.34.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.35.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
-模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.34.0`）。
+模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.35.0`）。
 判断"磁盘上的模组装没装进游戏"请看 `install-mod.mjs` 的输出（`installedVersion`）。
 
 > 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.30.x。M2.2.1 决定**不建同步机制**，
@@ -91,7 +91,7 @@
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
-| **SURVIVAL-02.1** | 先查真实死因；修 prep_light；白天做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志；白天不点火 + 按整夜囤料；**没草时改走 firepit + 有界找料** | UNIT（587/587）；RUNTIME 见 §4.6 | 本节 §4.6 |
+| **SURVIVAL-02.1** | 先查真实死因；修 prep_light；白天做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志；白天不点火 + 按整夜囤料；没草时改走 firepit + 有界找料；**固定巢穴不挡收纳 + 捡地上现成材料** | UNIT（590/590）；RUNTIME 见 §4.6 | 本节 §4.6 |
 
 ---
 
@@ -312,7 +312,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 
 #### 4.6.4 自动化测试
 
-`node --test tests/*.test.mjs` → **587 passed / 0 failed**（基线 535 + 新增 52）。
+`node --test tests/*.test.mjs` → **590 passed / 0 failed**（基线 535 + 新增 55）。
 新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
 
 | 要求 | 用例 |
@@ -351,7 +351,7 @@ GBK 中文兜底解码、以及"记录器绝不改写桥文件"这条硬约束�
 | 项 | 值 |
 |---|---|
 | 世界 | `Cluster_2`（用户新建的专用测试世界），第 1 天开始 |
-| 游戏 Mod 版本 | 运行中世界加载 **0.32.1**（日志 `Loading mod: ... Version:0.32.1`）；仓库/安装目录为 **0.34.0** |
+| 游戏 Mod 版本 | 运行中世界加载 **0.32.1**（日志 `Loading mod: ... Version:0.32.1`）；仓库/安装目录为 **0.35.0** |
 | REFLEX 实际配置 | **`true`**（日志逐字 `Overriding mod DontStarveWhaleSurvivor's option REFLEX with value true`）；`get_state` 顶部不再出现"⚠ 保命反射被关掉了" |
 | 世界设置 | `game_mode=survival`、`darkness=default`（**黑暗会打死人**，与旧 Cluster_1 的 `nonlethal` 不同）、`ghostenabled=none`（死了不化魂）。**每次死亡后世界在死亡界面暂停，必须由玩家手动重新选人才能继续**——不是自动重生（用户确认）。 |
 | 排查工具 | `tools/session-recorder.mjs`，只读旁路，记录命令/回执/反射/死亡/状态（§6.9） |
@@ -466,7 +466,7 @@ RF-23（有火把但零备料 → `reserve_ok=false` 且必须继续囤）、RF-
 ④ 最省草的方案：**先做斧头砍树 → 木头+草建营火**，营火 `CAMPFIRE_FUEL_START=135s`、
 `MAX=270s`，比 3 把火把（6 草 + 6 树枝）省得多。
 
-#### 4.6.8 第四个 bug：**没草时完全没有破局路线**（0.34.0 修）
+#### 4.6.8 第四个 bug：**没草时完全没有破局路线**（0.35.0 修）
 
 0.33.0 复验里第 8 夜仍死于黑暗，且死因非常纯粹：出生点 **40 格内一株草都没有**
 （`probe grass radius 30/40` 都返回 0）。而火把要 2 草、营火要 3 草 —— 所有光源路线都卡在草上。
@@ -483,7 +483,7 @@ FIREPIT_FUEL_START = night_time + dusk_time = 180 秒   ← 正好盖住整夜
 **火坑是唯一不依赖 cutgrass 的开局光源**（TECH.NONE，木头和石头遍地都是），
 而且燃料 180 秒 = 一整夜，比 3 把火把（6 草 + 6 树枝）省得多。
 
-**0.34.0 的三处改动**
+**0.35.0 的三处改动**
 
 | 文件 | 改动 |
 |---|---|
@@ -497,7 +497,43 @@ FIREPIT_FUEL_START = night_time + dusk_time = 180 秒   ← 正好盖住整夜
 RF-26（16 格外 20 格内有草 → 有界 move_to）、RF-27（夜里/有敌人/26 格太远三种场景都不许走）、
 RF-28（上限与边界的静态断言）。
 
-> 0.34.0 的真机复验待重新读档后进行。
+> 0.35.0 的真机复验待重新读档后进行。
+
+#### 4.6.9 0.34.0 真机复验暴露的两个新 bug（0.35.0 修）
+
+0.34.0 真机（第 9 天白天）日志里又抓到两条：
+
+**① 固定巢穴把「白天收火把」永久挡住了**
+
+```
+[Reflex] craft_torch_result: result=succeeded in_hand=true phase=day
+[Reflex] stow_light: scheduled=true reason=crafted_in_daytime
+[Reflex] light_check: has_usable_light=true portable=false   ← 火把没了，也没进背包
+```
+
+`stow_light` 只有 `scheduled=true`，**真正的 `unequip` 一次都没执行**。根因：
+`reflex_stow_light` 用 `nearest_hostile(p, 6)` 判断"附近有敌人先不收"，而
+`scripts/prefabs/spiderden.lua` 里蜘蛛巢同时带 `hostile` + `structure` 标签，
+5.8 格外的固定巢穴被当成威胁 → 收纳被永久否决 → 火把一直举在手上把 75 秒烧光。
+这正是用户看到的循环。
+
+**② 地上现成的 cutgrass 从不捡**
+
+`get_state` 里 9.4 格有 `采下的草 ×3`（可拾取物），但 `reflex_stock_light`
+只找 `exact_ready(p, "grass", 16)`（可采的**草丛**），完全看不见地上已割好的材料，
+于是 `missing=cutgrass 0/2` 一直补不上。
+
+**0.35.0 改动（都在 `reflex.lua`）**
+
+| # | 改动 |
+|---|---|
+| 1 | 新增 `active_threat`：排除 `structure`/`INLIMBO`，只有会追人的活怪才算威胁；`reflex_stow_light` 与 `reflex_seek_light` 都改用它 |
+| 2 | 新增 `ready_ground_material` + `push_pickup`：`reflex_stock_light` 采草丛**之前**先捡地上现成的 cutgrass/twigs |
+
+**新增 3 条测试**：RF-29（蜘蛛巢不挡收纳）、RF-30（地上 cutgrass 被 `PICKUP`）、
+RF-31（真活怪贴脸仍阻止收纳 —— 安全不放宽）。
+
+> 0.35.0 的真机复验待重新读档后进行。
 
 ## 5. 已知问题（都会真实影响体验）
 | # | 问题 | 影响 | 现状 |

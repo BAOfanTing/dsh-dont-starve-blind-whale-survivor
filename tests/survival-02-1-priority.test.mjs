@@ -1034,8 +1034,84 @@ test('RF-28：SEEK_RADIUS / SEEK_MAX_TILES 有明确上限，不是无目的乱�
   assert.match(src, /SEEK_RADIUS\s*=\s*28/, '搜索半径有上限')
   assert.match(src, /SEEK_MAX_TILES\s*=\s*22/, '单步移动距离有上限')
   assert.match(src, /tiles\s*>\s*16\s*and\s*tiles\s*<=\s*SEEK_MAX_TILES/, '必须同时满足"16格外 + 不超过上限"')
-  assert.match(src, /nearest_hostile\(p,\s*6\)\s*~=\s*nil\s*then\s*return\s*false/, '有敌人不走')
+  assert.match(src, /active_threat\(p,\s*6\)\s*~=\s*nil\s*then\s*return\s*false/, '有敌人不走')
+  assert.match(src, /e:HasTag\("structure"\)\s*or\s*e:HasTag\("INLIMBO"\)/, '固定巢穴不算"会追人的敌人"')
   assert.match(src, /rep\.phase\s*~=\s*"day"\s*then\s*return\s*false/, '夜里不走')
+})
+
+test('RF-29（真机 bug：蜘蛛巢把火把卡在手上）：固定巢穴不该阻止白天收火把', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+        { fueled = { IsEmpty = function() return false end,
+                     GetPercent = function() return 0.9 end } })
+    -- 蜘蛛巢：带 hostile + structure，会刷蜘蛛但自己不会追人
+    local nest = newent("spiderden", 5 * 4, 0, { "hostile", "structure" }, {
+        health = { currenthealth = 1000, maxhealth = 1000, IsDead = function() return false end },
+        combat = {},
+    })
+    NEARBY = { nest }
+  `, '白天 + 手上火把 + 5 格外蜘蛛巢')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    Whale.actions.Tick()
+    Whale.actions.Tick()
+    HAND = PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] ~= nil
+             and PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS].prefab or "nil"
+  `)
+  assert.equal(global('JOB'), 'unequip', '固定巢穴不是"会追人的敌人"，不该把收纳挡住')
+  assert.equal(global('HAND'), 'nil', '火把必须收进背包，不能举着烧光')
+})
+
+test('RF-30（真机 bug：地上现成的草不捡）：缺草时优先捡地上的 cutgrass', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    -- 9 格处有 3 份「采下的草」，附近没有可采的草丛
+    local dropped = newent("cutgrass", 9 * 4, 0, {}, {
+        inventoryitem = { owner = nil },
+    })
+    NEARBY = { dropped }
+  `, '白天 + 地上有现成的草')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    PICKED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
+    ACTION = PUSHED ~= nil and PUSHED.action ~= nil and PUSHED.action.id or "nil"
+  `)
+  assert.equal(global('PICKED'), 'cutgrass', '地上的现成材料必须被捡')
+  assert.equal(global('ACTION'), 'PICKUP')
+})
+
+test('RF-31（安全不放宽）：真正贴脸的活怪仍阻止白天收火把', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+        { fueled = { IsEmpty = function() return false end,
+                     GetPercent = function() return 0.9 end } })
+    -- 活青蛙（无 structure 标签），3 格贴脸
+    local frog = newent("frog", 3 * 4, 0, { "hostile" }, {
+        health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+        combat = {},
+    })
+    NEARBY = { frog }
+  `, '白天 + 手上火把 + 贴脸活怪')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+  `)
+  assert.notEqual(global('JOB'), 'unequip', '真有活怪贴脸时不能为了收火把而分心')
 })
 
 test('RF-16：Diagnose() 能说清"当前光源是否可用 / 是否该准备"', async () => {

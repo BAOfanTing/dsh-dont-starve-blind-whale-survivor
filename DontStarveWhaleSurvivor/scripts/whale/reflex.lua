@@ -382,6 +382,22 @@ local function ready_berry(p, radius)
     end)
 end
 
+--- 地上**现成**的火把材料（cutgrass / twigs）。
+--- 真机第 9 天：9.4 格就有 3 份「采下的草」，旧逻辑只会找可采的草丛，
+--- 完全看不见地上已经割好的材料，于是 `missing=cutgrass 0/2` 一直补不上。
+--- 优先捡地上的：不用走远、不用等成熟、也常常是死亡掉落的物资。
+local function ready_ground_material(p, wanted, radius)
+    return U.find_nearest(p, radius or 12, nil, nil, function(e)
+        if e == nil or e.prefab == nil then return false end
+        if not wanted[tostring(e.prefab)] then return false end
+        if e:HasTag("INLIMBO") then return false end
+        -- 只要还是地上的（没被谁拿在手里 / 没进容器）
+        local invitem = e.components ~= nil and e.components.inventoryitem or nil
+        if invitem ~= nil and invitem.owner ~= nil then return false end
+        return true
+    end)
+end
+
 local function ready_ground_food(p, radius)
     local rules = Whale ~= nil and Whale.pickuprules or nil
     local eat = Whale ~= nil and Whale.eatrules or nil
@@ -410,6 +426,21 @@ local function combat_targeting(foe, p)
     if c == nil then return false end
     local ok, target = pcall(function() return c.target end)
     return ok and target == p
+end
+
+--- 会主动伤人的威胁：**排除固定巢穴**。
+--- 真机第 9 天：蜘蛛巢同时带 `hostile` 和 `structure` 标签，却不会追人；
+--- `nearest_hostile(p,6)` 把它当敌人，于是"白天把火把收回背包"永远不执行，
+--- 火把一直举在手上把 75 秒燃料烧光 —— 正是用户看到的那个循环。
+--- 只有活着的、非 structure 的敌对实体才算"附近危险"。
+local function active_threat(p, radius_tiles)
+    local limit = radius_tiles * U.TILE
+    return U.find_nearest(p, radius_tiles, { "hostile" }, nil, function(e)
+        if e == nil or e:HasTag("structure") or e:HasTag("INLIMBO") then return false end
+        local h = e.components ~= nil and e.components.health or nil
+        if h == nil or h:IsDead() then return false end
+        return U.dist(p, e) <= limit
+    end)
 end
 
 local function find_healer_prefab(p)
@@ -523,8 +554,9 @@ local function reflex_stow_light(p, rep)
     if phase ~= "day" then return false end          -- 只有大白天才收
     if rep.hand == nil then return false end          -- 手上没火把
     if not cooldown_ok("stow_light") then return false end
-    -- 附近有敌人时先不收（收完可能立刻进战斗）
-    local foe = nearest_hostile(p, 6)
+    -- 只有"会追人的活怪"贴脸才暂缓；固定巢穴（hostile+structure）不算，
+    -- 否则火把永远收不起来、举在手上烧光（真机第 9 天）
+    local foe = active_threat(p, 6)
     if foe ~= nil then return false end
 
     local started = A.Start("unequip", { slot = "hands" }, REFLEX_ID,
@@ -630,7 +662,7 @@ end
 local function reflex_seek_light(p, rep, candidates)
     if rep.phase ~= "day" then return false end
     if not cooldown_ok("seek_light") then return false end
-    if nearest_hostile(p, 6) ~= nil then return false end
+    if active_threat(p, 6) ~= nil then return false end
 
     local px, _, pz = U.pos(p)
     if px == nil then return false end
@@ -686,9 +718,11 @@ local function reflex_stock_light(p, rep)
 
     -- 目标：把每种材料囤到"够 RESERVE_TORCHES 把"的量
     local candidates = {}
+    local wanted = {}
     for prefab, need in pairs(cost) do
         local want = need * RESERVE_TORCHES
         if (counts[prefab] or 0) < want then
+            wanted[prefab] = true
             local source = nil
             if prefab == "cutgrass" then source = "grass"
             elseif prefab == "twigs" then source = "sapling" end
@@ -698,6 +732,15 @@ local function reflex_stock_light(p, rep)
         end
     end
     table.sort(candidates, function(a, b) return a.prefab < b.prefab end)
+
+    -- ★ 先捡地上现成的（比采草丛快，且常常是死亡掉落/别人割剩的）
+    local ground = ready_ground_material(p, wanted, 12)
+    if ground ~= nil and push_pickup(p, ground) then
+        mark("stock")
+        say(p, "stock", "先把地上现成的火把材料捡起来")
+        diag("light_materials", { "action=pickup_ground", "prefab=" .. tostring(ground.prefab) })
+        return true
+    end
 
     for _, c in ipairs(candidates) do
         -- 用附近观察半径（16 格）找，但不走出安全区（不 move_to）
