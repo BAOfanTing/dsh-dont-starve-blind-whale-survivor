@@ -8,11 +8,11 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.32.2** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.33.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
-模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.32.2`）。
+模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.33.0`）。
 判断"磁盘上的模组装没装进游戏"请看 `install-mod.mjs` 的输出（`installedVersion`）。
 
 > 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.30.x。M2.2.1 决定**不建同步机制**，
@@ -91,7 +91,7 @@
 | **AGENT-01.1** | P1 Nearby 快照 ID 可见性 + P2 Lease 换手有限等待 | UNIT（503/503）；真机补测见 §4.3 | 本节 §4.3 |
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
-| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志 | UNIT（574/574）；RUNTIME 见 §4.6 | 本节 §4.6 |
+| **SURVIVAL-02.1** | 先查真实死因；修 prep_light（+ 火源提前准备）；白天立即做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志；**白天不点火（收火把省燃料）+ 按整夜囤料** | UNIT（578/578）；RUNTIME 见 §4.6 | 本节 §4.6 |
 
 ---
 
@@ -136,7 +136,7 @@ Loading mod: DontStarveWhaleSurvivor (大肥鱼饿不死 (Blind Whale Survivor))
 ```
 
 即：**默认开启 ≠ 旧存档实际开启**；这 10 次死亡全程 `Whale.reflex_on=false`，反射一次都没跑。
-（另一个证据：状态文件 `mod:"0.30.0"`，说明当时跑的是旧版本，本次改完已升到 0.32.2、需重新读档。）
+（另一个证据：状态文件 `mod:"0.30.0"`，说明当时跑的是旧版本，本次改完已升到 0.33.0、需重新读档。）
 
 即使反射开着，旧代码还有这些问题（本次已修）：
 `reflex_stock_light` 采够材料就 `return false`（从不做火把）；白天不做火把；除黑暗/被贴脸外，
@@ -312,7 +312,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 
 #### 4.6.4 自动化测试
 
-`node --test tests/*.test.mjs` → **574 passed / 0 failed**（基线 535 + 新增 39）。
+`node --test tests/*.test.mjs` → **578 passed / 0 failed**（基线 535 + 新增 43）。
 新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
 
 | 要求 | 用例 |
@@ -336,7 +336,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 | 17 Plan/Reflex 不同时冲突 | RF-9（单槽 job 结构）|
 | 18 死亡/复活/Actor 无效重置 | RF-14、RF-15 |
 
-真机补测追加 4 条回归（0.32.1 / 0.32.2）：
+真机补测追加 4 条回归（0.32.1 / 0.33.0）：
 RF-17（附近没草时要去采能采到的树苗）、RF-18（诊断限频且不污染 get_state 提示）、
 RF-19（torch 用 `fueled`，烧空了不算可用光源）、RF-20（制作结果用独立 section，不被限频吞掉）。
 
@@ -351,7 +351,7 @@ GBK 中文兜底解码、以及"记录器绝不改写桥文件"这条硬约束�
 | 项 | 值 |
 |---|---|
 | 世界 | `Cluster_2`（用户新建的专用测试世界），第 1 天开始 |
-| 游戏 Mod 版本 | 运行中世界加载 **0.32.1**（日志 `Loading mod: ... Version:0.32.1`）；仓库/安装目录为 **0.32.2**（仅诊断 section 改名，行为不变，需重进才会显示） |
+| 游戏 Mod 版本 | 运行中世界加载 **0.32.1**（日志 `Loading mod: ... Version:0.32.1`）；仓库/安装目录为 **0.33.0**（仅诊断 section 改名，行为不变，需重进才会显示） |
 | REFLEX 实际配置 | **`true`**（日志逐字 `Overriding mod DontStarveWhaleSurvivor's option REFLEX with value true`）；`get_state` 顶部不再出现"⚠ 保命反射被关掉了" |
 | 世界设置 | `game_mode=survival`、`darkness=default`（**黑暗会打死人**，与旧 Cluster_1 的 `nonlethal` 不同）、`ghostenabled=none`（死了不化魂）。**每次死亡后世界在死亡界面暂停，必须由玩家手动重新选人才能继续**——不是自动重生（用户确认）。 |
 | 排查工具 | `tools/session-recorder.mjs`，只读旁路，记录命令/回执/反射/死亡/状态（§6.9） |
@@ -390,10 +390,53 @@ GBK 中文兜底解码、以及"记录器绝不改写桥文件"这条硬约束�
 > 补充：**怪物攻击导致的抢占已观测**（第 6 天蜘蛛，`gather_area` 自停 + 反射 `先撤`），
 > 但撤离结果失败；`RETREAT` 相关计划层逻辑也随状态切换到了「敌人贴脸且血少：先脱离」。
 
-> 结论：**验收标准"连续真实度过第一夜和第二夜"未达成**。修复后的保命链在"有白天可准备"
+> 结论：**验收标准"连续真实度过第一夜和第二夜"在 0.32.x 上未达成**。修复后的保命链在"有白天可准备"
 > 时工作正常，但"出生即夜晚 / 光源耗尽后无备用材料"仍会死于黑暗。
-> 下一步建议（本阶段未做）：火把点亮期间也在白天囤一份备用 `cutgrass+twigs`，
-> 或允许反射在 P0 且无材料时走向最近的草丛 / 或建固定营火。
+
+#### 4.6.6 真机暴露的第三个 bug：**白天就把火把点着了**（0.33.0 修）
+
+用户观察到的现象："制造了火把就拿在手上，烧完了又去找草又拿在手上，一直循环"。
+查证后这是**真 bug**，而且它就是反复致死的直接原因。三处证据：
+
+**① 燃料账（`scripts/tuning.lua` 原生数值）**
+
+```
+seg_time=30, dusk_segs=4, night_segs=2
+dusk=120s + night=60s          → 黑暗总长 180 秒
+TORCH_FUEL = night_time*1.25   → 单把火把只能烧 75 秒
+```
+
+**一把火把盖不住一整夜**（180/75 = 2.4 把），所以"做一把举着"必然中途熄灭。
+
+**② 燃料只在手持时消耗**（`scripts/prefabs/torch.lua`：`inventoryitem:IsHeld()`）
+
+而 `DoBuild` 在空手时会**自动把火把装备到手上**，于是白天做出来就直接开始烧 ——
+真机状态里能看到 `day=7 phase=day hand=torch`，大白天也在烧。
+
+**③ 旧逻辑"有火把就不囤料"**
+
+`reflex_stock_light` 里 `if rep.portable then return false end` —— 手里有一把就再也不囤，
+等这把在白天烧完，**夜里真需要光时反而没有**。日志节奏也对得上：
+`13:37:53 twigs:6,cutgrass:4` → `13:38:03 twigs:4,cutgrass:2`，10 秒吃掉一份料。
+
+**0.33.0 的四处改动（都在 `reflex.lua`，不动协议、不加工具）**
+
+| # | 改动 | 关键实现 |
+|---|---|---|
+| 1 | 白天做完火把**立刻收回背包** | `craft_torch` 记下 `phase`；`confirm_pending` 发现"白天且自动装备了"就排一次 `unequip` |
+| 2 | 白天手里举着火把 → **主动收起来** | `reflex_stow_light`：仅 `phase=="day"`、6 格内无敌人、带 5 秒冷却；放在 **P2**（不能抢"饿了要吃"） |
+| 3 | 囤料按**整夜用量**算，不再"有火把就停" | `RESERVE_TORCHES=2`、`rep.reserve_ok = craftable + 背包火把 >= 2` |
+| 4 | 新增燃料账诊断 | `hand_seconds`（手上这把还能烧几秒）、`craftable`（备料能做几把）、`reserve_ok` |
+
+常量与依据写死在代码里并加了测试锁（RF-24）：
+`DARK_SECONDS=180`、`TORCH_SECONDS=75`、`TORCHES_PER_NIGHT=3`、`RESERVE_TORCHES=2`。
+
+**新增回归测试（4 条）**：RF-21（白天举着火把必须收回）、RF-22（黄昏/夜里绝不收，`dusk`+`night` 各验一次）、
+RF-23（有火把但零备料 → `reserve_ok=false` 且必须继续囤）、RF-24（燃料账数值与原生 tuning 对齐）。
+另外 RF-3 从"做完拿在手里"改成更强的断言：**做完先自动装备、白天必须收回背包且燃料不消耗**。
+
+> 说明：0.33.0 只改了反射的**点火时机与囤料量**，没动优先级/抢占/材料保护。
+> 这条修复的真机复验见下一轮（需重新读档加载 0.33.0）。
 
 ## 5. 已知问题（都会真实影响体验）
 | # | 问题 | 影响 | 现状 |

@@ -59,6 +59,16 @@ local last_log = {}      -- 诊断日志限频
 local fail_until = {}    -- 失败退避（材料不足/目标不存在时别每秒重试）
 local inflight = nil     -- 当前在跑的反射意图 { key, job, priority }
 local pending = nil      -- 已发起、待核对的意图 { kind, ... }
+
+--- ★ 火把燃料账（游戏原生数值，scripts/tuning.lua）：
+---   seg_time=30, dusk_segs=4, night_segs=2 → dusk 120s + night 60s = 黑暗 180s
+---   TORCH_FUEL = night_time*1.25 = 60*1.25 = 75 秒/把
+--- 所以一把火把盖不住一整夜，必须**按需点火 + 平时囤料**，不能白天就点着烧。
+local DARK_SECONDS = 180        -- 黄昏+夜晚总长（秒）
+local TORCH_SECONDS = 75        -- 一把火把能烧多久（秒）
+local TORCHES_PER_NIGHT = 3     -- ceil(180/75)，一整夜最多要几把
+local RESERVE_TORCHES = 2       -- 平时至少备好几把的材料（够熬过大半夜 + 一次意外）
+
 local COOLDOWN = {
     heal = 8,
     eat = 5,
@@ -69,6 +79,7 @@ local COOLDOWN = {
     sanity = 8,
     stock = 3,
     craft_light = 4,
+    stow_light = 5,     -- 白天把火把收回背包（省燃料）
     temperature = 10,
 }
 
@@ -252,9 +263,35 @@ local function light_report(p)
         end
     end
     table.sort(missing)
+
+    -- 备料还能做几把火把（受最紧缺的那种材料限制）
+    local craftable = 0
+    if cost ~= nil then
+        craftable = nil
+        for prefab, need in pairs(cost) do
+            if need > 0 then
+                local n = math.floor((counts[prefab] or 0) / need)
+                if craftable == nil or n < craftable then craftable = n end
+            end
+        end
+        craftable = craftable or 0
+    end
+
     local hand = hand_light(p)
     local inbag = inventory_light(p)
     local near = nearby_light(p)
+    -- 手里这把还能烧多少秒（燃料百分比 × 单把总时长）
+    local hand_seconds = nil
+    if hand ~= nil then
+        local fueled = hand.components ~= nil and hand.components.fueled or nil
+        if fueled ~= nil then
+            local ok, pct = pcall(function() return fueled:GetPercent() end)
+            if ok and type(pct) == "number" then hand_seconds = pct * TORCH_SECONDS end
+        else
+            hand_seconds = TORCH_SECONDS
+        end
+    end
+
     return {
         phase = current_phase(),
         hand = hand,
@@ -264,6 +301,10 @@ local function light_report(p)
         portable = (hand ~= nil) or (inbag ~= nil),
         can_craft = can_craft,
         missing = missing,
+        craftable = craftable,
+        hand_seconds = hand_seconds,
+        -- 备料够不够撑过一整夜（含手上这把）
+        reserve_ok = (craftable + (inbag ~= nil and 1 or 0)) >= RESERVE_TORCHES,
     }
 end
 
@@ -448,7 +489,9 @@ local function reflex_flee(p)
     return false
 end
 
---- 做一把火把（用原生 craft 路径 + craftrules 精确核对材料）—— 白天也做。
+--- 做一把火把。**白天做出来要立刻收进背包**，因为 DoBuild 会把它直接装备到手上，
+--- 而火把只在"被手持"时才烧燃料（scripts/prefabs/torch.lua: inventoryitem:IsHeld()）。
+--- 不收回来的话，白天就把 75 秒燃料烧光，夜里真需要光时反而没有 —— 真机就是这么循环致死的。
 local function craft_torch(p)
     local cr = Whale ~= nil and Whale.craftrules or nil
     if cr == nil then return false end
@@ -461,9 +504,35 @@ local function craft_torch(p)
     local started = A.Start("craft", { recipe = "torch", count = 1 }, REFLEX_ID,
         { survival_craft = true, recipe = "torch" })
     if started then
-        pending = { kind = "craft_torch", t0 = U.now() }
+        pending = { kind = "craft_torch", t0 = U.now(), phase = current_phase() }
         say(p, "craft_light", "先把火把做出来，别等天黑")
-        diag("craft_torch", { "started=true" })
+        diag("craft_torch", { "started=true", "phase=" .. tostring(current_phase()) })
+        return true
+    end
+    return false
+end
+
+--- 白天把举在手上的火把收回背包（燃料只在手持时消耗）。
+--- 只在"天亮着、手上不是唯一光源、也没有威胁"时收，避免夜里把光收了。
+local function reflex_stow_light(p, rep)
+    if rep == nil then rep = light_report(p) end
+    local phase = rep.phase
+    if phase ~= "day" then return false end          -- 只有大白天才收
+    if rep.hand == nil then return false end          -- 手上没火把
+    if not cooldown_ok("stow_light") then return false end
+    -- 附近有敌人时先不收（收完可能立刻进战斗）
+    local foe = nearest_hostile(p, 6)
+    if foe ~= nil then return false end
+
+    local started = A.Start("unequip", { slot = "hands" }, REFLEX_ID,
+        { survival_unequip = true, slot = "hands" })
+    if started then
+        mark("stow_light")
+        say(p, "stow_light", "天还亮着，先把火把收起来省燃料")
+        diag("stow_light", {
+            "phase=" .. tostring(phase),
+            "hand_seconds=" .. (rep.hand_seconds ~= nil and string.format("%.0f", rep.hand_seconds) or "?"),
+        })
         return true
     end
     return false
@@ -492,7 +561,6 @@ local function reflex_light(p)
     mark_fail("light", 6)
     return false
 end
-
 --- 吃（安全白名单）
 local function reflex_eat(p)
     local rules = Whale ~= nil and Whale.eatrules or nil
@@ -526,13 +594,20 @@ local function reflex_heal(p)
     return reflex_eat(p)
 end
 
---- 白天补火把材料（P2）：**在缺的材料里，挑一个附近真能采到的**。
---- 真机踩到：只盯第一个缺的（cutgrass）时，附近没草就一直空转，
---- 而树苗明明在 1.7 格也不去采，2 分半钟背包还是空的。
+--- 白天补火把材料（P2）：按**储备量**囤料，而不是"有火把就停"。
+---
+--- ★ 真机教训（两次）：
+---   1) 只盯第一个缺的（cutgrass）时，附近没草就一直空转，树苗在 1.7 格也不采；
+---   2) 只要 `rep.portable` 为真就 return —— 于是手里有一把就再也不囤，
+---      等这把烧完（75 秒，盖不住 180 秒的夜）就没料可做，只能去黑暗里等死。
+--- 现在按"整夜要几把"来囤：见 TORCHES_PER_NIGHT / RESERVE_TORCHES。
 local function reflex_stock_light(p, rep)
     if rep == nil then rep = light_report(p) end
-    if rep.portable then return false end          -- 已经有能带走的光源
-    if rep.can_craft then return false end          -- 材料够 → 交给 P1 的 craft，不再采
+    -- 备料已经够撑过夜就不采了（不是"有火把就停"）
+    if rep.reserve_ok then
+        diag("light_materials", { "reserve_ok=true", "craftable=" .. tostring(rep.craftable) })
+        return false
+    end
     if not cooldown_ok("stock") then return false end
 
     local cr = Whale ~= nil and Whale.craftrules or nil
@@ -540,14 +615,16 @@ local function reflex_stock_light(p, rep)
     if cost == nil then return false end
     local counts = cr.Counts(p)
 
+    -- 目标：把每种材料囤到"够 RESERVE_TORCHES 把"的量
     local candidates = {}
     for prefab, need in pairs(cost) do
-        if (counts[prefab] or 0) < need then
+        local want = need * RESERVE_TORCHES
+        if (counts[prefab] or 0) < want then
             local source = nil
             if prefab == "cutgrass" then source = "grass"
             elseif prefab == "twigs" then source = "sapling" end
             if source ~= nil then
-                candidates[#candidates + 1] = { prefab = prefab, source = source }
+                candidates[#candidates + 1] = { prefab = prefab, source = source, want = want }
             end
         end
     end
@@ -559,7 +636,7 @@ local function reflex_stock_light(p, rep)
         if target ~= nil then
             if push_pick(p, target) then
                 mark("stock")
-                say(p, "stock", c.source == "grass" and "先采点草，凑火把材料" or "先采点树枝，凑火把材料")
+                say(p, "stock", c.source == "grass" and "先采点草，囤着火把材料" or "先采点树枝，囤着火把材料")
                 return true
             end
             return false
@@ -780,8 +857,16 @@ local function confirm_pending(p)
             "result=" .. (ok and "succeeded" or "failed"),
             "inventory_confirmed=" .. bool_str(have > 0),
             "in_hand=" .. bool_str(hand ~= nil),
+            "phase=" .. tostring(current_phase()),
         })
-        if not ok then mark_fail("craft_light", 8) end
+        if not ok then
+            mark_fail("craft_light", 8)
+        elseif pending.phase == "day" and hand ~= nil then
+            -- ★ 白天刚做出来又被自动装备了：立刻安排收回背包，别让燃料在白天烧掉
+            last["stow_light"] = nil
+            fail_until["stow_light"] = nil
+            diag("stow_light", { "scheduled=true", "reason=crafted_in_daytime" })
+        end
     elseif pending.kind == "eat" then
         local now = hunger_percent(p)
         local delta = (now ~= nil and pending.hunger_before ~= nil) and (now - pending.hunger_before) or nil
@@ -862,6 +947,8 @@ local function run(p)
     end
 
     -- ── P1：高优先生存需求（可在安全时中断普通采集/探索）
+    -- 白天只在"完全没料可做"时才补做一把（做完立刻收回背包，见 craft_torch 注释）；
+    -- 备料够就交给 P2 囤料，别在白天把火把点着烧。
     if phase ~= "dusk" and phase ~= "night" and (not rep.portable) and rep.can_craft then
         if try_action(p, "craft_light", P1, "light_preparation", function() return craft_torch(p) end) then return end
     end
@@ -878,7 +965,11 @@ local function run(p)
 
     -- ── P2/P3：只在没有任务时做（不抢模型任务）
     if Whale.job ~= nil then return end
-    if phase ~= "dusk" and phase ~= "night" and (not rep.portable) and (not rep.can_craft) then
+    -- ★ 白天把手上火把收回背包（燃料只在手持时消耗）。
+    --   放在 P2：不能抢在"饿了要吃 / 做完收尾"前面（真机验证时就是这么把 RF-11/RF-12 挤掉的）。
+    if reflex_stow_light(p, rep) then return end
+    -- 囤料不再要求"没有火把"：只要备料不够撑过夜就一直囤
+    if phase ~= "dusk" and phase ~= "night" then
         if reflex_stock_light(p, rep) then return end
     end
     if reflex_forage(p) then return end
@@ -951,6 +1042,9 @@ function R.Diagnose()
     out.has_usable_light = rep.has_usable
     out.portable_light = rep.portable
     out.can_craft_torch = rep.can_craft
+    out.craftable_torches = rep.craftable
+    out.reserve_ok = rep.reserve_ok
+    out.hand_torch_seconds = rep.hand_seconds
     out.light_missing = rep.missing
     out.job = Whale.job ~= nil and tostring(Whale.job.name) or nil
     out.health = health_percent(p)

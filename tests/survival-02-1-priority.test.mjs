@@ -161,6 +161,15 @@ function newinventory(items, equipped)
         for k, v in pairs(self._items) do if v == item then self._items[k] = nil end end
         self._equipped[GLOBAL.EQUIPSLOTS.HANDS] = item
     end
+    -- unequip 走的是原生 inventory:Unequip(slot)，桩里必须也有，否则"收火把"永远失败
+    function inv:Unequip(slot)
+        local item = self._equipped[slot]
+        if item == nil then return end
+        self._equipped[slot] = nil
+        local n = 0
+        for _ in pairs(self._items) do n = n + 1 end
+        self._items[n + 1] = item
+    end
     function inv:IsFull() return false end
     return inv
 end
@@ -402,7 +411,7 @@ test('RF-2（要求2）：反射配置关闭时正确报告，且不执行任何
   assert.equal(global('JOB'), 'nil', '反射关掉时不该自己起动作')
 })
 
-test('RF-3（要求5）：白天材料足够 —— 反射立即做火把（不是只采材料），并确认进入背包/手上', async () => {
+test('RF-3（要求5）：白天材料足够 —— 反射立即做火把，并在白天把它收进背包（不烧燃料）', async () => {
   const fengari = await import('fengari')
   const { run, runFile, global } = loadReflex(fengari)
   run(`
@@ -412,7 +421,8 @@ test('RF-3（要求5）：白天材料足够 —— 反射立即做火把（不�
     MAKE_RECIPE_IMPL = function(recipe)
         if recipe.name == "torch" then
             PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
-                { finiteuses = { GetUses = function() return 60 end } })
+                { fueled = { IsEmpty = function() return false end,
+                             GetPercent = function() return 1.0 end } })
         end
         return true
     end
@@ -425,14 +435,23 @@ test('RF-3（要求5）：白天材料足够 —— 反射立即做火把（不�
     CMD = Whale.job ~= nil and tostring(Whale.job.cmd_id) or "nil"
     Whale.actions.Tick()                             -- 执行 MakeRecipe
     Whale.actions.Tick()                             -- 核对成品
+    HAND_AFTER_CRAFT = PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] ~= nil
+             and PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS].prefab or "nil"
     ${eachTick(5)}                                   -- 反射核对（confirm_pending）
+    ${eachTick(5)}                                   -- 白天把它收回背包
+    Whale.actions.Tick()                             -- unequip: start
+    Whale.actions.Tick()                             -- unequip: acting → done
+    Whale.actions.Tick()                             -- 收尾
     HAND = PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] ~= nil
              and PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS].prefab or "nil"
+    IN_BAG = (Whale.craftrules.Counts(PLAYER)["torch"] or 0)
     JOB_AFTER = Whale.job ~= nil and Whale.job.name or "nil"
   `)
   assert.equal(global('JOB'), 'craft', '白天材料够就该直接 craft torch')
   assert.equal(global('CMD'), 'reflex')
-  assert.equal(global('HAND'), 'torch', '火把必须真的拿在手里（DoBuild 自动装备）')
+  assert.equal(global('HAND_AFTER_CRAFT'), 'torch', 'DoBuild 会先把火把自动装备到手上')
+  assert.equal(global('HAND'), 'nil', '白天必须把火把收起来（手持会烧燃料，真机就是这么循环致死的）')
+  assert.equal(global('IN_BAG'), '1', '收起来后火把要在背包里，燃料不消耗')
   assert.equal(global('JOB_AFTER'), 'nil', '做完就该结束任务')
 })
 
@@ -623,8 +642,9 @@ test('RF-12（要求14）：食物不足时不会无限重试 eat', async () => 
   const { run, runFile, global } = loadReflex(fengari)
   run(`
     PLAYER.components.hunger.current = 40           -- 20%，很饿
-    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
-        { finiteuses = { GetUses = function() return 60 end } })
+    -- 手上不放火把：这条测试只验"没食物时别反复起 eat"，
+    -- 放了火把会先触发"白天收火把"（那是另一条独立行为，见 RF-3/RF-21）。
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = nil
     -- 背包里没有可吃的东西
   `, '很饿但没吃的')
   runFile(`
@@ -784,6 +804,97 @@ test('RF-20（真机 bug）：制作结果用独立 section，不被 started 的
   assert.equal(global('HAS_RESULT'), 'yes', '结果必须是独立的诊断 section')
   assert.equal(global('HAS_SUCCEEDED'), 'yes')
   assert.equal(global('HAS_CONFIRMED'), 'yes')
+})
+
+test('RF-21（真机 bug：白天烧燃料）：白天手里举着火把 —— 反射要把它收回背包', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    -- 手上举着一把满燃料火把（这是上一版反射的常态：做完自动装备，白天就开始烧）
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+        { fueled = { IsEmpty = function() return false end,
+                     GetPercent = function() return 0.9 end } })
+  `, '白天 + 手上举着火把')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    ${eachTick(5)}
+    Whale.actions.Tick()
+    Whale.actions.Tick()
+    HAND = PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] ~= nil
+             and PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS].prefab or "nil"
+    IN_BAG = (Whale.craftrules.Counts(PLAYER)["torch"] or 0)
+  `)
+  assert.equal(global('JOB'), 'unequip', '白天该主动把火把收起来')
+  assert.equal(global('HAND'), 'nil', '收完手上不该还有火把')
+  assert.equal(global('IN_BAG'), '1', '火把进背包，燃料不再消耗')
+})
+
+test('RF-22（真机 bug：黄昏把光收了）：黄昏/夜里绝不收火把', async () => {
+  for (const phase of ['dusk', 'night']) {
+    const fengari = await import('fengari')
+    const { run, runFile, global } = loadReflex(fengari)
+    run(`
+      GLOBAL.TheWorld.state.phase = "${phase}"
+      PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+          { fueled = { IsEmpty = function() return false end,
+                       GetPercent = function() return 0.9 end } })
+    `, `${phase} + 手上举着火把`)
+    runFile(`
+      Whale.reflex_on = true
+      Whale.reflex_force_off = false
+      ${eachTick(10)}
+      JOB = Whale.job ~= nil and Whale.job.name or "nil"
+      HAND = PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] ~= nil
+               and PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS].prefab or "nil"
+    `)
+    assert.equal(global('JOB'), 'nil', `${phase} 不该起"收火把"的动作`)
+    assert.equal(global('HAND'), 'torch', `${phase} 必须继续举着火把`)
+  }
+})
+
+test('RF-23（真机 bug：一把盖不住一夜）：备料按整夜算 —— 有火把也要继续囤', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    -- 手上有一把满燃料火把，但背包里一根材料都没有
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
+        { fueled = { IsEmpty = function() return false end,
+                     GetPercent = function() return 1.0 end } })
+    -- 附近有一丛草，够采
+    local grass = newent("grass", 2 * 4, 0, { "pickable" }, {
+        pickable = { CanBePicked = function() return true end },
+    })
+    NEARBY = { grass }
+  `, '白天 + 有火把但零备料')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    local d = Whale.reflex.Diagnose()
+    RESERVE_OK = tostring(d.reserve_ok)
+    ${eachTick(5)}
+    -- 先收火把，再囤料；多跑几轮让两者都发生
+    ${eachTick(10)}
+    PICKED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+  `)
+  assert.equal(global('RESERVE_OK'), 'false', '一把火把不够撑过 180 秒的夜，备料不算够')
+  assert.ok(
+    global('PICKED') === 'grass' || global('JOB') === 'unequip',
+    `有火把也必须继续囤料（或先收火把），实际 PICKED=${global('PICKED')} JOB=${global('JOB')}`,
+  )
+})
+
+test('RF-24：燃料账用的是游戏原生数值（75 秒/把，黑暗 180 秒 → 一夜要 3 把）', () => {
+  const src = readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8')
+  assert.match(src, /TORCH_SECONDS\s*=\s*75/, '单把火把 75 秒（TORCH_FUEL = night_time*1.25）')
+  assert.match(src, /DARK_SECONDS\s*=\s*180/, '黄昏 120 + 夜晚 60 = 180 秒')
+  assert.match(src, /TORCHES_PER_NIGHT\s*=\s*3/, '180/75 → 一夜最多 3 把')
+  assert.match(src, /RESERVE_TORCHES\s*=\s*2/, '平时至少备 2 把的材料')
 })
 
 test('RF-16：Diagnose() 能说清"当前光源是否可用 / 是否该准备"', async () => {
