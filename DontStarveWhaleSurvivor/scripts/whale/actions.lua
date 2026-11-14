@@ -2062,7 +2062,9 @@ JOBS.gather_area = function(j, p)
             local tail = left > 0 and string.format("（还有 %d 个没成熟/够不着）", left) or ""
             local text = area_summary(j.data.count, j.data.products, j.data.failed) .. tail
             if j.data.count == 0 then
-                -- 一个都没采到 → 明确的失败，把"为什么"讲给模型听
+                -- 一个都没采到 → 明确的失败，而且**要把"下一步该怎么办"讲清楚**。
+                -- 真机教训：附近浆果丛被采空后，模型只看到"采了 0 个"就反复换小半径重试，
+                -- 表现成"采集不了浆果"。所以要告诉它：最近能采的多远、建议半径多大。
                 local notes = {}
                 for _, c in ipairs(cands) do
                     if c.why ~= nil and c.why ~= "" then notes[c.why] = (notes[c.why] or 0) + 1 end
@@ -2071,8 +2073,36 @@ JOBS.gather_area = function(j, p)
                 for why, n in pairs(notes) do reasons[#reasons + 1] = string.format("%s×%d", why, n) end
                 table.sort(reasons)
                 local why_text = #reasons > 0 and ("；原因：" .. table.concat(reasons, "，")) or ""
-                return "fail", "gather_area_failed: " .. text .. why_text
-                    .. "。可以换一片地方（用 seek 找），或者等它们长好再来"
+
+                -- 往更大一圈找"现在就能采"的（任何白名单种类），给出最近的那个和建议半径
+                local look = math.min(40, math.max((j.data.radius or 8) * 2, (j.data.radius or 8) + 8))
+                local wide = gather_candidates(p, look, j.data.want)
+                local nearest, nearest_kind, want_ready = nil, nil, nil
+                for _, c in ipairs(wide) do
+                    if c.ready then
+                        if nearest == nil then
+                            nearest = (c.dist or 0) / 4
+                            nearest_kind = tostring(c.ent.prefab)
+                        end
+                        if j.data.want ~= nil and tostring(c.ent.prefab) == j.data.want then
+                            want_ready = (c.dist or 0) / 4
+                            break
+                        end
+                    end
+                end
+                local hint
+                if j.data.want ~= nil and want_ready ~= nil then
+                    hint = string.format("最近的 %s 在 %.1f 格，把 radius 调到 %d 再试",
+                        j.data.want, want_ready, math.ceil(want_ready) + 2)
+                elseif nearest ~= nil then
+                    hint = string.format("范围内现在能采的是 %s（%.1f 格）——不挑种类的话把 radius 调到 %d；"
+                        .. "只要 %s 就等它们长好，或者用 seek 出去找",
+                        tostring(nearest_kind), nearest, math.ceil(nearest) + 2, tostring(j.data.want or "某一种"))
+                else
+                    hint = string.format("%d 格内现在没有能采的（都还没长好）——用 seek 出去找别的，或者等一会儿再来",
+                        look)
+                end
+                return "fail", "gather_area_failed: " .. text .. why_text .. "。" .. hint
             end
             return "done", text
         end
@@ -2254,7 +2284,10 @@ JOBS.seek = function(j, p)
         for _, entry in ipairs(list or {}) do
             local e = entry.ent or entry
             if e ~= nil and e:IsValid() then
-                local tx, tz = U.tile_of(e.Transform:GetWorldPosition())
+                -- 注意：GetWorldPosition() 返回 (x, y, z) 三个值，而 U.tile_of 要的是 (x, z)。
+            -- 直接传三个参数会把 y 当成 z —— 真机因此打出 "(-87,0)7格"（z 恒为 0）。
+            local wx, wy, wz = e.Transform:GetWorldPosition()
+            local tx, tz = U.tile_of(wx, wz)
                 hits[#hits + 1] = { ent = e, tx = tx, tz = tz, dist = U.dist(p, e) }
             end
         end

@@ -908,18 +908,14 @@ function G.validate(cmd)
             local ok_h = hr ~= nil and hr.PREFABS[w] ~= nil
             if not ok_g and not ok_h then return false, "prefab_not_allowed", nil end
         end
-        -- 至少得有一个可采的目标，否则不下发注定失败的命令
-        local found = U.find_all(actor, tonumber(cmd.args.radius) or 12, nil, nil, function(e)
-            if e == nil or e == actor or e.prefab == nil then return false end
-            if want ~= nil and want ~= "" and tostring(e.prefab) ~= tostring(want) then return false end
-            local is_g = gr ~= nil and gr.IsCandidate(e, actor)
-            local is_h = (not is_g) and hr ~= nil and hr.IsCandidate(e, actor)
-            if not is_g and not is_h then return false end
-            local rules = is_g and gr or hr
-            local ready = rules.IsReady(e)
-            return ready == true
-        end)
-        if found == nil or #found == 0 then return false, "no_targets_in_range", nil end
+        -- ★ 这里原来有一个"范围内没有成熟目标就拒绝"的预检（no_targets_in_range）。
+        --   真机踩到（Cluster_1）：附近浆果丛都被采空、还没长回来，于是每次 gather_area 都被这句拒掉，
+        --   而回执只有一句 no_targets_in_range —— 模型不知道该干嘛，只能反复换小半径重试，
+        --   表现成"采集不了浆果"。
+        --   去掉它的理由：这**不是安全校验**（白名单 / #N 引用 / 租约 / 距离一条没动），
+        --   只是"省一次注定失败的调用"的便利判断；而让任务真的跑起来，
+        --   它会给出可操作的原因（附近有什么、最近能采的多远、radius 该调多大）。
+        --   而且"现在没成熟"不等于"跑起来也没收获"—— 走过去的过程中可能就长好了。
     end
 
     if action == "seek" then

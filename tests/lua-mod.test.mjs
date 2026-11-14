@@ -1273,3 +1273,54 @@ test('S8-5：目标就在脚边（不走 walking 直接 acting）也不能崩 �
   assert.equal(global('OUT_OK'), 'true', `不该崩、应该采成功，实际：${global('OUT_TEXT')}`)
   assert.ok(!/attempt to call/.test(String(global('OUT_TEXT'))), '不许出 IsValid 那类崩溃')
 })
+
+test('S8-6：范围内没成熟目标时，失败消息必须告诉模型"最近能采的多远、radius 调多大"', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadMod(fengari)
+  run(ENT_HELPER, '实体辅助')
+  // 脚边一丛"还没长好"，10 格外一丛"成熟" —— 半径 6 内一个能采的都没有
+  run(`
+    NOT_READY = mkent("berrybush", 95, 12 * 4 + 2 + 12, 45 * 4 + 2, false)
+    READY_FAR = mkent("berrybush", 96, 12 * 4 + 2 + 40, 45 * 4 + 2, true)
+    NEARBY = { NOT_READY, READY_FAR }
+    NOW = 100
+  `, '脚边没熟、10 格外有熟的')
+
+  runFile(`
+    Whale.bridge = {
+      Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+      WriteState = function() end,
+    }
+    PUSHED = nil
+    -- 注意：假环境的 TheSim:FindEntities **忽略半径**，所以"范围外"没法用坐标模拟。
+    -- 做法：让那丛成熟的走位超时（推进 NOW 越过 12 秒），任务就会退回 next、
+    -- 进而走到"零收获"分支。budget 给足，避免中途被预算兜底截走。
+    local ctx = { survival_area = true, radius = 6, limit = 1, budget_s = 300 }
+    local started, serr = Whale.actions.Start("gather_area", { radius = 6, limit = 1 }, "c-hint", ctx)
+    assert(started == true, "应该能开始：" .. tostring(serr))
+    for i = 1, 60 do
+        if Whale.job == nil then break end
+        Whale.actions.Tick()
+        NOW = NOW + 3          -- 推进游戏时间，让走位超时能触发
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
+  `)
+  assert.equal(global('OUT_OK'), 'false', '范围内没熟的，不该报成功')
+  const text = String(global('OUT_TEXT'))
+  assert.match(text, /采了 0 个/, `要说清采了 0 个，实际：${text}`)
+  // ★ 关键的"可操作信息"：模型正是缺这个才反复换小半径重试
+  assert.match(text, /radius/, `要告诉模型 radius 该调多大，实际：${text}`)
+  assert.match(text, /1[0-9](\.\d)? 格|格/, `要报出最近能采的有多远，实际：${text}`)
+  assert.ok(!/no_targets_in_range/.test(text), '不该再出现那句没有指导意义的 no_targets_in_range')
+})
+
+test('S8-7：guard 不再用"范围内没成熟目标"拒绝（那是便利判断，不是安全校验）', () => {
+  const guard = readFileSync(new URL('../DontStarveWhaleSurvivor/scripts/whale/guard.lua', import.meta.url), 'utf8')
+  const code = guard.split('\n').map((l) => l.replace(/--.*$/, '')).join('\n')
+  assert.ok(!/return false, "no_targets_in_range"/.test(code),
+    'guard 里不该再有 no_targets_in_range 的硬拒绝（改成让任务跑起来、由任务给出可操作原因）')
+  // 但安全校验必须还在（别顺手删多了）
+  assert.match(code, /prefab_not_allowed/, 'gather_area 的 prefab 白名单校验必须还在')
+  assert.match(code, /actor_busy/, 'actor_busy 校验必须还在')
+})
