@@ -890,9 +890,19 @@ test('吃：自动挑食物跳过生蘑菇/怪物肉，手动仍可指定红蘑�
     local best = Whale.eatrules.PickBest(inv)
     BEST = best ~= nil and best.prefab or "nil"
     MANUAL_RED = tostring(select(1, Whale.eatrules.IsAllowedPrefab("red_cap")))
+    COOKED_OK = tostring(select(1, Whale.eatrules.IsAllowedPrefab("meat_cooked")))
+    local function food2(prefab, hunger, health)
+        return { prefab = prefab, components = { edible = { hungervalue = hunger, healthvalue = health } },
+                 IsValid = function(self) return true end }
+    end
+    local inv2 = { items = { food2("berries", 9.375, 0), food2("meat_cooked", 25, 20) } }
+    function inv2:ForEachItem(fn) for _, item in pairs(self.items) do fn(item) end end
+    BEST_HEALING = Whale.eatrules.PickBest(inv2).prefab
   `)
   assert.equal(global('BEST'), 'berries', '自动进食只能从 AUTO_SAFE 里挑，不能选生蘑菇/怪物肉')
   assert.equal(global('MANUAL_RED'), 'true', '手动 eat red_cap 仍然可以（但不会自动挑）')
+  assert.equal(global('COOKED_OK'), 'true', '烤过的食物必须能吃（否则 AI 烤完等于白烤）')
+  assert.equal(global('BEST_HEALING'), 'meat_cooked', '有熟肉时应该优先吃回血多的')
 })
 
 test('reflex：血少时自动进食走安全白名单，不碰怪物肉/生蘑菇', async () => {

@@ -36,6 +36,18 @@ E.FOODS = {
     smallmeat = "小肉",
     froglegs = "蛙腿",
     fish = "鱼",
+    -- 熟食：AI 会用 cook 烤肉/烤菜，烤过的基础食物更安全、回血更多。
+    -- 没有这些条目时，烤完反而"不在白名单里"，等于白烤。
+    meat_cooked = "熟肉",
+    smallmeat_cooked = "熟小肉",
+    froglegs_cooked = "熟蛙腿",
+    fish_cooked = "熟鱼",
+    berries_cooked = "烤浆果",
+    berries_juicy_cooked = "烤多汁浆果",
+    carrot_cooked = "烤胡萝卜",
+    corn_cooked = "烤玉米",
+    pumpkin_cooked = "烤南瓜",
+    eggplant_cooked = "烤茄子",
 }
 
 --- 自动挑食物时的保守白名单（不包含任何生蘑菇）。
@@ -52,6 +64,16 @@ E.AUTO_SAFE = {
     smallmeat = true,
     froglegs = true,
     fish = true,
+    meat_cooked = true,
+    smallmeat_cooked = true,
+    froglegs_cooked = true,
+    fish_cooked = true,
+    berries_cooked = true,
+    berries_juicy_cooked = true,
+    carrot_cooked = true,
+    corn_cooked = true,
+    pumpkin_cooked = true,
+    eggplant_cooked = true,
 }
 
 --- 明确**不**放行的（写在这里是为了让后来者知道这是刻意的，不是漏了）
@@ -99,12 +121,16 @@ function E.PickBest(inventory)
                 if ok_f and type(pct) == "number" then freshness = pct end
             end
             local hunger = 0
+            local health = 0
             local edible = item.components ~= nil and item.components.edible or nil
             if edible ~= nil then
                 local ok_h, h = pcall(function() return edible.hungervalue end)
                 if ok_h and type(h) == "number" then hunger = h end
+                local ok_hp, hv = pcall(function() return edible.healthvalue end)
+                if ok_hp and type(hv) == "number" then health = hv end
             end
-            local score = freshness * 10 + hunger
+            -- 残血时优先吃回血的（熟肉 +20 血，浆果 0）：回血值加权，但别盖过新鲜度/饥饿。
+            local score = freshness * 10 + hunger + math.max(0, health) * 4
             if best_score == nil or score > best_score then best, best_score = item, score end
         end)
     end)
