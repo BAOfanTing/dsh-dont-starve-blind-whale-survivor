@@ -96,6 +96,13 @@ GLOBAL.TheSim = {
                     if not e:HasTag(t) then ok = false end
                 end
             end
+            -- 原生 FindEntities 按半径过滤；桩不模拟这一步会让"16 格内找不到"
+            -- 误命中 20 格外的目标，有界 seek 就测不出来了
+            if ok and r ~= nil then
+                local ex, _, ez = e.Transform.GetWorldPosition()
+                local dx, dz = (ex or 0) - x, (ez or 0) - z
+                if dx * dx + dz * dz > r * r then ok = false end
+            end
             if ok then out[#out + 1] = e end
         end
         return out
@@ -120,6 +127,8 @@ GLOBAL.AllRecipes = {
                 ingredients = { { type = "twigs", amount = 2 }, { type = "flint", amount = 2 } } },
     campfire = { name = "campfire", product = "campfire", placer = "campfire_placer",
                  ingredients = { { type = "cutgrass", amount = 3 }, { type = "log", amount = 2 } } },
+    firepit = { name = "firepit", product = "firepit", placer = "firepit_placer",
+                ingredients = { { type = "log", amount = 2 }, { type = "rocks", amount = 12 } } },
 }
 
 function newent(prefab, x, z, tags, comps)
@@ -895,6 +904,138 @@ test('RF-24：燃料账用的是游戏原生数值（75 秒/把，黑暗 180 秒
   assert.match(src, /DARK_SECONDS\s*=\s*180/, '黄昏 120 + 夜晚 60 = 180 秒')
   assert.match(src, /TORCHES_PER_NIGHT\s*=\s*3/, '180/75 → 一夜最多 3 把')
   assert.match(src, /RESERVE_TORCHES\s*=\s*2/, '平时至少备 2 把的材料')
+})
+
+// ═══════════════════════ 0.34.0：没草时的破局路线 ═══════════════════════
+
+test('SP-12（破局）：没草但有 2 木头 + 12 石头 —— prep_light 指向 build firepit（不用草）', () => {
+  const plan = derivePlan(makeSnapshot({
+    phase: 'day',
+    items: ITEMS(['log', 2], ['rocks', 12]),   // 零 cutgrass、零 twigs
+  }))
+  assert.equal(plan.goalId, 'prep_light')
+  assert.match(plan.next, /build firepit/)
+  assert.doesNotMatch(plan.next, /craft torch/, '没草就不该还让模型去做火把')
+})
+
+test('SP-13（破局）：夜里没光、没草但有 firepit 材料 —— light 指向 build firepit', () => {
+  const plan = derivePlan(makeSnapshot({
+    phase: 'night',
+    items: ITEMS(['log', 2], ['rocks', 12]),
+  }))
+  assert.equal(plan.goalId, 'light')
+  assert.match(plan.next, /build firepit/)
+})
+
+test('SP-14：firepit 材料差一点就不能算"可建"（不能误报准备好了）', () => {
+  const p = planInternals.firepitReady
+  assert.equal(p(makeSnapshot({ items: ITEMS(['log', 2], ['rocks', 12]) })), true)
+  assert.equal(p(makeSnapshot({ items: ITEMS(['log', 2], ['rocks', 11]) })), false)
+  assert.equal(p(makeSnapshot({ items: ITEMS(['log', 1], ['rocks', 12]) })), false)
+  assert.equal(p(makeSnapshot({ items: ITEMS(['log', 2], ['rocks', 12], ['cutgrass', 2], ['twigs', 2]) })), true)
+  assert.deepEqual(planInternals.FIREPIT_RECIPE, { log: 2, rocks: 12 }, '配方与原生 recipes.lua 一致')
+})
+
+test('SP-15：火把材料够时仍优先 craft torch（firepit 只是没草时的兜底）', () => {
+  const plan = derivePlan(makeSnapshot({
+    phase: 'day',
+    items: ITEMS(['log', 2], ['rocks', 12], ['cutgrass', 2], ['twigs', 2]),
+  }))
+  assert.equal(plan.goalId, 'prep_light')
+  assert.match(plan.next, /craft torch/)
+  assert.doesNotMatch(plan.next, /build firepit/)
+})
+
+test('SP-16：附近没草也没火坑材料 —— 仍给 seek，并提示可改走火坑路线', () => {
+  const plan = derivePlan(makeSnapshot({ phase: 'day' }))
+  assert.equal(plan.goalId, 'prep_light')
+  assert.match(plan.next, /seek/)
+  assert.match(plan.why, /cutgrass/)
+})
+
+test('RF-25（破局）：天黑没光、没草但有 log+rocks —— 反射走 make_fire 建 firepit', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "night"
+    -- 没有 cutgrass / twigs，做不了火把；但有 2 木头 + 12 石头
+    PLAYER.components.inventory._items[1] = mkitem("log", 2)
+    PLAYER.components.inventory._items[2] = mkitem("rocks", 12)
+  `, '夜里 + 无草 + 有火坑材料')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    RECIPE = Whale.job ~= nil and Whale.job.args ~= nil and tostring(Whale.job.args.recipe) or "nil"
+    CMD = Whale.job ~= nil and tostring(Whale.job.cmd_id) or "nil"
+  `)
+  assert.equal(global('JOB'), 'make_fire', '没草时必须改走"不用草"的固定光源')
+  assert.equal(global('RECIPE'), 'firepit')
+  assert.equal(global('CMD'), 'reflex')
+})
+
+test('RF-26（破局）：16 格内没草、20 格内有 —— 反射有界地走过去（move_to）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    -- 20 格外有一丛可采的草；16 格内什么都没有
+    local grass = newent("grass", 20 * 4, 0, { "pickable" }, {
+        pickable = { CanBePicked = function() return true end },
+    })
+    NEARBY = { grass }
+  `, '白天 + 只有远处的草')
+  runFile(`
+    Whale.reflex_on = true
+    Whale.reflex_force_off = false
+    ${eachTick(5)}
+    ${eachTick(5)}
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    PUSHED_NEAR = PUSHED ~= nil and "yes" or "no"
+  `)
+  assert.equal(global('PUSHED_NEAR'), 'no', '16 格内没目标时不该硬推采集')
+  assert.equal(global('JOB'), 'move_to', '备料不足且有远处目标时，应有界地走过去')
+})
+
+test('RF-27（边界）：夜里 / 有敌人 / 目标太远 —— 都不许主动走远', async () => {
+  for (const scenario of ['night', 'enemy', 'too_far']) {
+    const fengari = await import('fengari')
+    const { run, runFile, global } = loadReflex(fengari)
+    const phase = scenario === 'night' ? 'night' : 'day'
+    const dist = scenario === 'too_far' ? 26 : 20
+    run(`
+      GLOBAL.TheWorld.state.phase = "${phase}"
+      local grass = newent("grass", ${dist} * 4, 0, { "pickable" }, {
+          pickable = { CanBePicked = function() return true end },
+      })
+      NEARBY = { grass }
+      ${scenario === 'enemy' ? `
+      local foe = newent("frog", 3 * 4, 0, { "hostile" }, {
+          health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+          combat = {},
+      })
+      NEARBY[#NEARBY + 1] = foe
+      ` : ''}
+    `, `边界场景 ${scenario}`)
+    runFile(`
+      Whale.reflex_on = true
+      Whale.reflex_force_off = false
+      ${eachTick(5)}
+      ${eachTick(5)}
+      JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    `)
+    assert.notEqual(global('JOB'), 'move_to', `场景 ${scenario} 不该主动走远找料`)
+  }
+})
+
+test('RF-28：SEEK_RADIUS / SEEK_MAX_TILES 有明确上限，不是无目的乱走', () => {
+  const src = readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8')
+  assert.match(src, /SEEK_RADIUS\s*=\s*28/, '搜索半径有上限')
+  assert.match(src, /SEEK_MAX_TILES\s*=\s*22/, '单步移动距离有上限')
+  assert.match(src, /tiles\s*>\s*16\s*and\s*tiles\s*<=\s*SEEK_MAX_TILES/, '必须同时满足"16格外 + 不超过上限"')
+  assert.match(src, /nearest_hostile\(p,\s*6\)\s*~=\s*nil\s*then\s*return\s*false/, '有敌人不走')
+  assert.match(src, /rep\.phase\s*~=\s*"day"\s*then\s*return\s*false/, '夜里不走')
 })
 
 test('RF-16：Diagnose() 能说清"当前光源是否可用 / 是否该准备"', async () => {

@@ -68,6 +68,8 @@ local DARK_SECONDS = 180        -- 黄昏+夜晚总长（秒）
 local TORCH_SECONDS = 75        -- 一把火把能烧多久（秒）
 local TORCHES_PER_NIGHT = 3     -- ceil(180/75)，一整夜最多要几把
 local RESERVE_TORCHES = 2       -- 平时至少备好几把的材料（够熬过大半夜 + 一次意外）
+local SEEK_RADIUS = 28          -- 附近采不到时，最多看多远（格）
+local SEEK_MAX_TILES = 22       -- 一次最多主动走多远（格），不无限远离安全区
 
 local COOLDOWN = {
     heal = 8,
@@ -80,6 +82,7 @@ local COOLDOWN = {
     stock = 3,
     craft_light = 4,
     stow_light = 5,     -- 白天把火把收回背包（省燃料）
+    seek_light = 12,    -- 走远找火把材料（有界、低频）
     temperature = 10,
 }
 
@@ -538,7 +541,16 @@ local function reflex_stow_light(p, rep)
     return false
 end
 
---- 天黑没光（P0）：举火把 → 做火把 → 生营火
+--- 没草时的破局光源：firepit = 2 log + 12 rocks，TECH.NONE，**不用 cutgrass**。
+--- 配方从游戏原生 AllRecipes 读（craftrules.NeededIngredients），不硬编码第二份。
+local function firepit_ready(p)
+    local cr = Whale ~= nil and Whale.craftrules or nil
+    if cr == nil then return false end
+    local ok = cr.HasIngredients(p, "firepit")
+    return ok == true
+end
+
+--- 天黑没光（P0）：举火把 → 做火把 → 建火坑（不用草）→ 生营火
 local function reflex_light(p)
     if has_light(p) then return false end
 
@@ -550,6 +562,17 @@ local function reflex_light(p)
     end
 
     if craft_torch(p) then return true end
+
+    -- ★ 没有草就做不了火把/营火；火坑是唯一不依赖草的开局光源，
+    --   FIREPIT_FUEL_START = 180s 正好盖住整夜。走原生 build 路径。
+    if firepit_ready(p) then
+        local started = A.Start("make_fire", { recipe = "firepit" }, REFLEX_ID)
+        if started then
+            say(p, "light", "没草做不了火把，先垒个火坑（不用草）")
+            diag("light_build", { "recipe=firepit", "reason=no_cutgrass" })
+        end
+        return started
+    end
 
     if A.count_item(p, "log") >= 2 and A.count_item(p, "cutgrass") >= 3 then
         local started = A.Start("make_fire", {}, REFLEX_ID)
@@ -592,6 +615,52 @@ local function reflex_heal(p)
         return false
     end
     return reflex_eat(p)
+end
+
+--- 附近（16 格）连一株成熟目标都没有，且备料不够时：**有界地**走过去找。
+--- 真机第 8 夜就这么死的：站在一片没草的地方，`missing=cutgrass 0/2` 一直补不上，
+--- 反射既不走远、模型侧 `seek` 又因预算超时失败，最后造不出光被黑暗打死。
+---
+--- 严格边界（不违反"不为找材料无目的远离安全区"）：
+---   · 只在白天（绝不摸黑乱跑）
+---   · 只在 P2、没有任务在跑时（不抢模型）
+---   · 6 格内有敌人就不去
+---   · 目标必须**先被观察到**（不是盲走），且距离 ≤ SEEK_MAX_TILES 格
+---   · 12 秒独立冷却，不会每秒重复起步
+local function reflex_seek_light(p, rep, candidates)
+    if rep.phase ~= "day" then return false end
+    if not cooldown_ok("seek_light") then return false end
+    if nearest_hostile(p, 6) ~= nil then return false end
+
+    local px, _, pz = U.pos(p)
+    if px == nil then return false end
+
+    for _, c in ipairs(candidates) do
+        local target = exact_ready(p, c.source, SEEK_RADIUS)
+        if target ~= nil then
+            local tx, _, tz = U.pos(target)
+            if tx ~= nil then
+                local dx, dz = tx - px, tz - pz
+                local tiles = math.sqrt(dx * dx + dz * dz) / U.TILE
+                if tiles > 16 and tiles <= SEEK_MAX_TILES then
+                    local gx, gz = U.tile_of(tx, tz)
+                    local started = A.Start("move_to", { x = gx, z = gz, timeout = 8 }, REFLEX_ID)
+                    if started then
+                        mark("seek_light")
+                        say(p, "seek_light", "附近没" .. (c.source == "grass" and "草" or "树苗") .. "，走过去找点囤着")
+                        diag("seek_light", {
+                            "source=" .. c.source,
+                            "tiles=" .. string.format("%.0f", tiles),
+                            "reason=no_nearby_material",
+                        })
+                        return true
+                    end
+                    return false
+                end
+            end
+        end
+    end
+    return false
 end
 
 --- 白天补火把材料（P2）：按**储备量**囤料，而不是"有火把就停"。
@@ -642,6 +711,9 @@ local function reflex_stock_light(p, rep)
             return false
         end
     end
+
+    -- 16 格内一株可采的都没有：不要站着等死，有界地走过去找（白天、无敌人、≤22 格）
+    if reflex_seek_light(p, rep, candidates) then return true end
 
     diag("light_materials", { "nearby=none", "missing=" .. table.concat(rep.missing or {}, ", ") })
     mark_fail("stock", 5)
