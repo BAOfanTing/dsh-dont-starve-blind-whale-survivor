@@ -1,8 +1,8 @@
 // M1.4：附近实体结构化观察的测试
 //
 // 用 fengari 真跑模组的 nearby/observe 代码（假 GLOBAL，但走的是真正会进游戏的逻辑）。
-// 这些全部是 UNIT（沙箱），**不是** DST 真机；真机结果见 docs/archive/milestones/M1/M1_2_runtime_test_report.md 与
-// tools/m12-watch.mjs 的采样。
+// 这些全部是 UNIT（沙箱），**不是** DST 真机；真机的采样证据用 tools/m12-watch.mjs 现跑。
+// （当时那份真机报告已在 SURVIVAL-07 随 docs/archive 一起删除，git 历史可找回。）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

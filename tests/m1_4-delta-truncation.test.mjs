@@ -1,7 +1,7 @@
 // M1.4 Delta 截断修复（0.13.3）：三个必测场景 + 两个补充
 //
 // 背景：0.13.2 的 delta 拿"截断后的 kept"做基线，被容量限制挤出窗口的实体会被误报成 removed
-// （真机证据见 docs/archive/milestones/M1/M1_4_runtime_test_report.md §5）。0.13.3 改成用**完整扫描候选集合**做基线。
+// （真机证据当时记在那份 runtime_test_report 的 §5；该报告已在 SURVIVAL-07 删除，git 历史可找回）。0.13.3 改成用**完整扫描候选集合**做基线。
 //
 // A：截断但实体仍存在 → 不得 removed
 // B：实体真的离开完整扫描 → removed + previous_ref（不是当前引用）

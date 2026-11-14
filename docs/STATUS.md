@@ -285,7 +285,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 6. **`m2_0_3_verify_move.mjs` 的 ⑤-3 采样太粗**（见 §5 #12）：建议以后改成 `verify_stop.mjs` 那样的
    逐帧去重采样，否则会周期性假报"换手后角色还在走"。本阶段**未改**。
 7. `.runtime/` 里还留着历次真机验证的原始输出（未入库）；如果要长期留证，应该挑出关键几份
-   放进 `docs/archive/`，而不是整目录搬进来。
+   **单独入库并标明证据等级**（真机/沙箱不能混），而不是整目录搬进来。
 
 ---
 

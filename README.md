@@ -160,7 +160,6 @@ F8 开/停 · F7 停手
 | [docs/TESTING.md](docs/TESTING.md) | 怎么跑测试（命令都验过） |
 | [docs/REFACTOR_AUDIT.md](docs/REFACTOR_AUDIT.md) | M2.2.1 全项目瘦身的审计与结果 |
 | [docs/dsh-plugin.md](docs/dsh-plugin.md) | 插件形态说明（预设、入口工具、配置项） |
-| [docs/archive/milestones/INDEX.md](docs/archive/milestones/INDEX.md) | 历史里程碑（M0/M1/M2）与早期阶段的归档入口 |
 
 ---
 

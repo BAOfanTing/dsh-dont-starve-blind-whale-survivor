@@ -12,7 +12,7 @@
 --   · 命令过期/重复
 --   · 实际收获
 --
--- 依据（本机 scripts.zip 实测，见 docs/archive/api/M2_3_harvest_api_audit.md）：
+-- 依据（本机 scripts.zip 实测；可用 `node tools/api-lookup.mjs <符号>` 现场复核，速查见 docs/game-api.md）：
 --   · 成熟浆果丛走的是原生 ACTIONS.PICK（不是 ACTIONS.HARVEST —— 那是 crop/harvestable 那类）；
 --   · componentactions.lua 的原生资格：HasTag("pickable") 且不带 fire/intense；
 --   · ACTIONS.PICK.fn → components.pickable:Pick(doer)；

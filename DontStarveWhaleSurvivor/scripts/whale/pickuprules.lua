@@ -14,7 +14,7 @@
 --   · 背包能不能装得下
 --   · 命令是否过期 / 是否重复
 --
--- 依据（本机 scripts.zip 实测，见 docs/archive/api/M2_1_pickup_api_audit.md）：
+-- 依据（本机 scripts.zip 实测；可用 `node tools/api-lookup.mjs <符号>` 现场复核，速查见 docs/game-api.md）：
 --   ACTIONS.PICKUP.fn 要求 target.components.inventoryitem 存在且 canbepickedup、
 --   目标不在 limbo、不是正在燃烧/飞行的投掷物；入包走 inventory:GiveItem。
 --   白名单只放行"本构建里已核实是普通地面物品"的 prefab。

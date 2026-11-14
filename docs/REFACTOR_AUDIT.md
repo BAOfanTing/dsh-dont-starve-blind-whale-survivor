@@ -61,7 +61,7 @@
 |---|---|---|
 | `docs/` 下 Markdown | **104** | **104**（另新增 5 份现行文档：ARCHITECTURE / STATUS / TESTING / REFACTOR_AUDIT / milestones/INDEX） |
 | `docs/` 顶层散落文档 | 57 | **1**（只剩 `dsh-plugin.md`，因为 `package.json` 打包它） |
-| `docs/archive/` | 0 | 103（M0 3 + M1 17 + M2 18 + security 11 + api 4 + legacy 50） |
+| `docs/archive/` | 0 | 103（M0 3 + M1 17 + M2 18 + security 11 + api 4 + legacy 50）→ **0**（SURVIVAL-07 已整体删除） |
 | 归档后"日常必读"文档 | — | **4**（README + ARCHITECTURE + STATUS + TESTING） |
 
 ---
@@ -104,8 +104,8 @@ archive/ 163  ← legacy-mcp-server / legacy-agent / legacy-game-bridge / phase-
 
 ### 4.1 代码（98 个文件 → `archive/`）
 
-> **SURVIVAL-07 更新（2026-11）**：`archive/` 已**整体删除**，连同 138 个只测归档代码的
-> `tests/phase*.test.mjs`（以及 `tests/fixtures/legacy-ts-profiles.json`）。
+> **SURVIVAL-07 更新（2026-11）**：`archive/` 与 `docs/archive/` 都已**整体删除**，
+> 连同 138 个只测归档代码的 `tests/phase*.test.mjs`（以及 `tests/fixtures/legacy-ts-profiles.json`）。
 > 理由：那 138 个用例（占当时 613 个的 22%）跑的是 A 栈的 `archive/phase-a/scripts/main/*.lua`，
 > 而现行模组 18 个 `modimport` 全是 `scripts/whale/*`、`scripts/main` 目录根本不存在 ——
 > 它们保护的是死代码，却让人误以为有 613 个测试在保护现行实现。
@@ -130,7 +130,7 @@ archive/ 163  ← legacy-mcp-server / legacy-agent / legacy-game-bridge / phase-
 | `install-bridge.ps1`、`start-bridge.ps1` | `archive/legacy-agent/` | A 栈脚本 |
 | `install-game-bridge.ps1`、`start-game-bridge.ps1` | `archive/legacy-game-bridge/` | A 栈脚本 |
 
-### 4.2 文档（103 份 → `docs/archive/`）
+### 4.2 文档（103 份 → `docs/archive/`；**该目录已于 SURVIVAL-07 删除**）
 
 见 §1.2 / §1.3 的分组；逐份路径见各目录（文件名未改）。
 
@@ -139,7 +139,7 @@ archive/ 163  ← legacy-mcp-server / legacy-agent / legacy-game-bridge / phase-
 | 文件 | 作用 |
 |---|---|
 | `docs/ARCHITECTURE.md` / `STATUS.md` / `TESTING.md` / `REFACTOR_AUDIT.md` | 四份核心文档 |
-| `docs/archive/milestones/INDEX.md` | 里程碑导航（含两套命名体系说明、M3–M6 不存在的事实） |
+| `docs/archive/milestones/INDEX.md` | 里程碑导航（含两套命名体系说明、M3–M6 不存在的事实）。**已于 SURVIVAL-07 删除** |
 | `tests/fixtures/legacy-ts-profiles.json` | 替代 `mcp-server/dist` 的最小静态 fixture（7 + 12 项名单） |
 
 ---
@@ -276,17 +276,17 @@ archive/ 163  ← legacy-mcp-server / legacy-agent / legacy-game-bridge / phase-
 
 | 引用方 | 指向 | 结果 |
 |---|---|---|
-| `lib/tools.js` | `docs/archive/milestones/M1/M1_1_get_state_schema.md` | ✅ 存在 |
+| `lib/tools.js` | ~~`docs/archive/milestones/M1/M1_1_get_state_schema.md`~~ | 已改为把字段写进工具描述（SURVIVAL-07 删除了目标文档） |
 | `tools/build-client.mjs` | `docs/dsh-plugin.md` | ✅ 原位 |
 | `package.json` | `docs/dsh-plugin.md` | ✅ 原位 |
-| `tests/lua-mod.test.mjs` | `docs/archive/milestones/M1/M1_0_migration_report.md` | ✅ |
-| `tests/m1_4-delta-truncation.test.mjs` | `docs/archive/milestones/M1/M1_4_runtime_test_report.md` | ✅ |
-| `tests/m1_4-nearby.test.mjs` | `docs/archive/milestones/M1/M1_2_runtime_test_report.md` | ✅ |
-| `tests/m2-lua-guard.test.mjs` | `docs/archive/security/M2_0_2_runtime_manual_checklist.md` | ✅ |
-| `tests/m2_0_1_lease_security.test.mjs` | `docs/archive/security/M2_0_2_security_test_report.md` | ✅ |
-| `harvestrules.lua` | `docs/archive/api/M2_3_harvest_api_audit.md` | ✅ |
-| `pickuprules.lua` | `docs/archive/api/M2_1_pickup_api_audit.md` | ✅ |
-| `README.md` | `docs/ARCHITECTURE.md` / `STATUS.md` / `TESTING.md` / `REFACTOR_AUDIT.md` / `dsh-plugin.md` / `archive/milestones/INDEX.md` | ✅ 全部存在 |
+| `tests/lua-mod.test.mjs` | ~~`docs/archive/milestones/M1/M1_0_migration_report.md`~~ | 注释已改为不依赖该文档（SURVIVAL-07） |
+| `tests/m1_4-delta-truncation.test.mjs` | ~~`docs/archive/milestones/M1/M1_4_runtime_test_report.md`~~ | 同上 |
+| `tests/m1_4-nearby.test.mjs` | ~~`docs/archive/milestones/M1/M1_2_runtime_test_report.md`~~ | 同上 |
+| `tests/m2-lua-guard.test.mjs` | ~~`docs/archive/security/M2_0_2_runtime_manual_checklist.md`~~ | 同上 |
+| `tests/m2_0_1_lease_security.test.mjs` | ~~`docs/archive/security/M2_0_2_security_test_report.md`~~ | 同上 |
+| `harvestrules.lua` | ~~`docs/archive/api/M2_3_harvest_api_audit.md`~~ | 改为指向 `docs/game-api.md` + `tools/api-lookup.mjs`（可现场复核） |
+| `pickuprules.lua` | ~~`docs/archive/api/M2_1_pickup_api_audit.md`~~ | 同上 |
+| `README.md` | `docs/ARCHITECTURE.md` / `STATUS.md` / `TESTING.md` / `REFACTOR_AUDIT.md` / `dsh-plugin.md`（`archive/milestones/INDEX.md` 那条已在 SURVIVAL-07 删掉） | ✅ 现存的全在 |
 
 ### 11.3 本地清理（不在 git 里，按批准执行）
 
@@ -300,6 +300,7 @@ archive/ 163  ← legacy-mcp-server / legacy-agent / legacy-game-bridge / phase-
 ### 11.4 结论
 
 - 日常入口收敛为 **4 份**：`README.md`、`docs/ARCHITECTURE.md`、`docs/STATUS.md`、`docs/TESTING.md`。
-- 历史资料 **104 篇一篇没删**，全部可按 `docs/archive/milestones/INDEX.md` 检索。
+- 历史资料 104 篇当时**一篇没删**、全部归到 `docs/archive/`；**该目录已于 SURVIVAL-07 整体删除**
+  （GitHub 有完整历史，`git log --oneline -- docs/archive/` 可找回）。现在留下的只有现行文档。
 - 工具表面从 37（35 唯一）收敛到 **7**，且与安全白名单**完全一致**（有测试盯着）。
 - 真实游戏验证本次 `NOT_RUN`，不冒充。

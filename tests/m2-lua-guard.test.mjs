@@ -1,6 +1,7 @@
 // M2.0：Lua 侧安全校验（Whale.guard）—— M2.0.2 改为以权威租约文件为唯一依据
 //
-// 全部是沙箱（fengari）+ 假游戏，属于 UNIT；真机验证见 docs/archive/security/M2_0_2_runtime_manual_checklist.md。
+// 全部是沙箱（fengari）+ 假游戏，属于 UNIT，**不是** DST 真机；
+// 真机手工检查表当时在 M2_0_2（已在 SURVIVAL-07 随 docs/archive 删除，git 历史可找回）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
