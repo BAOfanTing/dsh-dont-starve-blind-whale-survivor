@@ -14,6 +14,7 @@ tmp-*
 
 # 本机运行期产物 / 生成物
 .runtime/
+tests/artifacts/
 DontStarveWhaleSurvivor/bws_config.lua
 # 插件内置会话日志（每次覆盖写，只保留最新一次；不入库）
 latestLogs/

@@ -194,7 +194,7 @@ const READY_BUSH = 'mkbush({ prefab = "berrybush", x = 3, z = 0, guid = 11 })'
 
 // ═══════════════════════ 1. HarvestRules：候选资格 ═══════════════════════
 
-test('harvest-01 候选：批准的浆果丛通过；树/岩石/草/胡萝卜/其他一律 prefab_not_allowed', async () => {
+test('harvest-01 候选：批准的食物植物（浆果丛/多汁浆果/胡萝卜等）通过；树/岩石/草/其他一律 prefab_not_allowed', async () => {
   const env = await load()
   env.run(`OUT = ""
     local function t(e)
@@ -210,7 +210,7 @@ test('harvest-01 候选：批准的浆果丛通过；树/岩石/草/胡萝卜/�
     t(mkbush({ prefab = "carrot_planted" }))
     t(mkbush({ prefab = "beebox" }))`, '候选')
   assert.equal(env.get('OUT'),
-    'true|nil;true|nil;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;')
+    'true|nil;true|nil;true|nil;false|prefab_not_allowed;false|prefab_not_allowed;false|prefab_not_allowed;true|nil;false|prefab_not_allowed;')
 })
 
 test('harvest-02 候选：缺组件 / 着火 / 炽热 / 失效 / limbo 各自的原因', async () => {

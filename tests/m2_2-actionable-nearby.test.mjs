@@ -545,8 +545,9 @@ test('M2.2-21 guard 与 Observer 共用同一份白名单（同一张表，不�
             OUT_LIST = table.concat(Whale.pickuprules.PrefabList(), ",")
             OUT_MAX = tostring(Whale.guard.PICKUP_MAX_TILES)`, '一致性')
   assert.equal(env.get('OUT_SAME'), 'true', '必须是同一张表（杜绝两份规则漂移）')
-  assert.equal(env.get('OUT_LIST'), 'berries,berries_juicy,carrot,cutgrass,flint,twigs',
-    '只多放行了地上的基础食物（其它 prefab 仍然拒绝）')
+  assert.equal(env.get('OUT_LIST'),
+    'berries,berries_cooked,berries_juicy,berries_juicy_cooked,blue_cap,carrot,carrot_cooked,corn,corn_cooked,cutgrass,eggplant,eggplant_cooked,fish,fish_cooked,flint,froglegs,froglegs_cooked,green_cap,honey,meat,meat_cooked,pumpkin,pumpkin_cooked,red_cap,smallmeat,smallmeat_cooked,twigs',
+    '放行了地上的材料与基础/熟食食物（其它非白名单 prefab 仍然拒绝）')
   assert.equal(env.get('OUT_MAX'), '2.5', '执行距离上限仍在执行侧')
 })
 

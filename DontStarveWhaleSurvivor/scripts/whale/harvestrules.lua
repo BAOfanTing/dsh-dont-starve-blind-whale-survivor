@@ -31,22 +31,29 @@ local ipairs = ipairs
 
 H.SCHEMA = "bws.harvestrules/1"
 
---- 本阶段批准的唯一试点类型：普通浆果丛。
---- berrybush 与 berrybush2 共用同一个 normal_postinit（SetUp("berries", ...)，未设 droppicked），
---- 语义完全一致，只是动画 bank 不同，所以按"同一种目标类型"一起放行。
---- 明确不放行：berrybush_juicy（droppicked + jostlepick，产物落地、距离规则不同）、
---- grass/sapling/reeds/carrot_planted/mushroom（另外的动作语义或 remove_when_picked）、
---- 农田 crop、harvestable 设施、树/岩石/冰/建筑/生物。
+--- 允许收获的自然食物植物。
+--- 原生均为 pickable 组件，动作均为 ACTIONS.PICK。
+--- 包括普通浆果丛、多汁浆果丛、地上的胡萝卜、红绿蓝蘑菇。
 H.PREFABS = {
     berrybush = true,
     berrybush2 = true,
+    berrybush_juicy = true,
+    carrot_planted = true,
+    red_mushroom = true,
+    green_mushroom = true,
+    blue_mushroom = true,
 }
 
---- 每个试点对象的产物 prefab（来自 prefab 脚本的 pickable:SetUp(product, ...)）。
+--- 每个对象的产物 prefab（来自 prefab 脚本的 pickable:SetUp(product, ...)）。
 --- 仅用于结果核对，不用于"按 prefab 搜目标"。
 H.PRODUCT = {
     berrybush = "berries",
     berrybush2 = "berries",
+    berrybush_juicy = "berries_juicy",
+    carrot_planted = "carrot",
+    red_mushroom = "red_cap",
+    green_mushroom = "green_cap",
+    blue_mushroom = "blue_cap",
 }
 
 --- 原生 PickRangeCheck 里的固定加数（scripts/actions.lua:18）。

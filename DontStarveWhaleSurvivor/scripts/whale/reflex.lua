@@ -427,7 +427,7 @@ local function push_harvest(p, ent)
     if p == nil or ent == nil then return false end
     local ok_busy, buffered = pcall(function() return p:GetBufferedAction() end)
     if ok_busy and buffered ~= nil then return false end
-    local ok_ba, ba = pcall(function() return GLOBAL.BufferedAction(p, ent, GLOBAL.ACTIONS.HARVEST, nil) end)
+    local ok_ba, ba = pcall(function() return GLOBAL.BufferedAction(p, ent, GLOBAL.ACTIONS.PICK, nil) end)
     if not ok_ba or ba == nil then return false end
     return pcall(function() A.push(p, ba) end)
 end
@@ -441,11 +441,15 @@ local function push_pickup(p, ent)
     return pcall(function() A.push(p, ba) end)
 end
 
-local function ready_berry(p, radius)
+local function ready_food_plant(p, radius)
+    local hr = Whale ~= nil and Whale.harvestrules or nil
     return U.find_nearest(p, radius or 12, nil, nil, function(e)
         if e == nil then return false end
+        if hr ~= nil and hr.IsCandidate(e, p) then
+            return hr.IsReady(e) == true
+        end
         local prefab = tostring(e.prefab or "")
-        if prefab ~= "berrybush" and prefab ~= "berrybush2" and prefab ~= "berrybush_juicy" then
+        if prefab ~= "berrybush" and prefab ~= "berrybush2" and prefab ~= "berrybush_juicy" and prefab ~= "carrot_planted" then
             return false
         end
         if e:HasTag("barren") then return false end
@@ -933,10 +937,11 @@ local function reflex_forage(p)
     if rules ~= nil and inv ~= nil and rules.PickBest(inv) ~= nil then return false end
     if not cooldown_ok("forage") then return false end
 
-    local bush = ready_berry(p, 12)
-    if bush ~= nil and push_harvest(p, bush) then
+    local plant = ready_food_plant(p, 12)
+    if plant ~= nil and push_harvest(p, plant) then
         mark("forage")
-        say(p, "forage", "没吃的了，先采最近的浆果")
+        local lbl = U.pretty(plant) or "食物"
+        say(p, "forage", "没吃的了，先采最近的" .. lbl)
         return true
     end
     local food = ready_ground_food(p, 8)
