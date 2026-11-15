@@ -131,6 +131,40 @@ async function expectReject(commandObj, reason, files) {
 
 // ─────────────────────────── 权威租约 / 协议 ───────────────────────────
 
+for (const explicit of [false, true]) {
+  for (const scenario of ['healing', 'no_healing', 'healthy']) {
+    test(`guard-eat：满饥饿 ${scenario}、指定食物=${explicit}`, async () => {
+      const env = await load()
+      env.run(readFileSync(join(MOD, 'scripts', 'whale', 'eatrules.lua'), 'utf8'))
+      env.reset()
+      env.run(`
+        PLAYER.components.hunger = { current = 100, max = 100, GetPercent = function() return 1 end }
+        PLAYER.components.health.currenthealth = ${scenario === 'healthy' ? 100 : 15}
+        local food = mkent({ prefab = "${scenario === 'no_healing' ? 'berries' : 'carrot'}" })
+        food.components.edible = { healthvalue = ${scenario === 'no_healing' ? 0 : 1}, hungervalue = 12.5 }
+        PLAYER.components.inventory.ForEachItem = function(self, fn) fn(food) end
+      `)
+      env.setCommand(cmd({ action: 'eat', args: explicit ? { food: scenario === 'no_healing' ? 'berries' : 'carrot' } : {} }))
+      assert.equal(env.validate(), scenario === 'healing' ? 'true|nil' : 'false|not_hungry')
+    })
+  }
+}
+
+for (const item of ['lantern', 'minerhat', 'monstermeat']) {
+  test(`guard-equip：便携光源白名单 ${item}`, async () => {
+    const env = await load()
+    env.run(readFileSync(join(MOD, 'scripts', 'whale', 'equiprules.lua'), 'utf8'))
+    env.reset()
+    env.run(`
+      local item = mkent({ prefab = "${item}" })
+      item.components.inventoryitem = {}
+      PLAYER.components.inventory.ForEachItem = function(self, fn) fn(item) end
+    `)
+    env.setCommand(cmd({ action: 'equip', args: { item } }))
+    assert.equal(env.validate(), item === 'monstermeat' ? 'false|item_not_equippable' : 'true|nil')
+  })
+}
+
 test('guard-1 合法命令通过（权威租约齐全且精确匹配）', async () => {
   assert.equal(await check(cmd()), 'true|nil')
 })

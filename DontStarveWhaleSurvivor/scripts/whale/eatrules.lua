@@ -102,9 +102,14 @@ function E.IsEdible(item)
     return true, nil
 end
 
+function E.CanHeal(item)
+    local edible = item ~= nil and item.components ~= nil and item.components.edible or nil
+    return edible ~= nil and type(edible.healthvalue) == "number" and edible.healthvalue > 0
+end
+
 --- 从背包里挑一个**最该吃**的（饥饿越低越优先吃补得多的；这里简单按白名单顺序 + 新鲜度）
 --- 注意：这是服务端选择逻辑，模型只能给"要吃哪一类"或干脆不给（自动挑）。
-function E.PickBest(inventory)
+function E.PickBest(inventory, healing_only)
     if inventory == nil then return nil end
     local best, best_score = nil, nil
     local ok = pcall(function()
@@ -113,6 +118,7 @@ function E.PickBest(inventory)
             local can, _ = E.IsEdible(item)
             if not can then return end
             if E.AUTO_SAFE[item.prefab] ~= true then return end
+            if healing_only and not E.CanHeal(item) then return end
             -- 分数：优先新鲜度高的，其次按白名单里定义的顺序（越靠前越基础）
             local freshness = 1
             local stackable = item.components ~= nil and item.components.perishable or nil

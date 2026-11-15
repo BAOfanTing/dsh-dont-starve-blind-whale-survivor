@@ -749,30 +749,29 @@ function G.validate(cmd)
         local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
         if inv == nil then return false, "missing_component:inventory", nil end
 
+        local hunger = actor.components.hunger
+        local full = hunger:GetPercent() >= 0.99
+        local item = nil
         -- 模型可以指定"吃哪一类"，但必须是白名单里的
         local food = cmd.args.food
         if food ~= nil and food ~= "" then
             local ok_f, why_f = er.IsAllowedPrefab(tostring(food))
             if not ok_f then return false, why_f or "food_not_allowed", nil end
-            -- 必须真的在背包里
-            local found = false
-            pcall(function()
-                inv:ForEachItem(function(it)
-                    if found then return end
-                    if it ~= nil and it:IsValid() and tostring(it.prefab) == tostring(food) then found = true end
-                end)
+            inv:ForEachItem(function(it)
+                if item ~= nil then return end
+                if it ~= nil and it:IsValid() and tostring(it.prefab) == tostring(food) and er.IsEdible(it) then item = it end
             end)
-            if not found then return false, "not_in_inventory", nil end
+            if item == nil then return false, "not_in_inventory", nil end
         else
-            -- 不指定就让服务端挑；挑不出来直接拒（不要空跑一次动作）
-            if er.PickBest(inv) == nil then return false, "no_food", nil end
+            item = er.PickBest(inv, full)
+            if item == nil then return false, full and "not_hungry" or "no_food", nil end
         end
 
-        -- 饥饿满了就别吃（避免浪费食物，也避免"吃了没效果"被误报成功）
-        local hunger = actor.components.hunger
-        local ok_pct, pct = pcall(function() return hunger:GetPercent() end)
-        if ok_pct and type(pct) == "number" and pct >= 0.99 then
-            return false, "not_hungry", nil
+        if full then
+            local health = actor.components.health
+            if health.currenthealth >= health.maxhealth or not er.CanHeal(item) then
+                return false, "not_hungry", nil
+            end
         end
     end
 

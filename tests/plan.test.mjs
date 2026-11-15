@@ -214,7 +214,7 @@ test('PLAN-18：未点燃的火堆不算光源', () => {
   assert.equal(plan.goalId, 'light')
 })
 
-test('PLAN-19：南瓜灯这类永久光源也算有光', () => {
+test('PLAN-19：南瓜灯实际照亮角色时不要求额外光源', () => {
   const snapshot = makeSnapshot({
     phase: 'night',
     buckets: {
@@ -223,8 +223,138 @@ test('PLAN-19：南瓜灯这类永久光源也算有光', () => {
       }],
     },
   })
+  snapshot.player.in_light = true
   const plan = derivePlan(snapshot)
   assert.notEqual(plan.goalId, 'light')
+})
+
+test('PLAN-20：残血且饥饿为零时先找食物，不等自然回血', () => {
+  const plan = derivePlan(makeSnapshot({ health: 40, hunger: 0 }))
+  assert.equal(plan.goalId, 'eat')
+  assert.match(plan.next, /seek|pickup|harvest/)
+  assert.doesNotMatch(plan.next, /等回血|血会慢慢回/)
+})
+
+test('PLAN-21：不能立即治疗时，低血量不阻塞光源准备', () => {
+  const plan = derivePlan(makeSnapshot({ health: 40, items: ITEMS(['berries', 2]) }))
+  assert.equal(plan.goalId, 'prep_light')
+})
+
+for (const inLight of [false, true]) {
+  test(`PLAN-light：实际照明=${inLight} 优先于附近火源和手持物品推测`, () => {
+    const snapshot = makeSnapshot({
+      phase: 'night',
+      items: ITEMS(['torch', 1]),
+      equipment: { slots: { hands: { prefab: 'lantern', percent: 100 } } },
+      buckets: { structures: [{ ref: '#1', prefab: 'campfire', distance: 6, fuel_percent: 50 }] },
+    })
+    snapshot.player.in_light = inLight
+    const plan = derivePlan(snapshot)
+    assert.equal(plan.goalId === 'light', !inLight)
+  })
+}
+
+test('PLAN-light：没有实际照明数据时，不能仅凭远处火源判安全', () => {
+  const snapshot = makeSnapshot({ phase: 'night', buckets: {
+    structures: [{ prefab: 'campfire', distance: 6, fuel_percent: 50 }],
+  } })
+  assert.equal(derivePlan(snapshot).goalId, 'light')
+})
+
+for (const item of ['lantern', 'minerhat']) {
+  test(`PLAN-light：黑暗中优先装备背包已有的 ${item}`, () => {
+    const snapshot = makeSnapshot({ phase: 'night', items: [{ prefab: item, count: 1, percent: 100 }] })
+    snapshot.player.in_light = false
+    assert.match(derivePlan(snapshot).next, new RegExp(`equip ${item}`))
+  })
+}
+
+test('PLAN-light：头部已装备的矿工帽计入便携照明储备', () => {
+  const snapshot = makeSnapshot({ equipment: { worn: [{ key: 'head', item: { prefab: 'minerhat', percent: 80 } }] } })
+  snapshot.player.in_light = true
+  assert.notEqual(derivePlan(snapshot).goalId, 'prep_light')
+})
+
+test('PLAN-22：低血量优先吃回血食物，不反复吃零回血的生浆果', () => {
+  const plan = derivePlan(makeSnapshot({ health: 40, items: ITEMS(['berries', 5], ['carrot_cooked', 1]) }))
+  assert.equal(plan.goalId, 'heal')
+  assert.match(plan.next, /eat.*carrot_cooked/)
+  assert.doesNotMatch(plan.next, /等回血|血会慢慢回/)
+  const withoutHealing = derivePlan(makeSnapshot({ health: 40, items: ITEMS(['berries', 5], ['torch', 1]) }))
+  assert.doesNotMatch(withoutHealing.next, /等回血|血会慢慢回/)
+  assert.match(withoutHealing.next, /seek|pickup/)
+})
+
+test('PLAN-23：白天识别熟食和多汁浆果，不带着食物继续找浆果', () => {
+  for (const food of ['berries_juicy', 'meat_cooked', 'smallmeat_cooked', 'froglegs_cooked', 'fish_cooked',
+    'berries_cooked', 'berries_juicy_cooked', 'carrot_cooked', 'corn_cooked', 'pumpkin_cooked', 'eggplant_cooked']) {
+    const plan = derivePlan(makeSnapshot({ hunger: 20, items: ITEMS([food, 1]) }))
+    assert.equal(plan.goalId, 'eat', food)
+    assert.match(plan.next, /^eat/, food)
+  }
+  const mushrooms = derivePlan(makeSnapshot({ hunger: 20, items: ITEMS(['red_cap', 1], ['monstermeat', 1]) }))
+  assert.doesNotMatch(mushrooms.next, /^eat/)
+})
+
+test('PLAN-24：缺食物时优先捡可见安全食物，保留当前目标引用', () => {
+  const buckets = {
+    pickupables: [
+      { ref: '#1', prefab: 'monstermeat', distance: 1 },
+      { ref: '#2', prefab: 'carrot', distance: 3 },
+      { ref: '#3', prefab: 'berries', distance: 6 },
+    ],
+    harvestables: [{ ref: '#4', prefab: 'berrybush', distance: 5, harvest_ready: true }],
+  }
+  for (const hunger of [20, 60]) {
+    const plan = derivePlan(makeSnapshot({ hunger, buckets }))
+    assert.equal(plan.goalId, hunger < 40 ? 'eat' : 'stock_food')
+    assert.match(plan.next, /pickup.*#2.*r1-n2/)
+    assert.doesNotMatch(plan.next, /monstermeat/)
+  }
+})
+
+test('PLAN-25：熟食储备充足不再触发存粮，远处或不安全食物不算现成食物', () => {
+  const food = { ref: '#1', prefab: 'berrybush', distance: 5, harvest_ready: true }
+  const stocked = derivePlan(makeSnapshot({ items: ITEMS(['carrot_cooked', 2], ['torch', 1]), buckets: { harvestables: [food] } }))
+  assert.equal(stocked.goalId, 'explore')
+  for (const item of [
+    { ref: '#2', prefab: 'carrot', distance: 50 },
+    { ref: '#2', prefab: 'carrot', distance: null },
+    { ref: '#2', prefab: 'red_cap', distance: 1 },
+  ]) {
+    const plan = derivePlan(makeSnapshot({ hunger: 20, buckets: { pickupables: [item] } }))
+    assert.doesNotMatch(plan.next, /pickup.*#2/)
+  }
+})
+
+test('PLAN-26：黄昏只有低耐久火把仍需准备，但入夜能先举起来救急', () => {
+  const items = { 0: { prefab: 'torch', count: 1, percent: 1 } }
+  const dusk = derivePlan(makeSnapshot({ phase: 'dusk', items }))
+  assert.equal(dusk.goalId, 'prep_light')
+  assert.match(dusk.why, /燃料|耐久|储备/)
+  const night = derivePlan(makeSnapshot({ phase: 'night', items }))
+  assert.equal(night.goalId, 'light')
+  assert.match(night.next, /equip torch/)
+})
+
+test('PLAN-27：多把火把按剩余燃料合计，不只看有没有', () => {
+  for (const [percents, expected] of [[[30, 30], 'prep_light'], [[40, 40], 'explore'], [[0, 80], 'explore']]) {
+    const items = percents.map((percent) => ({ prefab: 'torch', count: 1, percent }))
+    const plan = derivePlan(makeSnapshot({ phase: 'dusk', items }))
+    assert.equal(plan.goalId, expected, String(percents))
+  }
+})
+
+test('PLAN-28：低耐久火把未补足前保护材料，白天手持时先收起', () => {
+  const items = [{ prefab: 'torch', count: 1, percent: 1 }, { prefab: 'twigs', count: 2 }, { prefab: 'flint', count: 1 }]
+  const plan = derivePlan(makeSnapshot({ items, buckets: { resources: [{ prefab: 'evergreen', distance: 3 }] } }))
+  assert.equal(plan.goalId, 'prep_light')
+  assert.ok(!plan.candidates.some((goal) => goal.id === 'tool_axe'))
+  const held = derivePlan(makeSnapshot({ equipment: { slots: { hands: { prefab: 'torch', percent: 1 } } } }))
+  assert.equal(held.goalId, 'prep_light')
+  assert.match(held.next, /unequip.*hands/)
+  const craft = derivePlan(makeSnapshot({ items: ITEMS(['cutgrass', 2], ['twigs', 2]) }))
+  assert.match(craft.next, /craft torch.*unequip/)
 })
 
 test('PLAN-10：compact 只给一行，完整版带原因和下一步', () => {

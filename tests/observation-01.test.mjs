@@ -98,6 +98,66 @@ test('OBS-1：Agent 启动时必须先读一次完整状态', async () => {
   assert.equal(calls[0], 'get_state', `第一次调用必须是 get_state，实际 ${calls[0]}`)
 })
 
+test('OBS-20：首次和失败后自动观察都保留结构化 get_state 的正文', { timeout: 3000 }, async (t) => {
+  const prompts = []
+  const done = Promise.withResolvers()
+  let observations = 0
+  const runner = new AiRunner({
+    bridge: makeBridge(),
+    settings: () => ({ apiKey: 'x', model: 'm' }),
+    instructions: () => '规则',
+    toolList: () => [],
+    callTool: async (name) => name === 'get_state'
+      ? { text: `真实状态正文 ${++observations}`, outcome: null }
+      : { text: '失败：not_ready', outcome: { status: 'failed' } },
+    chatFn: async (config, messages) => {
+      prompts.push(messages.at(-1).content)
+      if (prompts.length === 2) {
+        runner.stop('test')
+        done.resolve()
+      }
+      return { content: '', toolCalls: [{ id: 'g1', name: 'gather', args: {} }], rawToolCalls: [] }
+    },
+  })
+  t.after(() => runner.stop('test cleanup'))
+  runner.start()
+  await done.promise
+  assert.match(prompts[0], /真实状态正文 1/)
+  assert.match(prompts[1], /真实状态正文 2/)
+  assert.doesNotMatch(prompts.join('\n'), /\[object Object\]/)
+})
+
+test('OBS-21：模型主动观察后，背包记忆由最新快照覆盖', { timeout: 3000 }, async (t) => {
+  const bridge = makeBridge({ inventory: { items: [{ prefab: 'berries', count: 5 }] } })
+  const prompts = []
+  const done = Promise.withResolvers()
+  let observations = 0
+  const runner = new AiRunner({
+    bridge,
+    settings: () => ({ apiKey: 'x', model: 'm' }),
+    instructions: () => '规则',
+    toolList: () => [],
+    callTool: async () => {
+      if (++observations === 2) bridge.raw.data.player.inventory.items = [{ prefab: 'carrot', count: 2 }]
+      return { text: '最新背包', outcome: null }
+    },
+    chatFn: async (config, messages) => {
+      prompts.push(messages.at(-1).content)
+      if (prompts.length === 2) {
+        runner.stop('test')
+        done.resolve()
+      }
+      return { content: '', toolCalls: [{ id: 's1', name: 'get_state', args: {} }], rawToolCalls: [] }
+    },
+  })
+  t.after(() => runner.stop('test cleanup'))
+  runner.start()
+  await done.promise
+  assert.match(prompts[1], /已知背包（来自已核对的结果）：carrot×2/)
+  assert.doesNotMatch(prompts[1], /berries×5/)
+  assert.equal(observations, 2)
+})
+
 test('OBS-2：后续轮次不再无条件自动 get_state（动作成功后复用结果）', async () => {
   const bridge = makeBridge()
   // 连续三步都成功；观察窗口 10 秒 / 3 次改动，短时间内不该反复观察

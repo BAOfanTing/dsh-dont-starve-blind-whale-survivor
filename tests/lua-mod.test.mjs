@@ -104,6 +104,7 @@ local function makeplayer()
         locomotor = {
             IsMoving = function() return false end,
             Stop = function() end,
+            Clear = function(self) self.bufferedaction = nil end,
             GoToPoint = function(self, pt) MOVED_TO = pt end,
             PushAction = function(self, ba) PUSHED = ba end,
         },
@@ -133,6 +134,11 @@ local function makeplayer()
             }),
         }),
     })
+    function p:IsInLight()
+        if GLOBAL.TheWorld.state.phase ~= "night" then return true end
+        local hand = self.components.inventory:GetEquippedItem(GLOBAL.EQUIPSLOTS.HANDS)
+        return hand ~= nil and (hand.prefab == "torch" or hand.prefab == "lantern")
+    end
     function p:GetBufferedAction() return BUFFERED end
     p.sg = { HasStateTag = function(self, tag) return true end }
     function p:ClearBufferedAction() BUFFERED = nil end
@@ -226,6 +232,20 @@ function loadMod(fengari) {
     }
   }
   return { run, runFile, global }
+}
+
+for (const inLight of [false, true, null]) {
+  test(`观察光照：in_light=${inLight} 不被附近光源猜测替代`, async () => {
+    const env = loadMod(await import('fengari'))
+    env.run(`PLAYER.IsInLight = ${inLight === null ? 'nil' : `function() return ${inLight} end`}`)
+    env.runFile('OUT = Whale.json.encode(Whale.observe.BuildData(PLAYER, { seq = 1, now = 1000 }))')
+    const data = JSON.parse(env.global('OUT'))
+    assert.equal(data.player.in_light, inLight ?? undefined)
+    assert.equal(data.observer.unavailable_fields.includes('player.in_light'), inLight === null)
+    const { normalizeState, toJsonPayload } = await import('../lib/state/snapshot.js')
+    const snapshot = normalizeState({ data }, { ageMs: 0 })
+    assert.equal(toJsonPayload(snapshot).player.in_light, inLight ?? undefined)
+  })
 }
 
 test('模组能在假游戏里加载，状态文字说得清楚', async () => {
@@ -927,6 +947,8 @@ test('reflex：血少时自动进食走安全白名单，不碰怪物肉/生蘑�
     local inv = PLAYER.components.inventory
     inv._items[3] = fakefood("green_cap", 12.5)
     inv._items[4] = fakefood("monstermeat", 25)
+    inv._items[5] = fakefood("carrot", 12.5)
+    inv._items[5].components.edible.healthvalue = 1
     PLAYER.components.health.currenthealth = 30   -- 20%：触发 reflex_heal
     for _ = 1, 5 do Whale.reflex.Tick() end           -- 内部 1 秒节流（每 5 次 tick）
     JOB_NAME = Whale.job ~= nil and Whale.job.name or "nil"
@@ -934,7 +956,7 @@ test('reflex：血少时自动进食走安全白名单，不碰怪物肉/生蘑�
     PICKED = PUSHED ~= nil and PUSHED.invobject and PUSHED.invobject.prefab or "nil"
   `)
   assert.equal(global('JOB_NAME'), 'eat', '血少且没有治疗物品时应该启动安全进食')
-  assert.equal(global('PICKED'), 'berries', '自动进食必须跳过生绿蘑菇和怪物肉')
+  assert.equal(global('PICKED'), 'carrot', '回血进食必须跳过零回血食物、生绿蘑菇和怪物肉')
 })
 
 test('reflex：已放置的南瓜灯即使还带 inventoryitem 也算光源', async () => {
@@ -972,6 +994,7 @@ test('reflex：已放置的南瓜灯即使还带 inventoryitem 也算光源', as
         HasTag = function(self, tag) return tag == "light" end,
     }
     NEARBY = { lantern }
+    PLAYER.IsInLight = function() return true end
     for _ = 1, 5 do Whale.reflex.Tick() end
     EQUIPPED = inv:GetEquippedItem(GLOBAL.EQUIPSLOTS.HANDS) ~= nil and "yes" or "no"
     JOB = Whale.job ~= nil and Whale.job.name or "nil"
@@ -1588,6 +1611,15 @@ test('S8-6：范围内没成熟目标时，失败消息必须告诉模型"最近
     NOT_READY = mkent("berrybush", 95, 12 * 4 + 2 + 12, 45 * 4 + 2, false)
     READY_FAR = mkent("berrybush", 96, 12 * 4 + 2 + 40, 45 * 4 + 2, true)
     NEARBY = { NOT_READY, READY_FAR }
+    GLOBAL.TheSim.FindEntities = function(self, x, y, z, radius)
+        local found = {}
+        for _, ent in ipairs(NEARBY) do
+            if (ent._x - x)^2 + (ent._z - z)^2 <= radius^2 then
+                found[#found + 1] = ent
+            end
+        end
+        return found
+    end
     NOW = 100
   `, '脚边没熟、10 格外有熟的')
 
@@ -1597,16 +1629,13 @@ test('S8-6：范围内没成熟目标时，失败消息必须告诉模型"最近
       WriteState = function() end,
     }
     PUSHED = nil
-    -- 注意：假环境的 TheSim:FindEntities **忽略半径**，所以"范围外"没法用坐标模拟。
-    -- 做法：让那丛成熟的走位超时（推进 NOW 越过 12 秒），任务就会退回 next、
-    -- 进而走到"零收获"分支。budget 给足，避免中途被预算兜底截走。
     local ctx = { survival_area = true, radius = 6, limit = 1, budget_s = 300 }
     local started, serr = Whale.actions.Start("gather_area", { radius = 6, limit = 1 }, "c-hint", ctx)
     assert(started == true, "应该能开始：" .. tostring(serr))
     for i = 1, 60 do
         if Whale.job == nil then break end
         Whale.actions.Tick()
-        NOW = NOW + 3          -- 推进游戏时间，让走位超时能触发
+        NOW = NOW + 3
     end
     OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok == true)
     OUT_TEXT = REPORTED ~= nil and REPORTED.text or ""
@@ -1619,6 +1648,203 @@ test('S8-6：范围内没成熟目标时，失败消息必须告诉模型"最近
   assert.match(text, /1[0-9](\.\d)? 格|格/, `要报出最近能采的有多远，实际：${text}`)
   assert.ok(!/no_targets_in_range/.test(text), '不该再出现那句没有指导意义的 no_targets_in_range')
 })
+
+const AREA_MOVEMENT_HELPER = `
+    NOW = 100
+    MOVE_STATE = "idle"
+    HARD_BUSY = false
+    BERRY_COUNT = 6
+    PICK_COUNT = 0
+    local p = GLOBAL.AllPlayers[1]
+    local loco = p.components.locomotor
+    p.components.inventory._items[1].components.stackable.StackSize = function() return BERRY_COUNT end
+    p.sg.HasStateTag = function(self, tag)
+        return tag == MOVE_STATE or (tag == "busy" and (HARD_BUSY or MOVE_STATE == "picking"))
+    end
+    loco.GoToPoint = function(self, pt)
+        self.dest = pt
+        MOVED_TO = pt
+        MOVE_STATE = "moving"
+    end
+    loco.Stop = function(self)
+        self.dest = nil
+        MOVE_STATE = "idle"
+    end
+    loco.Clear = function(self)
+        self.dest = nil
+        self.bufferedaction = nil
+    end
+    loco.PushAction = function(self, ba)
+        self:Clear()
+        self.bufferedaction = ba
+        PUSHED = ba
+        PICK_COUNT = PICK_COUNT + 1
+        MOVE_STATE = "moving"
+    end
+    function advance_gather()
+        if BUFFERED ~= nil then
+            BUFFERED.target.components.pickable.CanBePicked = function() return false end
+            BERRY_COUNT = BERRY_COUNT + 1
+            BUFFERED = nil
+            MOVE_STATE = "idle"
+        elseif loco.bufferedaction ~= nil then
+            local target = loco.bufferedaction.target
+            p._x, p._z = target._x - 1, target._z
+            BUFFERED = loco.bufferedaction
+            loco.bufferedaction = nil
+            MOVE_STATE = "picking"
+        elseif loco.dest ~= nil then
+            p._x, p._z = loco.dest.x - 1, loco.dest.z
+        end
+        NOW = NOW + 0.5
+    end
+    Whale.bridge = {
+        Report = function(ok, text) REPORTED = { ok = ok, text = text } end,
+        WriteState = function() end,
+    }
+`
+
+test('AREA-1：走到浆果丛旁仍是 moving 时，交给原生 PICK 并连续采到五份浆果', async () => {
+  const { run, runFile, global } = loadMod(await import('fengari'))
+  run(ENT_HELPER, '实体辅助')
+  run(AREA_MOVEMENT_HELPER, '移动与采摘状态')
+  runFile(`
+    local p = GLOBAL.AllPlayers[1]
+    NEARBY = {}
+    for i = 1, 5 do
+        local bush = mkent("berrybush", 100 + i, p._x + 20 + i * 4, p._z)
+        bush.components.pickable.product = "berries"
+        NEARBY[i] = bush
+    end
+    local args = { prefab = "berrybush", radius = 16, limit = 5 }
+    local ctx = { survival_area = true, prefab = "berrybush", radius = 16, limit = 5, budget_s = 105 }
+    assert(Whale.actions.Start("gather_area", args, "c-five", ctx))
+    for i = 1, 80 do
+        Whale.actions.Tick()
+        if Whale.job == nil then break end
+        advance_gather()
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or "未结束"
+    OUT_GAINED = tostring(BERRY_COUNT - 6)
+    OUT_PUSHES = tostring(PICK_COUNT)
+    OUT_CLEARED = tostring(Whale.job == nil and p.components.locomotor.dest == nil
+        and p.components.locomotor.bufferedaction == nil and BUFFERED == nil)
+  `)
+  assert.equal(global('OUT_OK'), 'true', global('OUT_TEXT'))
+  assert.equal(global('OUT_GAINED'), '5')
+  assert.equal(global('OUT_PUSHES'), '5', '每丛只推一次，不靠重复推送撞运气')
+  assert.match(global('OUT_TEXT'), /采了 5 个（berries\+5）/)
+  assert.equal(global('OUT_CLEARED'), 'true')
+})
+
+test('AREA-2：next 阶段就在目标旁，普通行走也不能挡住采摘', async () => {
+  const { run, runFile, global } = loadMod(await import('fengari'))
+  run(ENT_HELPER, '实体辅助')
+  run(AREA_MOVEMENT_HELPER, '移动与采摘状态')
+  runFile(`
+    local p = GLOBAL.AllPlayers[1]
+    NEARBY = { mkent("berrybush", 110, p._x + 4, p._z) }
+    MOVE_STATE = "moving"
+    Whale.actions.Start("gather_area", {}, "c-near-moving", { survival_area = true, limit = 1 })
+    Whale.actions.Tick()
+    OUT_PICK = tostring(PUSHED ~= nil and PUSHED.action == GLOBAL.ACTIONS.PICK)
+  `)
+  assert.equal(global('OUT_PICK'), 'true')
+})
+
+for (const phase of ['next', 'walking']) {
+  for (const blocker of ['HARD_BUSY = true', 'BUFFERED = {}', 'loco.bufferedaction = {}']) {
+    test(`AREA-3：${phase} 不能覆盖真实忙碌或排队动作（${blocker}）`, async () => {
+      const { run, runFile, global } = loadMod(await import('fengari'))
+      run(ENT_HELPER, '实体辅助')
+      run(AREA_MOVEMENT_HELPER, '移动与采摘状态')
+      runFile(`
+        local p = GLOBAL.AllPlayers[1]
+        local loco = p.components.locomotor
+        local bush = mkent("berrybush", 111, p._x + 24, p._z)
+        NEARBY = { bush }
+        Whale.actions.Start("gather_area", {}, "c-busy", { survival_area = true, limit = 1 })
+        if "${phase}" == "walking" then
+            Whale.actions.Tick()
+            p._x = bush._x - 1
+        end
+        MOVE_STATE = "moving"
+        ${blocker}
+        MOVED_TO = nil
+        Whale.actions.Tick()
+        OUT_WAIT = tostring(PUSHED == nil and MOVED_TO == nil)
+        HARD_BUSY = false
+        BUFFERED = nil
+        loco.bufferedaction = nil
+        p._x = bush._x - 1
+        Whale.actions.Tick()
+        OUT_RESUMED = tostring(PUSHED ~= nil)
+      `)
+      assert.equal(global('OUT_WAIT'), 'true', '不得覆盖忙碌动作或其移动目标')
+      assert.equal(global('OUT_RESUMED'), 'true', '忙碌结束后应继续采摘')
+    })
+  }
+}
+
+test('AREA-4：一丛采摘超时后清掉旧动作，继续采下一丛', async () => {
+  const { run, runFile, global } = loadMod(await import('fengari'))
+  run(ENT_HELPER, '实体辅助')
+  run(AREA_MOVEMENT_HELPER, '移动与采摘状态')
+  runFile(`
+    local p = GLOBAL.AllPlayers[1]
+    local blocked = mkent("berrybush", 112, p._x + 4, p._z)
+    local reachable = mkent("berrybush", 113, p._x + 6, p._z)
+    reachable.components.pickable.product = "berries"
+    NEARBY = { blocked, reachable }
+    Whale.actions.Start("gather_area", {}, "c-recover", { survival_area = true, limit = 1, budget_s = 60 })
+    for i = 1, 60 do
+        Whale.actions.Tick()
+        if Whale.job == nil then break end
+        local queued = p.components.locomotor.bufferedaction or BUFFERED
+        if queued ~= nil and queued.target == blocked then
+            BUFFERED = queued
+            MOVE_STATE = "picking"
+            NOW = NOW + 0.5
+        else
+            advance_gather()
+        end
+    end
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or "未结束"
+    OUT_GAINED = tostring(BERRY_COUNT - 6)
+    OUT_PUSHES = tostring(PICK_COUNT)
+  `)
+  assert.equal(global('OUT_OK'), 'true', global('OUT_TEXT'))
+  assert.equal(global('OUT_GAINED'), '1')
+  assert.equal(global('OUT_PUSHES'), '2')
+  assert.match(global('OUT_TEXT'), /1 个没采成/)
+})
+
+for (const budget of [1, 60]) {
+  test(`AREA-5：走不到目标时清理移动，不建议重试失败目标（预算 ${budget} 秒）`, async () => {
+    const { run, runFile, global } = loadMod(await import('fengari'))
+    run(ENT_HELPER, '实体辅助')
+    run(AREA_MOVEMENT_HELPER, '移动与采摘状态')
+    runFile(`
+      local p = GLOBAL.AllPlayers[1]
+      NEARBY = { mkent("berrybush", 114, p._x + 24, p._z) }
+      Whale.actions.Start("gather_area", {}, "c-unreachable", { survival_area = true, limit = 1, budget_s = ${budget} })
+      for i = 1, 8 do
+          Whale.actions.Tick()
+          if Whale.job == nil then break end
+          NOW = NOW + 5
+      end
+      OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok)
+      OUT_TEXT = REPORTED ~= nil and REPORTED.text or "未结束"
+      OUT_STOPPED = tostring(Whale.job == nil and p.components.locomotor.dest == nil
+          and p.components.locomotor.bufferedaction == nil and BUFFERED == nil and MOVE_STATE == "idle")
+    `)
+    assert.equal(global('OUT_OK'), 'false', global('OUT_TEXT'))
+    assert.equal(global('OUT_STOPPED'), 'true', '失败回执之前必须真正停止旧的移动')
+    assert.doesNotMatch(global('OUT_TEXT'), /把 radius 调到|都还没长好/)
+  })
+}
 
 test('S8-7：guard 不再用"范围内没成熟目标"拒绝（那是便利判断，不是安全校验）', () => {
   const guard = readFileSync(new URL('../DontStarveWhaleSurvivor/scripts/whale/guard.lua', import.meta.url), 'utf8')

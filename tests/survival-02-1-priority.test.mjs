@@ -213,6 +213,7 @@ function makeplayer()
         locomotor = {
             IsMoving = function() return false end,
             Stop = function() end,
+            Clear = function(self) self.bufferedaction = nil end,
             GoToPoint = function(self, pt) MOVED_TO = pt end,
             PushAction = function(self, ba) PUSHED = ba end,
             WantsToMoveForward = function() return false end,
@@ -230,6 +231,17 @@ function makeplayer()
         },
         inventory = newinventory({}, {}),
     })
+    function p:IsInLight()
+        if GLOBAL.TheWorld.state.phase ~= "night" then return true end
+        for _, slot in ipairs({ "hands", "head" }) do
+            local item = self.components.inventory:GetEquippedItem(slot)
+            if item ~= nil and (item.prefab == "torch" or item.prefab == "lantern" or item.prefab == "minerhat") then
+                local fuel = item.components.fueled
+                if fuel == nil or not fuel:IsEmpty() then return true end
+            end
+        end
+        return false
+    end
     function p:GetBufferedAction() return BUFFERED end
     function p:ClearBufferedAction() BUFFERED = nil end
     p.sg = { HasStateTag = function(self, tag) return true end }
@@ -781,6 +793,7 @@ test('RF-19：fueled 烧空的火把不算可用光源（torch 用 fueled，不�
   const fengari = await import('fengari')
   const { run, runFile, global } = loadReflex(fengari)
   run(`
+    GLOBAL.TheWorld.state.phase = "night"
     PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1,
         { fueled = { IsEmpty = function() return true end,
                      GetPercent = function() return 0 end } })
@@ -1389,8 +1402,350 @@ test('RF-16：Diagnose() 能说清"当前光源是否可用 / 是否该准备"',
     REASON = tostring(d.priority_reason)
   `)
   assert.equal(global('ENABLED'), 'true')
-  assert.equal(global('USABLE'), 'false')
+  assert.equal(global('USABLE'), 'true', '白天有自然光，但仍需要准备便携光源')
   assert.equal(global('CANCRAFT'), 'true')
   assert.equal(global('PRIO'), 'P1')
   assert.equal(global('REASON'), 'light_preparation')
 })
+
+// ═══════════════════════ SURVIVAL-03：真机第 2 夜致死链（REFLEX=false 时模型干等到死） ═══════════════════════
+
+const TORCH = `mkitem("torch", 1, { inventoryitem = {}, fueled = { IsEmpty = function() return false end,
+                                            GetPercent = function() return 0.9 end } })`
+
+test('SV3-1：equiprules.HandItem 只靠 GLOBAL.EQUIPSLOTS 也能认出手上的火把（真机误报"装备栏没有变化"）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = ${TORCH}`, '手上有火把')
+  runFile(`
+    BARE = tostring(EQUIPSLOTS)
+    local h = Whale.equiprules.HandItem(PLAYER)
+    HAND = h ~= nil and h.prefab or "nil"
+  `)
+  assert.equal(global('BARE'), 'nil', '沙箱必须和模组环境一样没有裸 EQUIPSLOTS')
+  assert.equal(global('HAND'), 'torch')
+})
+
+test('SV3-2：equip torch 成功后回执"拿在手里了"，不再 10 秒后误报失败', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`PLAYER.components.inventory._items[1] = ${TORCH}`, '背包有火把')
+  runFile(`
+    Whale.reflex_on = false
+    Whale.actions.Start("equip", { item = "torch" }, "model-eq", { survival_equip = true, item = "torch" })
+    Whale.actions.Tick()
+    Whale.actions.Tick()
+    R = REPORTS[#REPORTS]
+    OK = R ~= nil and tostring(R.ok) or "nil"
+    TEXT = R ~= nil and tostring(R.text) or "nil"
+  `)
+  assert.equal(global('OK'), 'true', global('TEXT'))
+  assert.match(global('TEXT'), /拿在手里/)
+})
+
+test('SV3-3：夜里没光 + 背包有火把 —— wait 立刻失败并提示 equip torch（反射关着也不能干等）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "night"
+    PLAYER.components.inventory._items[1] = ${TORCH}
+  `, '夜里 + 背包有火把 + 手上空')
+  runFile(`
+    Whale.reflex_on = false
+    Whale.actions.Start("wait", { seconds = 30 }, "model-wait")
+    Whale.actions.Tick()
+    R = REPORTS[#REPORTS]
+    ID = R ~= nil and tostring(R.id) or "nil"
+    OK = R ~= nil and tostring(R.ok) or "nil"
+    TEXT = R ~= nil and tostring(R.text) or "nil"
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+  `)
+  assert.equal(global('ID'), 'model-wait')
+  assert.equal(global('OK'), 'false')
+  assert.match(global('TEXT'), /dark_no_light.*equip torch/)
+  assert.equal(global('JOB'), 'nil')
+})
+
+test('SV3-4：夜里手上有火把 —— wait 照常等', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(`
+    GLOBAL.TheWorld.state.phase = "night"
+    PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = ${TORCH}
+  `, '夜里 + 举着火把')
+  runFile(`
+    Whale.reflex_on = false
+    Whale.actions.Start("wait", { seconds = 30 }, "model-wait")
+    Whale.actions.Tick()
+    NOW = NOW + 5
+    Whale.actions.Tick()
+    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    N = tostring(#REPORTS)
+  `)
+  assert.equal(global('JOB'), 'wait')
+  assert.equal(global('N'), '0')
+})
+
+test('SV3-6：等待跨入夜晚或手持火把烧完，下一次 tick 立即中断', async () => {
+  const fengari = await import('fengari')
+  for (const transition of ['nightfall', 'fuel_empty']) {
+    const { run, runFile, global } = loadReflex(fengari)
+    run(transition === 'nightfall'
+      ? 'GLOBAL.TheWorld.state.phase = "dusk"'
+      : `GLOBAL.TheWorld.state.phase = "night"
+         PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = ${TORCH}`, transition)
+    runFile(`
+      Whale.reflex_on = false
+      Whale.actions.Start("wait", { seconds = 30 }, "transition-wait")
+      Whale.actions.Tick()
+      BEFORE = Whale.job ~= nil and Whale.job.name or "nil"
+      GLOBAL.TheWorld.state.phase = "night"
+      local hand = PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS]
+      if hand ~= nil then hand.components.fueled.IsEmpty = function() return true end end
+      NOW = NOW + 1
+      Whale.actions.Tick()
+      R = REPORTS[#REPORTS]
+      OK = R ~= nil and tostring(R.ok) or "nil"
+      TEXT = R ~= nil and tostring(R.text) or "nil"
+      AFTER = Whale.job ~= nil and Whale.job.name or "nil"
+    `)
+    assert.equal(global('BEFORE'), 'wait', transition)
+    assert.equal(global('OK'), 'false', transition)
+    assert.match(global('TEXT'), /dark_no_light/)
+    assert.equal(global('AFTER'), 'nil', transition)
+  }
+})
+
+test('SV3-5：等的时候掉血 —— wait 提前结束', async () => {
+  const fengari = await import('fengari')
+  const { runFile, global } = loadReflex(fengari)
+  runFile(`
+    Whale.reflex_on = false
+    Whale.actions.Start("wait", { seconds = 30 }, "model-wait")
+    Whale.actions.Tick()
+    PLAYER.components.health.currenthealth = 100
+    NOW = NOW + 1
+    Whale.actions.Tick()
+    R = REPORTS[#REPORTS]
+    OK = R ~= nil and tostring(R.ok) or "nil"
+    TEXT = R ~= nil and tostring(R.text) or "nil"
+  `)
+  assert.equal(global('OK'), 'false')
+  assert.match(global('TEXT'), /took_damage/)
+})
+
+const LOGIC_SETUP = `
+Whale.reflex_on = true
+Whale.reflex_force_off = false
+PLAYER.sg.HasStateTag = function(self, tag) return tag == "idle" end
+PLAYER.IsInLight = function() return false end
+local loco = PLAYER.components.locomotor
+loco.Stop = function(self) self.dest = nil end
+loco.Clear = function(self) self.dest = nil; self.bufferedaction = nil end
+loco.GoToPoint = function(self, pt) self.dest = pt; MOVED_TO = pt end
+loco.PushAction = function(self, ba) self:Clear(); self.bufferedaction = ba; PUSHED = ba end
+function safefood(prefab, health)
+    return mkitem(prefab, 1, { edible = { hungervalue = 12.5, healthvalue = health } })
+end
+`
+
+for (const illuminated of [false, true]) {
+  test(`LOGIC-1：附近有火但实际照明=${illuminated}，反射和等待使用真实光照`, async () => {
+    const env = loadReflex(await import('fengari'))
+    env.run(LOGIC_SETUP)
+    env.run(`
+      GLOBAL.TheWorld.state.phase = "night"
+      PLAYER.IsInLight = function() return ${illuminated} end
+      PLAYER.components.inventory._items = { ${TORCH} }
+      NEARBY = { newent("campfire", 24, 0, { "light" }, {
+          fueled = { IsEmpty = function() return false end } }) }
+      assert(Whale.reflex.Diagnose().has_usable_light == ${illuminated})
+      assert((Whale.reflex.DarkNoLight(PLAYER) == nil) == ${illuminated})
+      Whale.actions.Start("wait", { seconds = 30 }, "wait-light")
+      Whale.actions.Tick()
+      ${illuminated ? 'assert(Whale.job ~= nil and #REPORTS == 0)' : `
+      assert(Whale.job == nil and REPORTS[1].ok == false)
+      assert(string.find(REPORTS[1].text, "dark_no_light", 1, true))
+      ${eachTick()}
+      assert(Whale.job ~= nil and Whale.job.name == "equip")
+      `}
+    `)
+  })
+}
+
+for (const hunger of [150, 200]) {
+  for (const healthValue of [0, 1]) {
+    test(`LOGIC-2：回血食物 health=${healthValue}、饥饿=${hunger} 时只做有效抢占`, async () => {
+      const env = loadReflex(await import('fengari'))
+      env.run(LOGIC_SETUP)
+      env.run(`
+        PLAYER.components.health.currenthealth = 15
+        PLAYER.components.hunger.current = ${hunger}
+        PLAYER.components.inventory._items = {
+            ${TORCH}, safefood("${healthValue ? 'carrot' : 'berries'}", ${healthValue}),
+            mkitem("cutgrass", 6), mkitem("twigs", 6) }
+        Whale.actions.Start("seek", {}, "model-seek", { survival_seek = true, prefab = "flint" })
+        ${eachTick(10)}
+        ${healthValue ? `
+        assert(Whale.job ~= nil and Whale.job.name == "eat", "回血必须真的发起进食")
+        assert(#REPORTS == 1 and REPORTS[1].id == "model-seek")
+        Whale.actions.Tick()
+        assert(PUSHED.invobject.prefab == "carrot")
+        ` : `
+        assert(Whale.job ~= nil and Whale.job.cmd_id == "model-seek", "零回血食物不许抢占")
+        assert(#REPORTS == 0)
+        `}
+        assert(Whale.last_reflex_error == nil)
+      `)
+    })
+  }
+}
+
+for (const mode of ['auto', 'explicit', 'healing']) {
+  test(`LOGIC-3：吃掉最后一份食物后正确核验（${mode}）`, async () => {
+    const env = loadReflex(await import('fengari'))
+    env.run(LOGIC_SETUP)
+    env.run(`
+      PLAYER.components.inventory._items = { safefood("carrot", 1) }
+      ${mode === 'healing' ? 'PLAYER.components.hunger.current = 200; PLAYER.components.health.currenthealth = 15' : ''}
+      Whale.actions.Start("eat", {}, "eat-last", { survival_eat = true,
+          ${mode === 'explicit' ? 'food = "carrot"' : ''} })
+      Whale.actions.Tick()
+      assert(PUSHED.action.id == "EAT")
+      PLAYER.components.inventory._items = {}
+      ${mode === 'healing' ? 'PLAYER.components.health.currenthealth = 16' : 'PLAYER.components.hunger.current = 162.5'}
+      PLAYER.components.locomotor:Clear()
+      NOW = NOW + 1
+      Whale.actions.Tick()
+      assert(#REPORTS == 1 and REPORTS[1].ok == true, REPORTS[1] and REPORTS[1].text)
+      assert(Whale.job == nil)
+    `)
+  })
+}
+
+test('LOGIC-3：食物没消耗、饥饿没上涨时不能误报成功', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    PLAYER.components.inventory._items = { safefood("carrot", 1) }
+    Whale.actions.Start("eat", {}, "eat-noop", { survival_eat = true })
+    Whale.actions.Tick()
+    PLAYER.components.locomotor:Clear()
+    NOW = NOW + 21
+    Whale.actions.Tick()
+    assert(#REPORTS == 1 and REPORTS[1].ok == false)
+    assert(string.find(REPORTS[1].text, "eat_failed", 1, true))
+  `)
+})
+
+for (const cancel of ['abort', 'replace', 'stop', 'budget']) {
+  test(`LOGIC-4：${cancel} 清空玩家和移动组件两处队列`, async () => {
+    const env = loadReflex(await import('fengari'))
+    env.run(LOGIC_SETUP)
+    env.run(`
+      Whale.actions.Start("seek", {}, "old", { survival_seek = true, prefab = "flint", budget_s = 1 })
+      Whale.actions.Tick()
+      PLAYER.components.locomotor.bufferedaction = { action = GLOBAL.ACTIONS.PICK }
+      BUFFERED = { action = GLOBAL.ACTIONS.PICK }
+      ${cancel === 'abort' ? 'Whale.actions.Abort("cancel")' : cancel === 'replace'
+        ? 'Whale.actions.Start("wait", { seconds = 10 }, "new")' : cancel === 'stop'
+          ? 'Whale.actions.Start("stop", {}, "stop"); Whale.actions.Tick()'
+          : 'NOW = NOW + 2; Whale.actions.Tick()'}
+      assert(PLAYER:GetBufferedAction() == nil, "玩家队列必须清空")
+      assert(PLAYER.components.locomotor.bufferedaction == nil, "移动组件队列必须清空")
+      assert(PLAYER.components.locomotor.dest == nil, "服务端移动必须停止")
+    `)
+  })
+}
+
+for (const prefab of ['lantern', 'minerhat']) {
+  test(`LOGIC-5：夜间装备背包实际拥有的 ${prefab}，不寻找不存在的火把`, async () => {
+    const env = loadReflex(await import('fengari'))
+    env.run(LOGIC_SETUP)
+    env.run(`
+      GLOBAL.TheWorld.state.phase = "night"
+      local inv = PLAYER.components.inventory
+      local slot = "${prefab === 'minerhat' ? 'head' : 'hands'}"
+      inv._items = { mkitem("${prefab}", 1, { fueled = {
+          IsEmpty = function() return false end, GetPercent = function() return 1 end } }) }
+      inv.Equip = function(self, item) self._items = {}; self._equipped[slot] = item end
+      PLAYER.IsInLight = function() return inv:GetEquippedItem(slot) ~= nil end
+      ${eachTick()}
+      assert(Whale.job ~= nil and Whale.job.name == "equip")
+      assert(Whale.job.args.item == "${prefab}")
+      Whale.actions.Tick()
+      assert(inv:GetEquippedItem(slot).prefab == "${prefab}")
+      assert(REPORTS[1].ok == true)
+      NOW = NOW + 7
+      ${eachTick()}
+      assert(Whale.job == nil, "已经有光不能反复抢占")
+      assert(Whale.reflex.Diagnose().has_usable_light == true)
+    `)
+  })
+}
+
+for (const item of ['lantern', 'minerhat']) {
+  test(`LOGIC-5：外部 equip ${item} 按真实槽位核验`, async () => {
+    const env = loadReflex(await import('fengari'))
+    env.run(LOGIC_SETUP)
+    env.run(`
+      local inv = PLAYER.components.inventory
+      local slot = "${item === 'minerhat' ? 'head' : 'hands'}"
+      inv._items = { mkitem("${item}", 1, { inventoryitem = {} }) }
+      inv.Equip = function(self, item) self._items = {}; self._equipped[slot] = item end
+      Whale.actions.Start("equip", { item = "${item}" }, "external-equip", { survival_equip = true, item = "${item}" })
+      Whale.actions.Tick()
+      Whale.actions.Tick()
+      assert(REPORTS[1] ~= nil and REPORTS[1].ok == true)
+      assert(inv:GetEquippedItem(slot).prefab == "${item}")
+    `)
+  })
+}
+
+test('LOGIC-5：耗尽的提灯不阻止制作火把', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "night"
+    PLAYER.components.inventory._items = {
+        mkitem("lantern", 1, { fueled = { IsEmpty = function() return true end } }),
+        mkitem("cutgrass", 2), mkitem("twigs", 2) }
+    ${eachTick()}
+    assert(Whale.job ~= nil and Whale.job.name == "craft")
+  `)
+})
+
+for (const ending of ['budget', 'exhausted']) {
+  test(`LOGIC-6：seek ${ending} 正常返回找不到并停止移动`, async () => {
+    const env = loadReflex(await import('fengari'))
+    env.run(LOGIC_SETUP)
+    env.run(`
+      PLAYER._x = 12; PLAYER._z = 20
+      Whale.actions.Start("seek", {}, "seek-end", { survival_seek = true, prefab = "flint", budget_s = 30 })
+      Whale.actions.Tick()
+      ${ending === 'budget' ? 'NOW = NOW + 26; Whale.actions.Tick()' : 'Whale.job.step = "look"; Whale.job.data.index = #Whale.job.data.plan'}
+      Whale.actions.Tick()
+      assert(#REPORTS == 1 and REPORTS[1].ok == false)
+      assert(string.find(REPORTS[1].text, "从 (3,5)", 1, true), REPORTS[1].text)
+      assert(string.find(REPORTS[1].text, "没看到 flint", 1, true))
+      assert(PLAYER.components.locomotor.dest == nil)
+    `)
+  })
+}
+
+for (const step of [undefined, 4, 30]) {
+  test(`LOGIC-7：seek max_tiles=4 不被 step=${step ?? 'default'} 扩大`, async () => {
+    const env = loadReflex(await import('fengari'))
+    env.run(LOGIC_SETUP)
+    env.run(`
+      Whale.actions.Start("seek", {}, "seek-bound", { survival_seek = true, prefab = "flint",
+          max_tiles = 4, ${step === undefined ? '' : `step = ${step},`} })
+      Whale.actions.Tick()
+      assert(Whale.job.data.max_tiles == 4)
+      for _, point in ipairs(Whale.job.data.plan) do
+          assert(math.sqrt(point[1]^2 + point[2]^2) <= 16.001, "落点超过指定最大范围")
+      end
+      assert(math.sqrt(MOVED_TO.x^2 + MOVED_TO.z^2) <= 16.001)
+    `)
+  })
+}

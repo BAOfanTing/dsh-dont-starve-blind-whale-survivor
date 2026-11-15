@@ -148,6 +148,12 @@ local function player_block(actor, info, unavailable)
     block.health = stat_block(comps.health, "currenthealth", "maxhealth")
     block.hunger = stat_block(comps.hunger, "current", "max")
     block.sanity = stat_block(comps.sanity, "current", "max")
+    local ok_light, in_light = pcall(function() return p:IsInLight() end)
+    if ok_light and type(in_light) == "boolean" then
+        block.in_light = in_light
+    else
+        unavailable[#unavailable + 1] = "player.in_light"
+    end
 
     if block.health == nil then unavailable[#unavailable + 1] = "player.health" end
     if block.hunger == nil then unavailable[#unavailable + 1] = "player.hunger" end

@@ -45,6 +45,15 @@ local function busy(p)
 end
 A.busy = busy
 
+local function stop_actions(p)
+    local loco = p.components.locomotor
+    if loco ~= nil then
+        loco:Stop()
+        loco:Clear()
+    end
+    p:ClearBufferedAction()
+end
+
 --- 让引擎走过去（动作、追击、采集都要走这一步）
 local function push(p, ba)
     if p == nil or ba == nil then return false end
@@ -1357,9 +1366,22 @@ end
 
 JOBS.wait = function(j, p)
     local seconds = tonumber(j.args.seconds) or 3
+    local health = p.components ~= nil and p.components.health or nil
     if j.step == "start" then
         j.step = "acting"
         j.data.until_time = U.now() + seconds
+        j.data.hp_start = health ~= nil and health.currenthealth or nil
+    end
+    local dark = Whale.reflex ~= nil and Whale.reflex.DarkNoLight ~= nil and Whale.reflex.DarkNoLight(p) or nil
+    if dark ~= nil then
+        if dark.in_bag then
+            return "fail", "dark_no_light: 天黑了身边没光，查理会打你、理智狂掉。马上 equip " .. dark.item
+        end
+        return "fail", "dark_no_light: 天黑了身边没光，查理会打你。马上 craft torch（2草+2树枝）或 craft campfire"
+    end
+    local hp_now = health ~= nil and health.currenthealth or nil
+    if j.data.hp_start ~= nil and hp_now ~= nil and hp_now < j.data.hp_start - 0.5 then
+        return "fail", string.format("took_damage: 等的时候掉血了（%.0f→%.0f），别再干等，先 get_state 看谁在打你", j.data.hp_start, hp_now)
     end
     if U.now() >= j.data.until_time then
         return "done", string.format("等了 %.0f 秒", seconds)
@@ -1728,27 +1750,23 @@ JOBS.eat = function(j, p)
         local inv = p.components ~= nil and p.components.inventory or nil
         if inv == nil then return "fail", "no_inventory: 角色没有背包" end
 
-        local item = nil
-        if ctx.food ~= nil and ctx.food ~= "" then
-            local ok_p, why_p = rules.IsAllowedPrefab(tostring(ctx.food))
-            if not ok_p then return "fail", (why_p or "food_not_allowed") .. ": " .. tostring(ctx.food) .. " 不在可吃白名单里" end
-            -- 只从**背包**里找，绝不从地上/世界里找
-            pcall(function()
+        if j.step == "start" then
+            local item = nil
+            if ctx.food ~= nil and ctx.food ~= "" then
+                local ok_p, why_p = rules.IsAllowedPrefab(tostring(ctx.food))
+                if not ok_p then return "fail", (why_p or "food_not_allowed") .. ": " .. tostring(ctx.food) .. " 不在可吃白名单里" end
                 inv:ForEachItem(function(it)
                     if item ~= nil then return end
                     if it ~= nil and it:IsValid() and tostring(it.prefab) == tostring(ctx.food) then
-                        local ok_e = rules.IsEdible(it)
-                        if ok_e then item = it end
+                        if rules.IsEdible(it) then item = it end
                     end
                 end)
-            end)
-            if item == nil then return "fail", "not_in_inventory: 背包里没有可吃的 " .. tostring(ctx.food) end
-        else
-            item = rules.PickBest(inv)
-            if item == nil then return "fail", "no_food: 背包里没有可吃的东西" end
-        end
-
-        if j.step == "start" then
+                if item == nil then return "fail", "not_in_inventory: 背包里没有可吃的 " .. tostring(ctx.food) end
+            else
+                local hunger = p.components.hunger
+                item = rules.PickBest(inv, hunger ~= nil and hunger:GetPercent() >= 0.99)
+                if item == nil then return "fail", "no_food: 背包里没有可吃的东西" end
+            end
             j.data.prefab = tostring(item.prefab)
             j.data.label = rules.FOODS[item.prefab] or tostring(item.prefab)
             j.data.hunger_before = p.components.hunger ~= nil and p.components.hunger.current or nil
@@ -1961,7 +1979,7 @@ JOBS.equip = function(j, p)
         if j.step == "start" then
             j.data.name = name
             j.data.label = rules.ITEMS[name] or name
-            j.data.hand_before = rules.HandItem(p)
+            j.data.hand_before = rules.EquippedItem(p, name)
             j.data.phase_start = U.now()
             local ok_eq, err = pcall(function() inv:Equip(item) end)
             if not ok_eq then return "fail", "equip_failed: " .. tostring(err) end
@@ -1969,14 +1987,14 @@ JOBS.equip = function(j, p)
             return "run"
         end
 
-        local hand = rules.HandItem(p)
+        local hand = rules.EquippedItem(p, name)
         if hand ~= nil and tostring(hand.prefab) == name then
             local prev = j.data.hand_before
             local prev_name = prev ~= nil and tostring(prev.prefab) or nil
             if prev_name ~= nil and prev_name ~= name then
                 return "done", string.format("换上了 %s（原来的 %s 收回背包）", j.data.label, prev_name)
             end
-            return "done", string.format("拿在手里了：%s", j.data.label)
+            return "done", string.format(name == "minerhat" and "戴上了：%s" or "拿在手里了：%s", j.data.label)
         end
         if U.now() - j.data.phase_start > 10 then
             return "fail", "equip_failed: 装备栏没有变化"
@@ -2055,11 +2073,18 @@ local function area_summary(done, product_counts, failed)
     return string.format("采了 %d 个%s%s", done or 0, tail, fail_tail)
 end
 
---- 真正能动手的距离（格）。InNativeRange 是"扫描得到"的范围（约 radius+4 格），
---- 拿它当"可以推动作了"用会隔着 20 格砍空气 —— 真机踩过（session-403656e9：采了 0 个，3 个没采成）。
---- 所以接近判定必须用**动作自己的距离**量级。
+-- 到附近后交给原生 PushAction 按目标碰撞半径接近并采摘。
 local APPROACH_TILES = 1.6
 local APPROACH_UNITS = APPROACH_TILES * 4   -- 1 格 = 4 世界单位
+
+local function gather_busy(p)
+    if p:GetBufferedAction() ~= nil then return true end
+    local loco = p.components.locomotor
+    if loco ~= nil and loco.bufferedaction ~= nil then return true end
+    -- 普通行走没有 idle 标签，但可以被原生 PICK 接管；真正忙碌的动作仍需等待。
+    return p.sg ~= nil and not p.sg:HasStateTag("idle")
+        and (p.sg:HasStateTag("busy") or not p.sg:HasStateTag("moving"))
+end
 
 --- 范围采集：一次采完半径内能采的（可选只采某一种）
 JOBS.gather_area = function(j, p)
@@ -2139,7 +2164,7 @@ JOBS.gather_area = function(j, p)
                 local wide = gather_candidates(p, look, j.data.want)
                 local nearest, nearest_kind, want_ready = nil, nil, nil
                 for _, c in ipairs(wide) do
-                    if c.ready then
+                    if c.ready and j.data.done[c.ent] == nil then
                         if nearest == nil then
                             nearest = (c.dist or 0) / 4
                             nearest_kind = tostring(c.ent.prefab)
@@ -2158,6 +2183,8 @@ JOBS.gather_area = function(j, p)
                     hint = string.format("范围内现在能采的是 %s（%.1f 格）——不挑种类的话把 radius 调到 %d；"
                         .. "只要 %s 就等它们长好，或者用 seek 出去找",
                         tostring(nearest_kind), nearest, math.ceil(nearest) + 2, tostring(j.data.want or "某一种"))
+                elseif j.data.failed > 0 then
+                    hint = "成熟目标走不到或采摘超时，已停止旧动作；用 get_state 检查位置和障碍，别只增大 radius 重试同一丛"
                 else
                     hint = string.format("%d 格内现在没有能采的（都还没长好）——用 seek 出去找别的，或者等一会儿再来",
                         look)
@@ -2166,7 +2193,7 @@ JOBS.gather_area = function(j, p)
             end
             return "done", text
         end
-        -- 距离不够就先走过去（动作本身不走路）
+        if gather_busy(p) then return "run" end
         local d = U.dist(p, pick.ent) or 99999
         if d > APPROACH_UNITS then
             local tx, ty, tz = pick.ent.Transform:GetWorldPosition()
@@ -2177,7 +2204,6 @@ JOBS.gather_area = function(j, p)
             j.step = "walking"
             return "run"
         end
-        if busy(p) then return "run" end   -- 手上还有动作，等它做完
         j.data.done[pick.ent] = true
         -- ★ 必须是**实体**，不是候选表 pick。
         --   真机 bug（Cluster_1）：写成 pick 之后，acting 阶段 cur:IsValid() 直接崩
@@ -2194,6 +2220,7 @@ JOBS.gather_area = function(j, p)
     if j.step == "walking" then
         local target = j.data.walking_to
         if target == nil or not target:IsValid() then
+            stop_actions(p)
             j.step = "next"
             return "run"
         end
@@ -2202,13 +2229,14 @@ JOBS.gather_area = function(j, p)
         --   真机 bug：busy 恒为真时，每个 tick 都在下面那句 return run 掉头，
         --   永远走不到 12 秒超时 → 任务永不结束（真机那条 gather_area 排队 137 秒没回执）。
         if U.now() - j.data.walk_start > 12 then
+            stop_actions(p)
             j.data.done[target] = true
             j.data.failed = j.data.failed + 1
             j.step = "next"
             return "run"
         end
+        if gather_busy(p) then return "run" end
         if d <= APPROACH_UNITS then
-            if busy(p) then return "run" end
             j.data.done[target] = true
             j.data.current = target
             j.data.phase_start = U.now()
@@ -2222,13 +2250,6 @@ JOBS.gather_area = function(j, p)
             local tx, ty, tz = target.Transform:GetWorldPosition()
             p.components.locomotor:GoToPoint(Vector3(tx, 0, tz))
             j.data.walk_repush = U.now()
-        end
-        if U.now() - j.data.walk_start > 12 then
-            -- 走不过去就放弃这个目标，别卡住
-            j.data.done[target] = true
-            j.data.failed = j.data.failed + 1
-            j.step = "next"
-            return "run"
         end
         return "run"
     end
@@ -2277,12 +2298,14 @@ JOBS.gather_area = function(j, p)
                 push(p, BufferedAction(p, cur, ACTIONS.PICK, nil))
                 return "run"
             end
+            stop_actions(p)
             j.data.done[cur] = true
             j.data.failed = j.data.failed + 1
             j.step = "next"
             return "run"
         end
         if waited > 8 then
+            stop_actions(p)
             j.data.done[cur] = true
             j.data.failed = j.data.failed + 1
             j.step = "next"
@@ -2303,8 +2326,8 @@ JOBS.seek = function(j, p)
     if j.step == "start" then
         j.data.want = tostring(ctx.prefab or "")
         if j.data.want == "" then return "fail", "seek 要传 prefab" end
-        j.data.step_tiles = math.max(4, tonumber(ctx.step) or 10)
-        j.data.max_tiles = math.max(j.data.step_tiles, tonumber(ctx.max_tiles) or 40)
+        j.data.max_tiles = math.max(4, tonumber(ctx.max_tiles) or 40)
+        j.data.step_tiles = math.min(j.data.max_tiles, math.max(4, tonumber(ctx.step) or 10))
         j.data.look = math.max(8, tonumber(ctx.look) or 16)
         local px, _, pz = U.pos(p)
         if px == nil then return "fail", "读不到自己的位置" end
@@ -2363,8 +2386,9 @@ JOBS.seek = function(j, p)
         end
         j.data.index = j.data.index + 1
         if j.data.index > #j.data.plan or U.now() - j.data.t0 > (j.data.budget or 45) then
-            return "fail", string.format("从 (%d,%d) 往外走了约 %d 格也没看到 %s（换个方向再 seek，或者改找别的）",
-                U.tile_of(j.data.origin[1], j.data.origin[2]), j.data.max_tiles, j.data.want)
+            local tx, tz = U.tile_of(j.data.origin[1], j.data.origin[2])
+            return "fail", string.format("从 (%d,%d) 往外搜索 %g 格范围也没看到 %s（换个方向再 seek，或者改找别的）",
+                tx, tz, j.data.max_tiles, j.data.want)
         end
         local target = j.data.plan[j.data.index]
         j.data.cur = target
@@ -3362,8 +3386,7 @@ JOBS.stop = function(j, p)
     if p ~= nil then
         client_stop(p)
         pcall(function()
-            if p.components.locomotor ~= nil then p.components.locomotor:Stop() end
-            p:ClearBufferedAction()
+            stop_actions(p)
         end)
     end
     return "done", "停下了"
@@ -3475,8 +3498,7 @@ function A.Start(name, args, cmd_id, ctx)
         -- 真正做完的结果反而没人等（实测：pickup 报失败、但木头确实进了背包）。
         local prev_id = job.cmd_id
         pcall(function()
-            if p.components.locomotor ~= nil then p.components.locomotor:Stop() end
-            p:ClearBufferedAction()
+            stop_actions(p)
         end)
         Whale.bridge.Report(false, "被新指令打断了（上一件事没做完）", prev_id)
     end
@@ -3505,8 +3527,7 @@ function A.Abort(reason)
         local p = U.player()
         if p ~= nil then
             pcall(function()
-                if p.components.locomotor ~= nil then p.components.locomotor:Stop() end
-                p:ClearBufferedAction()
+                stop_actions(p)
             end)
         end
         Whale.bridge.Report(false, tostring(reason or "被打断了"), job.cmd_id)
@@ -3542,6 +3563,10 @@ function A.Tick()
             text = string.format("budget_exceeded: 这一步用了 %d 秒还没完（上限 %d 秒），先停下。已经做了一部分，用 get_state 看现在的真实状态再决定下一步",
                 math.floor(U.now() - j.t0), math.floor(budget))
         end
+    end
+    if not ok or status == "fail"
+        or ((j.name == "gather_area" or j.name == "seek") and status == "done") then
+        pcall(stop_actions, p)
     end
     if not ok then
         Whale.util.log("动作 " .. tostring(j.name) .. " 出错：" .. tostring(status))

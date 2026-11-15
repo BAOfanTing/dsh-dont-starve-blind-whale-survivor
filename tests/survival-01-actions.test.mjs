@@ -147,6 +147,32 @@ test('survival-9：eat 核对 —— 饥饿上涨或食物减少都算成功', (
   assert.equal(r3.reason, 'hunger_unchanged')
 })
 
+test('survival-eat-healing：满饥饿自动进食仍能按回血核验', () => {
+  const before = snap({ hunger: 200 })
+  const after = snap({ hunger: 200 })
+  before.player.health = { current: 15 }
+  after.player.health = { current: 16 }
+  assert.equal(ACTION_SPECS.eat.verify(before, after, {}).ok, true)
+  assert.equal(ACTION_SPECS.eat.verify(before, before, {}).ok, false)
+})
+
+for (const item of ['lantern', 'minerhat']) {
+  for (const shape of ['slots', 'array', 'object']) {
+    test(`survival-equip-light：${item} 从 ${shape} 核验正确槽位`, () => {
+      const slot = item === 'minerhat' ? 'head' : 'hands'
+      const after = snap()
+      after.player.equipment = shape === 'slots' ? { slots: { [slot]: { prefab: item } } }
+        : shape === 'array' ? { worn: [{ key: slot, item: { prefab: item } }] }
+          : { worn: { [slot]: item } }
+      assert.equal(ACTION_SPECS.equip.verify(snap(), after, { item }).ok, true)
+      assert.equal(ACTION_SPECS.equip.verify(snap(), snap(), { item }).ok, false)
+      if (item === 'minerhat') {
+        assert.equal(ACTION_SPECS.equip.verify(snap(), snap({ worn: { hands: item } }), { item }).ok, false)
+      }
+    })
+  }
+}
+
 test('survival-10：craft 核对 —— 成品进背包才算成功', () => {
   const spec = ACTION_SPECS.craft
   const before = snap({ items: [{ prefab: 'twigs', count: 1 }, { prefab: 'flint', count: 1 }] })
@@ -184,5 +210,5 @@ test('survival-12：工具表里的四个新工具描述必须讲清白名单/�
   assert.match(byName.equip.description, /torch/, 'equip 要列出手持物品')
   // craft/equip 的 enum 必须锁死
   assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum, ['torch', 'axe', 'pickaxe'])
-  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe'])
+  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat'])
 })

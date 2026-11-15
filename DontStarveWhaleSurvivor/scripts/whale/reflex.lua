@@ -249,10 +249,8 @@ local function nearby_light(p)
     end)
 end
 
---- 眼下是否被照亮（手上有效光源 或 附近点着的固定光源）。注意：背包里有一把火把不算"现在有光"。
 local function has_light(p)
-    if hand_light(p) ~= nil then return true end
-    return nearby_light(p) ~= nil
+    return p:IsInLight()
 end
 
 --- 综合光源状态：一个表，供决策与诊断共用
@@ -306,7 +304,7 @@ local function light_report(p)
         hand = hand,
         in_bag = inbag,
         near = near,
-        has_usable = (hand ~= nil) or (near ~= nil),
+        has_usable = has_light(p),
         portable = (hand ~= nil) or (inbag ~= nil),
         can_craft = can_craft,
         missing = missing,
@@ -475,6 +473,13 @@ function R.CriticalDanger(p)
     return hp < 0.2 and nearest_hostile(p, 5) ~= nil
 end
 
+--- 入夜且身边没光（查理会打人）。返回 nil 表示安全；否则返回 { in_bag = 背包里是否有可用火把 }。
+function R.DarkNoLight(p)
+    if p == nil or current_phase() ~= "night" or has_light(p) then return nil end
+    local item = inventory_light(p)
+    return { in_bag = item ~= nil, item = item ~= nil and item.prefab or nil }
+end
+
 -- ─────────────────────────── 具体反射动作 ───────────────────────────
 
 --- 撤退（P0）
@@ -612,8 +617,8 @@ local function reflex_light(p)
 
     local bag = inventory_light(p)
     if bag ~= nil then
-        local started = A.Start("equip", { item = "torch" }, REFLEX_ID)
-        if started then say(p, "light", "天黑了，先把火把举起来") end
+        local started = A.Start("equip", { item = bag.prefab }, REFLEX_ID)
+        if started then say(p, "light", "天黑了，先装备 " .. U.pretty(bag)) end
         return started
     end
 
@@ -644,30 +649,31 @@ end
 --- 真机第 13 天：饥饿 13% 时 P1 每 5 秒以 `hunger_emergency` 打断一次模型动作，
 --- 但背包里没有任何食物，reflex_eat 返回 false —— 抢占了却什么也没做，
 --- 结果模型和反射互相锁死，活活饿死。和 0.36.0 的光照死锁同源。
-local function food_available(p)
+local function food_available(p, healing_only)
     local rules = Whale ~= nil and Whale.eatrules or nil
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
     if rules == nil or inv == nil then return false end
-    return rules.PickBest(inv) ~= nil
+    return rules.PickBest(inv, healing_only) ~= nil
 end
 
 local function heal_available(p)
     if find_healer_prefab(p) ~= nil then return true end
-    return food_available(p)   -- 没药时 reflex_heal 靠吃东西
+    return food_available(p, true)
 end
 
 --- 吃（安全白名单）
-local function reflex_eat(p)
+local function reflex_eat(p, healing_only)
     local rules = Whale ~= nil and Whale.eatrules or nil
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
     if rules == nil or inv == nil then return false end
-    local item = rules.PickBest(inv)
+    local item = rules.PickBest(inv, healing_only)
     if item == nil then return false end
     local hungry = hunger_percent(p)
-    if hungry ~= nil and hungry > 0.98 then return false end  -- 吃饱了，别浪费食物
-    local started = A.Start("eat", {}, REFLEX_ID, { survival_eat = true })
+    if not healing_only and hungry ~= nil and hungry >= 0.99 then return false end
+    local started = A.Start("eat", {}, REFLEX_ID, { survival_eat = true, food = item.prefab })
     if started then
-        pending = { kind = "eat", hunger_before = hungry, t0 = U.now() }
+        pending = { kind = healing_only and "heal" or "eat", hunger_before = hungry,
+                    hp_before = health_percent(p), t0 = U.now() }
         say(p, "eat", "饿了/血少了，先吃点安全的东西")
         return true
     end
@@ -686,7 +692,7 @@ local function reflex_heal(p)
         end
         return false
     end
-    return reflex_eat(p)
+    return reflex_eat(p, true)
 end
 
 --- 附近（16 格）连一株成熟目标都没有，且备料不够时：**有界地**走过去找。
@@ -938,7 +944,8 @@ local function interrupt_current(reason)
     local buffered = false
     if p ~= nil then
         local ok_b, ba = pcall(function() return p:GetBufferedAction() end)
-        if ok_b then buffered = (ba ~= nil) end
+        local loco = p.components.locomotor
+        buffered = not ok_b or ba ~= nil or (loco ~= nil and loco.bufferedaction ~= nil)
     end
     diag("protection", {
         "current_job=" .. old_name,

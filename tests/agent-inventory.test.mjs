@@ -7,10 +7,23 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { applyVerified } from '../lib/agent.js'
+import { gatheringSpecs } from '../lib/actions/specs/gathering.js'
 
 test('采集：product + gained 进背包', () => {
   const inv = applyVerified({}, 'gather', {}, { product: 'cutgrass', gained: 2 })
   assert.equal(inv.cutgrass, 2)
+})
+
+test('拾取食物：真实 pickup 核对回传的 prefab 也计入背包', () => {
+  const before = {
+    player: { inventory: { items: [{ prefab: 'carrot', count: 1 }] } },
+    nearby: { buckets: { pickupables: [{ ref: '#2', prefab: 'carrot' }] } },
+  }
+  const after = { player: { inventory: { items: [{ prefab: 'carrot', count: 3 }] } } }
+  const args = { target_ref: '#2', snapshot_id: 'n1' }
+  const verified = gatheringSpecs.pickup.verify(before, after, args)
+  assert.equal(verified.ok, true)
+  assert.deepEqual(applyVerified({ carrot: 1 }, 'pickup', args, verified), { carrot: 3 })
 })
 
 test('范围采集：products 里每个产物各自累加', () => {

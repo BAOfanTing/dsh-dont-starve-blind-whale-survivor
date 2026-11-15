@@ -639,8 +639,11 @@ test('harvest-26 Lua 的 ack 确实带 job_cleared / lease_id / acked_at', () =>
   const acts = readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8')
   assert.match(acts, /function A\.Abort/)
   const abortBody = acts.slice(acts.indexOf('function A.Abort'), acts.indexOf('function A.Abort') + 900)
-  assert.match(abortBody, /ClearBufferedAction/, 'Abort 必须清掉挂起的动作')
-  assert.match(abortBody, /locomotor:Stop\(\)|loco:Stop\(\)|:Stop\(\)/, 'Abort 必须停下移动')
+  assert.match(abortBody, /stop_actions\(p\)/, 'Abort 必须走统一的停止清理')
+  const stopBody = acts.slice(acts.indexOf('local function stop_actions'), acts.indexOf('local function stop_actions') + 300)
+  assert.match(stopBody, /loco:Stop\(\)/, '必须停下移动')
+  assert.match(stopBody, /loco:Clear\(\)/, '必须清掉 locomotor 队列里的动作')
+  assert.match(stopBody, /ClearBufferedAction/, '必须清掉挂起的动作')
 })
 
 // ═══════════════════════ 7. 回归 ═══════════════════════
