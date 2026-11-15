@@ -179,6 +179,60 @@ function R.Recent()
     return out
 end
 
+-- ─────────────────────────── 紧急需求上报（Reflex → Node）───────────────────────────
+--
+-- 职责边界（这是这一层**唯一**该往外说话的地方）：
+--   Reflex 只处理"现在就会死"的五件事：正在挨打 / 夜里没光 / 生命见底 / 饿到极限 / 理智崩。
+--   它**不**负责找资源、规划路线、算制作材料 —— 那些交给 Node 侧的模型。
+--   当它发现自己解决不了（缺关键材料、附近没有可采的、走了也来不及），
+--   就把一条**明确的紧急需求**写进状态，而不是无限重试无效动作。
+--
+-- 为什么要有这个：真机两轮死因都是这个 ——
+--   反射按设计只在 16 格内采集、不远离安全区，缺草时补不上材料；
+--   同时它每 6 秒以 P0 打断一次模型动作，模型也没机会走远。
+--   结果双方互相锁死。现在它会把"缺什么、缺多少、附近有没有"说清楚，让 Node 去规划。
+local needs = {}          -- [kind] = { at, reason, missing, radius }
+
+local function report_need(kind, reason, detail)
+    local now = U.now()
+    local prev = needs[kind]
+    -- 30 秒内同一条需求不重复写（状态文件每秒重写，重复写会淹没模型）
+    if prev ~= nil and now - prev.at < 30 then return end
+    detail = detail or {}
+    needs[kind] = {
+        at = now,
+        kind = kind,
+        reason = reason,
+        missing = detail.missing,
+        radius = detail.radius,
+    }
+    diag("need", { "kind=" .. tostring(kind), "reason=" .. tostring(reason) })
+end
+
+local function clear_need(kind)
+    if needs[kind] ~= nil then needs[kind] = nil end
+end
+
+--- 给 observe / get_state 用：当前**未解决**的紧急需求（60 秒内有效）。
+--- 每条都带"要什么"，模型照着就能去规划，不用猜反射在等什么。
+function R.Needs()
+    local out = {}
+    local now = U.now()
+    for kind, item in pairs(needs) do
+        if now - item.at <= 60 then
+            out[#out + 1] = {
+                kind = kind,
+                reason = item.reason,
+                missing = item.missing,
+                radius = item.radius,
+                age_s = math.floor(now - item.at),
+            }
+        end
+    end
+    table.sort(out, function(a, b) return a.kind < b.kind end)
+    return out
+end
+
 --- 反射到底开没开（模组默认开，但**旧存档的 modoverrides 里可能被设成 false**）
 function R.Enabled()
     if Whale.reflex_force_off == true then return false, "force_off" end
@@ -236,8 +290,16 @@ local function inventory_light(p)
     return found
 end
 
---- 附近点着的固定光源（营火/火坑/南瓜灯…）
+--- 附近点着的固定光源（营火/火坑/南瓜灯…）。
+--- NATIVE-REUSE：改用 Whale.native.FindLitSource —— 按引擎给的 `Light:GetCalculatedRadius()`
+--- 判半径，而不是按 `light` 标签猜。原版 `FindLight` 用的 `lightsource` 标签在本机构建
+--- （762172，4109 个 Lua 文件）里只有人读、没有人写，靠它会永远找不到火堆。
 local function nearby_light(p)
+    local native = Whale ~= nil and Whale.native or nil
+    if native ~= nil and native.FindLitSource ~= nil then
+        local src = native.FindLitSource(p, 12)
+        if src ~= nil then return src end
+    end
     return U.find_nearest(p, 8, { "light" }, nil, function(e)
         if e == nil or e == p or e:HasTag("player") then return false end
         local permanent = PERMANENT_LIGHTS[tostring(e.prefab or "")] == true
@@ -249,7 +311,15 @@ local function nearby_light(p)
     end)
 end
 
+--- 我是不是真的被光照到。
+--- NATIVE-REUSE：走引擎的 `inst:IsInLight()`（玩家身上有 LightWatcher，阈值在
+--- player_common.lua:2446-2448 设好），而不是自己拿背包/附近物件去推。
 local function has_light(p)
+    local native = Whale ~= nil and Whale.native or nil
+    if native ~= nil and native.IsLit ~= nil then
+        local ok, lit = pcall(native.IsLit, p)
+        if ok and lit ~= nil then return lit == true end
+    end
     return p:IsInLight()
 end
 
@@ -483,6 +553,13 @@ end
 -- ─────────────────────────── 具体反射动作 ───────────────────────────
 
 --- 撤退（P0）
+---
+--- NATIVE-REUSE：**方向**交给原版 `RunAway:GetRunAngle`（behaviours/runaway.lua:33-94）。
+--- 我们以前是"背离威胁的直线"（`px + dx/len*dist`），真机第 6 天就是直线撤进蜘蛛群被围死的：
+--- 直线后退不绕障，撞上墙/巢/树就停在那儿被打。
+--- 原版那套会先算背离角度，再用 `FindWalkableOffset`（simutil.lua:330）做 8 方向扇扫，
+--- 被挡就偏转、并记住偏转角 1 秒（runaway.lua:35-42 的 avoid_angle），实在没路才直线跑。
+--- 我们只取它的**纯几何结果**，移动仍然走 A.Start("move_to")，不开第二条动作通道。
 local function reflex_flee(p)
     local hp = health_percent(p)
     local sanity = sanity_percent(p)
@@ -494,12 +571,8 @@ local function reflex_flee(p)
     if not danger_low_hp and not danger_shadow and not attacked then return false end
     if foe == nil then return false end
 
-    local fx, _, fz = U.pos(foe)
     local px, _, pz = U.pos(p)
-    if fx == nil or px == nil then return false end
-    local dx, dz = px - fx, pz - fz
-    local len = math.sqrt(dx * dx + dz * dz)
-    if len < 0.01 then dx, dz, len = 1, 0, 1 end
+    if px == nil then return false end
 
     local cur = U.dist(p, foe)
     local base = U.find_nearest(p, 40, nil, nil, function(e)
@@ -518,11 +591,26 @@ local function reflex_flee(p)
 
     local tx, tz
     if base ~= nil and U.dist(p, base) > 3 * U.TILE then
+        -- 附近有安全的火：往火边撤（火本身就是安全点，也顺手解决夜里没光）
         local bx, _, bz = U.pos(base)
         tx, tz = U.tile_of(bx, bz)
     else
-        local dist = 5 * U.TILE
-        tx, tz = U.tile_of(px + dx / len * dist, pz + dz / len * dist)
+        -- 没有安全点：用原版 RunAway 的几何算方向；它不可用时退回直线后退
+        local native = Whale ~= nil and Whale.native or nil
+        local angle = native ~= nil and native.FleeAngle ~= nil and native.FleeAngle(p, foe, 9) or nil
+        if angle ~= nil then
+            local wx, wz = native.PointFromAngle(p, angle, 5 * U.TILE)
+            if wx ~= nil then tx, tz = U.tile_of(wx, wz) end
+        end
+        if tx == nil then
+            local fx, _, fz = U.pos(foe)
+            if fx == nil then return false end
+            local dx, dz = px - fx, pz - fz
+            local len = math.sqrt(dx * dx + dz * dz)
+            if len < 0.01 then dx, dz, len = 1, 0, 1 end
+            local dist = 5 * U.TILE
+            tx, tz = U.tile_of(px + dx / len * dist, pz + dz / len * dist)
+        end
     end
     local started = A.Start("move_to", { x = tx, z = tz, timeout = 8 }, REFLEX_ID)
     if started then
@@ -613,16 +701,26 @@ end
 
 --- 天黑没光（P0）：举火把 → 做火把 → 建火坑（不用草）→ 生营火
 local function reflex_light(p)
-    if has_light(p) then return false end
+    if has_light(p) then
+        clear_need("light")
+        clear_need("light_materials")
+        return false
+    end
 
     local bag = inventory_light(p)
     if bag ~= nil then
         local started = A.Start("equip", { item = bag.prefab }, REFLEX_ID)
-        if started then say(p, "light", "天黑了，先装备 " .. U.pretty(bag)) end
+        if started then
+            say(p, "light", "天黑了，先装备 " .. U.pretty(bag))
+            clear_need("light")
+        end
         return started
     end
 
-    if craft_torch(p) then return true end
+    if craft_torch(p) then
+        clear_need("light")
+        return true
+    end
 
     -- ★ 没有草就做不了火把/营火；火坑是唯一不依赖草的开局光源，
     --   FIREPIT_FUEL_START = 180s 正好盖住整夜。走原生 build 路径。
@@ -631,17 +729,23 @@ local function reflex_light(p)
         if started then
             say(p, "light", "没草做不了火把，先垒个火坑（不用草）")
             diag("light_build", { "recipe=firepit", "reason=no_cutgrass" })
+            clear_need("light")
         end
         return started
     end
 
     if A.count_item(p, "log") >= 2 and A.count_item(p, "cutgrass") >= 3 then
         local started = A.Start("make_fire", {}, REFLEX_ID)
-        if started then say(p, "light", "材料不够做火把，先生一堆营火") end
+        if started then
+            say(p, "light", "材料不够做火把，先生一堆营火")
+            clear_need("light")
+        end
         return started
     end
 
     diag("light_check", { "has_usable_light=false", "action=none", "reason=no_light_materials" })
+    -- 天黑了、反射自己解决不了 → 明确上报，别让模型以为"反射会搞定"
+    report_need("light", "dark_and_cannot_make_light", { radius = 16 })
     mark_fail("light", 6)
     return false
 end
@@ -675,6 +779,7 @@ local function reflex_eat(p, healing_only)
         pending = { kind = healing_only and "heal" or "eat", hunger_before = hungry,
                     hp_before = health_percent(p), t0 = U.now() }
         say(p, "eat", "饿了/血少了，先吃点安全的东西")
+        clear_need("food")
         return true
     end
     return false
@@ -807,6 +912,12 @@ local function reflex_stock_light(p, rep)
     if reflex_seek_light(p, rep, candidates) then return true end
 
     diag("light_materials", { "nearby=none", "missing=" .. table.concat(rep.missing or {}, ", ") })
+    -- ★ 反射到这里就是"我补不上材料"了。按职责边界，它不再无限重试，
+    --   而是把缺什么、附近多远都没有说清楚，让 Node 侧去规划（seek / 换路线 / 改走火坑）。
+    report_need("light_materials", "no_nearby_material", {
+        missing = rep.missing,
+        radius = 16,
+    })
     mark_fail("stock", 5)
     return false
 end
@@ -834,6 +945,8 @@ local function reflex_forage(p)
         say(p, "forage", "先把地上的吃的捡起来")
         return true
     end
+    -- 附近没有可采/可捡的食物：同样上报，而不是一直空转
+    report_need("food", "no_food_nearby", { radius = 12 })
     mark_fail("forage", 4)
     return false
 end
@@ -1125,7 +1238,12 @@ local function run(p)
     -- ★ 只在**完全黑透的 night** 才点火（P0）。黄昏仍有自然光、grue 不攻击，
     --   黄昏点火只会把 75s 燃料烧在不需要光的地方（真机第 14 夜致死原因）。
     if phase == "night" and not rep.has_usable then
-        if try_action(p, "light", P0, "dark_no_light",
+        if not light_action_available(p) then
+            -- 帮不上忙 → 不抢占，但**必须上报**。
+            -- 真机第 10 天黄昏就是这个状态：反射缺 twigs 造不出光，每 6 秒打断一次模型，
+            -- 而模型并不知道反射在等什么。现在它会被写进 get_state 的「注意」。
+            report_need("light", "dark_and_cannot_make_light", { radius = 16 })
+        elseif try_action(p, "light", P0, "dark_no_light",
                       function() return reflex_light(p) end,
                       function() return light_action_available(p) end) then return end
     end
@@ -1141,7 +1259,10 @@ local function run(p)
     --   `hunger_emergency` 抢占却什么都没吃到，模型和反射互相锁死）。
     --   和 0.36.0 光照动作的 light_action_available 是同一条规则。
     if hunger ~= nil and hunger < EAT_EMERGENCY then
-        if try_action(p, "eat", P1, "hunger_emergency",
+        if not food_available(p) then
+            -- 饿到极限但背包没吃的 → 不抢占（抢了也吃不到），但要让模型知道
+            report_need("food", "hungry_without_food", { radius = 12 })
+        elseif try_action(p, "eat", P1, "hunger_emergency",
                       function() return reflex_eat(p) end,
                       function() return food_available(p) end) then return end
     end
@@ -1238,10 +1359,19 @@ function R.Diagnose()
     out.reserve_ok = rep.reserve_ok
     out.hand_torch_seconds = rep.hand_seconds
     out.light_missing = rep.missing
+    out.nearby_lit_source = rep.near ~= nil and tostring(rep.near.prefab) or nil
     out.job = Whale.job ~= nil and tostring(Whale.job.name) or nil
     out.health = health_percent(p)
     out.hunger = hunger_percent(p)
     out.sanity = sanity_percent(p)
+    -- 反射解决不了、需要 Node 侧规划的紧急需求（get_state 会显示）
+    local pending_needs = R.Needs()
+    if #pending_needs > 0 then
+        out.needs = {}
+        for _, need in ipairs(pending_needs) do
+            out.needs[#out.needs + 1] = need.kind .. ":" .. tostring(need.reason)
+        end
+    end
     return out
 end
 

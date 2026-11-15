@@ -275,6 +275,27 @@ end
 
 -- ─────────────────────────── 告警（只报事实）───────────────────────────
 
+--- 把一条反射上报的"紧急需求"翻成人话，直接告诉模型该干什么。
+--- 原则：只说事实 + 下一步方向，不替模型做决定（规划仍然是 Node 的事）。
+local function need_text(need)
+    local kind = tostring(need.kind or "?")
+    local missing = need.missing
+    local detail = ""
+    if type(missing) == "table" and #missing > 0 then
+        detail = "（缺：" .. table.concat(missing, "、") .. "）"
+    end
+    if kind == "light" then
+        return "⚠ 保命反射做不出光源、天已经黑了" .. detail
+            .. "：它只在附近采料，不会走远。你要么找火源/材料，要么先躲到有光的地方"
+    elseif kind == "light_materials" then
+        return "保命反射缺火把材料" .. detail
+            .. "：16 格内没有能采的，它不会走远。你去 seek 找草/树苗，或者改走「木头+石头垒火坑」"
+    elseif kind == "food" then
+        return "保命反射附近找不到吃的（12 格内没有成熟浆果/地上食物）：它补不上，你得去找食物"
+    end
+    return "保命反射上报：" .. kind .. " " .. tostring(need.reason or "")
+end
+
 local function warnings(p, player, world)
     local tips = {}
     local health = player.health
@@ -331,12 +352,22 @@ local function warnings(p, player, world)
             end
         end
     end
+    -- ★ 反射解决不了的事，明确交给模型（不是"它会自己搞定"，而是"你必须管"）。
+    --   背景：真机两轮都死在"反射只在 16 格内采集、缺料补不上，同时又每 6 秒打断模型"。
+    --   现在它补不上就上报，模型才知道该去找资源 / 换路线，而不是干等。
+    if reflex ~= nil and reflex.Needs ~= nil then
+        local ok_n, needs = pcall(reflex.Needs)
+        if ok_n and type(needs) == "table" then
+            for _, need in ipairs(needs) do
+                tips[#tips + 1] = need_text(need)
+            end
+        end
+    end
 
     return tips
 end
 
 -- ─────────────────────────── 文本渲染（唯一来源：data）───────────────────────────
-
 local function render_item(item)
     local text = item.name or item.prefab or "?"
     if item.count ~= nil and item.count > 1 then text = text .. " ×" .. item.count end

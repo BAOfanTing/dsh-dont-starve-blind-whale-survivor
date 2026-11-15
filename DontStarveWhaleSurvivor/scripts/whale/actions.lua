@@ -2527,9 +2527,20 @@ JOBS.dig = work_dispatch("dig")
 JOBS.hammer = work_dispatch("hammer")
 
 --- 攻击（attack = 打几下；kill = 打到死或超时）
+---
+--- ★ NATIVE-REUSE：玩家挥砍**不能**用 combat:TryAttack()。
+---   `Combat:TryAttack`（components/combat.lua:829）只 PushEvent("doattack")，
+---   而 SGwilson 里没有 doattack 处理器（只有 ActionHandler(ACTIONS.ATTACK)，SGwilson.lua:1382）；
+---   doattack 的通用处理器 CommonHandlers.OnAttack() 只注册在 SGpig / SGplayer_hosted 那类
+---   非玩家 stategraph 上。所以玩家必须走 ACTIONS.ATTACK 的 BufferedAction，
+---   由 SGwilson 的 attack 状态调 PerformBufferedAction() → ACTIONS.ATTACK.fn
+---   → combat:DoAttack(target)（actions.lua:1961-1982）。封装在 Whale.native.AttackAction。
+---
+--- ★ 挥砍次数按**引擎记录的真实出手**算（combat.lastdoattacktime，combat.lua:1231），
+---   不是数我们推了几次 BufferedAction —— 推了没挥出去也算一次的话，回执会撒谎。
 local function attack_by_ref(j, p, target, mode)
     if target == nil or not target:IsValid() then
-        if j.data ~= nil and j.data.pushed ~= nil then
+        if j.data ~= nil and (j.data.swings or 0) > 0 then
             return "done", string.format("打倒了 %s", j.data.label or "目标")
         end
         return "fail", "entity_gone: 目标已经不存在了"
@@ -2537,24 +2548,37 @@ local function attack_by_ref(j, p, target, mode)
     local health = target.components ~= nil and target.components.health or nil
     if health == nil then return "fail", "target_not_attackable: 这个东西打不了" end
 
+    local native = Whale ~= nil and Whale.native or nil
+
     if j.step == "start" then
         j.data.target = target
         j.data.label = U.pretty(target)
         j.data.mode = mode
-        j.data.hits = 0
+        j.data.swings = 0
         j.data.want = mode == "kill" and 999 or (tonumber(j.ctx and j.ctx.times) or 1)
         j.data.phase_start = U.now()
+        -- 进战斗前记下"上一次真的出手"的时刻，之后用它判断这一刀有没有挥出去
+        j.data.last_swing = native ~= nil and native.LastAttackTime(p) or nil
         j.step = "acting"
     end
 
     if j.step == "acting" then
+        -- 先看引擎有没有真的出手（即使目标已死也要先结算这一刀）
+        if native ~= nil then
+            local last = native.LastAttackTime(p)
+            if last ~= nil and (j.data.last_swing == nil or last > j.data.last_swing) then
+                j.data.last_swing = last
+                j.data.swings = (j.data.swings or 0) + 1
+            end
+        end
+
         local dead = false
         pcall(function() dead = health:IsDead() end)
         if dead or not target:IsValid() then
-            return "done", string.format("打倒了 %s（%d 下）", j.data.label or "目标", j.data.hits)
+            return "done", string.format("打倒了 %s（%d 下）", j.data.label or "目标", j.data.swings or 0)
         end
-        if j.data.hits >= j.data.want then
-            return "done", string.format("打了 %s %d 下（还没倒）", j.data.label or "目标", j.data.hits)
+        if (j.data.swings or 0) >= j.data.want then
+            return "done", string.format("打了 %s %d 下（还没倒）", j.data.label or "目标", j.data.swings)
         end
         -- 自己的血太低就别硬打（保命优先，和 reflex 一个原则）
         local hp = p.components ~= nil and p.components.health or nil
@@ -2563,16 +2587,26 @@ local function attack_by_ref(j, p, target, mode)
         if pct ~= nil and pct < 0.25 then
             return "fail", "low_health: 自己血不多了，先退（继续打会死）"
         end
-        if busy(p) then
-            if U.now() - j.data.phase_start > 180 then return "fail", "attack_failed: 打了很久没结果" end
-            return "run"
-        end
-        push(p, BufferedAction(p, target, ACTIONS.ATTACK, nil))
-        j.data.hits = j.data.hits + 1
-        j.data.pushed = U.now()
         if U.now() - j.data.phase_start > 180 then
             return "fail", "attack_failed: 打了很久没结果"
         end
+        -- 引擎自己的攻击冷却（玩家 min_attack_period = TUNING.WILSON_ATTACK_PERIOD = 0.4s）
+        -- 没冷却完就别推 —— 推了也会被 SGwilson 的 attack 状态直接丢掉（SGwilson.lua:10791）。
+        if native ~= nil and not native.CanSwing(p) then
+            return "run"
+        end
+        if busy(p) then return "run" end
+
+        local ba, why
+        if native ~= nil then
+            ba, why = native.AttackAction(p, target)
+        else
+            ba = BufferedAction(p, target, ACTIONS.ATTACK, nil)
+        end
+        if ba == nil then
+            return "fail", "attack_failed: " .. tostring(why or "no_action")
+        end
+        push(p, ba)
         return "run"
     end
     return "run"

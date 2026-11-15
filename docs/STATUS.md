@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：SURVIVAL-02.1（生存优先级 + 火源提前准备 + 紧急抢占 + 基础需求）｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：NATIVE-REUSE（复用原版照明/逃跑/攻击 + Reflex 职责收窄 + 需求上报）｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -8,11 +8,11 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.37.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.38.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
 | `package.json` | **0.9.3** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
-模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.37.0`）。
+模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.38.0`）。
 判断"磁盘上的模组装没装进游戏"请看 `install-mod.mjs` 的输出（`installedVersion`）。
 
 > 历史遗留：`package.json` 长期停在 0.9.x，模组已经到 0.30.x。M2.2.1 决定**不建同步机制**，
@@ -62,6 +62,11 @@
 - **reflex（保命反射，默认开）**：血/饿见底、入夜没光、火要灭、被贴脸、理智过低时自己动手
   （安全进食/上药、举或做火把、添柴、后撤、采花、紧急采浆果）。白天还会提前备 2 草 + 2 树枝。
   **只在没有任务在跑时插手**；它占用 Actor 时模型的动作会收到 `actor_busy`（正常现象，先 `stop` 再试）。
+  **NATIVE-REUSE 起**：照明用引擎读数（`IsInLight` / `GetCalculatedRadius`）、逃跑方向用原版
+  `RunAway:GetRunAngle` 的绕障几何、解决不了时**上报紧急需求**（见下一条）。
+- **紧急需求上报**：反射补不上光源/材料/食物时，会把"缺什么、附近多远都没有"写进状态，
+  `get_state` 的「注意」里直接告诉模型"反射只在附近采料、不会走远，你得自己去找"。
+  它**不再**无限重试无效动作。详见 [`NATIVE_REUSE.md`](NATIVE_REUSE.md)。
 - **计划层（Plan）**：从快照推导当前唯一目标并保持稳定；F8 目标不变时只注入一行紧凑计划，
   目标切换时才展开完整状态，减少每轮重新规划与 token 开销。
 - **Control Lease**：F8 与 DSH 会话不会同时操作；换手要等旧主人交回 `job_cleared` 的 ACK。
@@ -92,6 +97,7 @@
 | **SURVIVAL-01** | 四个基础生存动作 gather / eat / craft / equip（工具 7 → 11） | UNIT（515/515）；真机见 §4.5 | 本节 §4.5 |
 | **SURVIVAL-02** | 稳定计划层 + 默认保命反射（提前进食/补理智/备火把/脱战）+ HUD 挂载修复 | UNIT（531/531）；RUNTIME NOT_RUN | 本节 §3 / §4 |
 | **SURVIVAL-02.1** | 先查真实死因；修 prep_light；白天做火把 + 材料保护；P0/P1/P2 安全抢占；饥饿/生命不被任务阻塞；防抖 + 诊断日志；白天不点火 + 按整夜囤料；没草时改走 firepit + 有界找料；固定巢穴不挡收纳 + 捡地上现成材料；修 unequip 丢物品 + 黄昏不抢占死锁；修 GiveItem 参数坑；饥饿/温度抢占前预判；**黄昏不举火把、入夜才举（修正燃料账）** | UNIT（599/599）；RUNTIME 见 §4.6 | 本节 §4.6 |
+| **NATIVE-REUSE** | 审计原版能力并复用三项：**真实照明**（`IsInLight` + `Light:GetCalculatedRadius`，不用 `lightsource` 标签）、**绕障逃跑方向**（原版 `RunAway:GetRunAngle`）、**玩家挥砍**（`ACTIONS.ATTACK` 的 BufferedAction + `lastdoattacktime` 核对）。Reflex 职责收窄到"现在就会死的五件事"，解决不了时**上报紧急需求**（`Needs()` → `get_state` 提示）。新建 `scripts/whale/native.lua`；**没动** Control Lease / Lua Guard / Dispatcher / ACK / 文件桥 | UNIT（722/722，含新增 28 条；NR-12/13 真的加载原版 runaway.lua 跑通；NR-25..28 装配链）；RUNTIME **NOT_RUN**（本机世界未运行） | [`NATIVE_REUSE.md`](NATIVE_REUSE.md)、`CODE_ARCHAEOLOGY_REPORT.md` |
 
 ---
 

@@ -59,9 +59,10 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  actor.lua      Actor Provider：只认"本地主机、活着、非灵魂"的那个玩家                     │
 │  bridge.lua     读命令、写结果、维护租约回执（含 job_cleared）                             │
 │  guard.lua      ★ 第二道闸：白名单 + 参数 + 目标 + 租约 + 代际 + 权限，逐条复核             │
+│  native.lua     ★ 原版能力薄封装：真实照明 / 原版 RunAway 几何 / 玩家 ATTACK 动作            │
 │  actions.lua    动作实现：BufferedAction + locomotor:PushAction（和玩家点鼠标同一条路）     │
 │  macros.lua     宏（仍在，但**不对模型开放**）                                             │
-│  reflex.lua     保命反射：血少/天黑/火灭/贴脸时自己动手（只在没有任务时）                   │
+│  reflex.lua     保命反射：血少/天黑/火灭/贴脸时自己动手；解决不了就上报紧急需求               │
 │  hud.lua        游戏内 HUD；config.lua 配置（夹到安全区间）                                │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -234,9 +235,11 @@ dispatch({tool, args, owner})
 | `move_to` | 位置到点 / 距离明显变小 |
 | `pickup` | 背包里该 prefab 数量 +1 / 目标从地上消失 |
 | `harvest` | ① 背包里产物 +1 ② 同一株（prefab+坐标）`harvest_ready` 由 true 变 false ③ 目标消失 |
+| `attack` / `kill` | 目标消失 / 血量下降 / **引擎记录的出手次数**（`combat.lastdoattacktime`）达到要求 |
 
 都对不上就返回 `unverified` 或 `unknown`——**模型不该自己宣布成功**。
 `harvest` 特意保留"产物没进背包"的可能（背包满时原生会掉地上），所以回执会明说。
+`attack` 的出手次数**不数我们推了几次**：推了被 `SGwilson` 丢掉也算一次的话，回执会撒谎。
 
 ---
 

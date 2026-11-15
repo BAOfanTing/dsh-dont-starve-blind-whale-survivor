@@ -303,9 +303,9 @@ function loadReflex(fengari, variant) {
     REPORTS = {}
   `, '文件桥桩')
   for (const name of variant === 'noActions'
-    ? ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules', 'equiprules', 'config', 'reflex']
+    ? ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules', 'equiprules', 'config', 'native', 'reflex']
     : ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules',
-       'equiprules', 'config', 'actions', 'reflex']) {
+       'equiprules', 'config', 'native', 'actions', 'reflex']) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const global = (name) => {

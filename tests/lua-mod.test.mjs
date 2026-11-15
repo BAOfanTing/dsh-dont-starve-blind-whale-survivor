@@ -219,7 +219,7 @@ function loadMod(fengari) {
   run(FILES, '文件名')
   for (const name of [
     'json', 'util', 'pickuprules', 'harvestrules', 'eatrules', 'craftrules', 'equiprules',
-    'config', 'actor', 'nearby', 'observe', 'actions',
+    'config', 'actor', 'nearby', 'observe', 'native', 'actions',
   ]) {
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
@@ -787,7 +787,7 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
         assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
     end
-    assert(#MODIMPORTS == 18, "只该 modimport 18 个 B 栈模块（SURVIVAL-01 起多了 gather/eat/craft/equip rules），实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 19, "只该 modimport 19 个 B 栈模块（NATIVE-REUSE 起多了 native），实际 " .. #MODIMPORTS)
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
 assert(idx("scripts/whale/util.lua") < idx("scripts/whale/pickuprules.lua"), "pickuprules 要在 util 之后")
 assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/nearby.lua"), "pickuprules 必须在 nearby 之前（观察侧要用）")
@@ -800,6 +800,9 @@ assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/guard.lua"), "p
     assert(idx("scripts/whale/nearby.lua") < idx("scripts/whale/guard.lua"), "guard 要用 nearby")
     assert(idx("scripts/whale/guard.lua") < idx("scripts/whale/bridge.lua"), "文件桥要用 guard")
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/observe.lua"), "util 要在观察之前")
+    assert(idx("scripts/whale/observe.lua") < idx("scripts/whale/native.lua"), "native 要在 observe 之后（它用 Whale.util / 附近实体）")
+    assert(idx("scripts/whale/native.lua") < idx("scripts/whale/actions.lua"), "native 要在 actions 之前（玩家攻击走它）")
+    assert(idx("scripts/whale/native.lua") < idx("scripts/whale/reflex.lua"), "native 要在 reflex 之前（照明/逃跑走它）")
     assert(idx("scripts/whale/observe.lua") < idx("scripts/whale/actions.lua"), "观察要在动作之前")
     assert(idx("scripts/whale/actions.lua") < idx("scripts/whale/macros.lua"), "宏要加载在动作之后")
     assert(idx("scripts/whale/macros.lua") < idx("scripts/whale/bridge.lua"), "宏要在文件桥之前")
