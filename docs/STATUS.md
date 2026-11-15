@@ -9,7 +9,7 @@
 | 位置 | 版本 | 含义 |
 |---|---|---|
 | `DontStarveWhaleSurvivor/modinfo.lua` | **0.37.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua（哪怕只是注释）就升一位。 |
-| `package.json` | **0.9.2** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
+| `package.json` | **0.9.3** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号**故意不同步**，它们描述的是两个交付物：
 模组装进游戏 `mods/`，插件装进 DSH。给 AI 看的状态里报的是**模组版本**（`0.37.0`）。
@@ -312,7 +312,7 @@ Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)}, TECH.NONE)
 
 #### 4.6.4 自动化测试
 
-`node --test tests/*.test.mjs` → **599 passed / 0 failed**（基线 535 + 新增 64）。
+`node --test tests/*.test.mjs` → **607 passed / 0 failed**（基线 535 + 新增 72）。
 新增 `tests/survival-02-1-priority.test.mjs` 覆盖任务书要求的 18 项（编号与测试文件里一致）：
 
 | 要求 | 用例 |
@@ -717,6 +717,50 @@ Session：加载 `Version:0.37.0`、`REFLEX=true`，从第 14 夜出生（满状
 > 不是旧存档延续；`REFLEX=true` 由日志 `Overriding ... REFLEX with value true` 确认。
 > 未观测到的项：第一夜/第二夜的「开局」在更早的版本里已分别复验（见 §4.6.7），
 > 本轮观测的是第 14~16 夜，按"连续真实度过两夜"判定成立。
+
+#### 4.6.15 长跑会话日志内置到插件（Node 0.9.3）
+
+用户要求：长跑时「启动新会话插件自己就会写日志」，而且**每次覆盖写、不是增量累积**。
+原来靠手工起 `tools/session-recorder.mjs` 后台进程，且是 append 累积，多个会话混在一起。
+
+**改动**：
+
+| 文件 | 改动 |
+|---|---|
+| `lib/session-log.js`（新） | 记录器核心搬到 `lib/`（发布包 `files` 只含 `lib/`，`tools/` 不会打包）。新增 `SessionLog`：**启动时 `writeFileSync(..., '')` 清空 session.\*、`copyFileSync` 覆盖 server_log.txt**，会话内 append；自动用 `GameBridge.readState()` 定位活跃分片，换分片也覆盖重置 |
+| `lib/index.js` | `apply()` 里自动 `ctx.effect` 起 `SessionLog`；监听 `session/event`，**新会话首次调用 dst 工具时 `reset()`**（覆盖写）。新增配置 `sessionLogEnabled`（默认 true）/ `sessionLogDir`（留空 = 插件目录 `latestLogs/`） |
+| `tools/session-recorder.mjs` | 改成 CLI 薄封装 + re-export，保留 `npm run record` 与 8 条 REC 单测 |
+| `tools/build-client.mjs` → `lib/client.js` | 重新生成配置卡片，新增两个设置项 |
+| `tools/sync-longrun-logs.mjs` | 人工备注同步器（写 `notes.md`、覆盖复制 `server_log.txt`） |
+
+**顺手修的真 bug**：记录器 `_emit` 里 `{ t: ISO, ...event }`，而 `result` 事件带
+`t: res.t`（数字时间戳）覆盖了 ISO 字符串 → `eventsToText` 的 `t.slice(11,19)` 抛错、
+整条事件写盘失败（后台任务日志里出现 10 次 `[recorder] 写盘失败：event.t.slice is not a function`）。
+现在 `t` 恒为 ISO，游戏时间戳改名 `game_t`，`eventsToText` 另有兜底。
+
+**`latestLogs/` 只保留 4 份**（用户要求精简，删掉了重复的桥文件副本 / snapshot / state-history）：
+`session.txt`（人可读时间线）、`session.jsonl`（结构化）、`server_log.txt`（游戏原始日志）、
+`notes.md`（操作与分析备注）。
+
+**验证**：新增 `tests/session-log.test.mjs` 8 条（SL-1..8），覆盖
+「数字 t 不抛错」「启动覆盖写」「新会话 reset 覆盖写」「源定位」「插件源码静态断言」。
+全套 **607/607**。真机端到端实测：启动前 `session.txt` 58 KB → 启动后只剩一行
+`NOTE 日志已覆盖重置（插件启动）`，5 秒内自动采到 `STATE`/`CMD`，
+`server_log.txt` 覆盖复制为当前 56 KB 快照。
+
+**重启 DSH 后的真机确认（用户重进游戏，URL 从 3579 变为 1221）**：
+
+| 验证项 | 证据 |
+|---|---|
+| 插件启动自动覆盖写 | `session.txt` 只剩 3 行 / 490 字节，旧的 58 KB 历史全清；首行 `NOTE 日志已覆盖重置（切换数据源 ...Cluster_2/Master/save）` —— 自动定位活跃分片成功 |
+| **新会话覆盖写** | 调一次 `dst` 后首行变成 `NOTE 日志已覆盖重置（新会话 session-7d473794-...）`，上一段「切换数据源」记录被清掉，只留本次会话 |
+| 无需手工后台进程、持续自动写 | 已停掉 v9 手工记录器；STATE 每 5 秒自动增长（5 行 → 7 行） |
+| `notes.md` 人工分析保留 | 15 行未被清空（人工备注不属于自动日志） |
+| `server_log.txt` 覆盖复制 | 73 KB 当前快照，非增量追加 |
+
+> 结论：插件内置会话日志的「启动新会话自己写、每次覆盖写」已在真机确认，据此提交。
+> 另注：这个新世界 `get_state` 提示 `REFLEX=config_disabled`（保命反射被关），
+> 与之前 `REFLEX=true` 的测试世界配置不同，长跑时全靠模型自己保命。
 
 ## 5. 已知问题（都会真实影响体验）
 | # | 问题 | 影响 | 现状 |

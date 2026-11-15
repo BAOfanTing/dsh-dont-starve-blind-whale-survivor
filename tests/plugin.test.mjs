@@ -54,6 +54,7 @@ test('apply() 会把 MCP 服务器开起来，并把设置推到游戏目录', a
     autoInstallMod: false,
     presetEnabled: false,
     gatewayEnabled: false,
+    sessionLogEnabled: false, // 别让插件测试污染真实 latestLogs/
   })
   try {
     const up = await waitFor(async () => {

@@ -11,7 +11,7 @@ powershell -ExecutionPolicy Bypass -File test.ps1
 ```
 
 它会：找 Node → 缺 `fengari`/`luaparse` 就装上 → 跑全部单测。
-最后一次实测（SURVIVAL-02.1）：**599 passed / 0 failed，退出码 0**。
+最后一次实测（SURVIVAL-02.1）：**607 passed / 0 failed，退出码 0**。
 
 等价的直接命令（不用 PowerShell 包装）：
 
@@ -29,14 +29,14 @@ node --test --test-force-exit "tests/*.test.mjs"
 
 | 类 | 需要的环境 | 命令 | 数量 | 本次 |
 |---|---|---|---|---|
-| **单元 / 沙箱** | 只要 Node | `node --test tests/*.test.mjs` | **599** | ✅ 已跑 |
-| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在 599 里 | ✅ 已跑 |
-| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在 599 里 | ✅ 已跑 |
-| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在 599 里 | ✅ 已跑 |
-| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6 | 脚本，不算进 599 | 见 §6.8 |
+| **单元 / 沙箱** | 只要 Node | `node --test tests/*.test.mjs` | **607** | ✅ 已跑 |
+| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在 607 里 | ✅ 已跑 |
+| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在 607 里 | ✅ 已跑 |
+| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在 607 里 | ✅ 已跑 |
+| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6 | 脚本，不算进 607 | 见 §6.8 |
 | **端到端（模型→游戏）** | 游戏 + DSH 会话 + API Key | 见 §6.5 | — | **NOT_RUN** |
 
-趋势：479（M2.2.1）→ 531（SURVIVAL-02）→ **599（SURVIVAL-02.1，新增 64）**。测试只增不减。
+趋势：479（M2.2.1）→ 531（SURVIVAL-02）→ **607（SURVIVAL-02.1，新增 72）**。测试只增不减。
 
 ---
 
@@ -58,7 +58,7 @@ node --test --test-force-exit "tests/m2_*.test.mjs"    # 只跑 M2 系列
 | 动作 | `m2_1-pickup-lua`、`m2_1-pickup-node`、`m2_2-actionable-nearby`、`m2_3-harvest`（30 例） | 白名单、目标校验、距离、成熟度、结果核对 |
 | MCP / 桥 / Agent | `mcp.test.mjs`、`bridge.test.mjs`、`agent.test.mjs` | Streamable HTTP + SSE、文件桥读写、F8 循环 |
 | 生存优先级与火源 | `survival-02-1-priority.test.mjs`（56 例） | prep_light 状态机、材料保护、P0/P1 抢占、防抖、死亡重置、白天不点火、按整夜囤料、燃料账、没草→firepit 破局、有界找料、固定巢穴不挡收纳、捡地上现成材料、unequip 不丢物品、缺料不许抢占死锁、端到端 做火把→收纳→夜里举起、饥饿/温度抢占前预判、**黄昏不举/入夜才举时序** |
-| 旁路会话记录器 | `session-recorder.test.mjs`（8 例） | 只读时间线、去重、增量日志、GBK 兜底、不改写桥文件 |
+| 旁路会话记录器 | `session-recorder.test.mjs`（8 例）+ `session-log.test.mjs`（8 例） | 只读时间线、去重、增量日志、GBK 兜底、不改写桥文件；**插件内置 SessionLog 覆盖写、数字 t 兜底、源定位、新会话重置** |
 
 ---
 
@@ -310,7 +310,7 @@ npm run record -- --bridgeDir "<...\Cluster_2\Master\save" `
 
 | 项 | 结论 |
 |---|---|
-| 单测 **599** 项（含 SURVIVAL-02.1 新增 64） | **UNIT：通过**（599/599） |
+| 单测 **607** 项（含 SURVIVAL-02.1 新增 72） | **UNIT：通过**（607/607） |
 | 干净检出（没有 `dist`/`bwc_config`/`.runtime`）后跑单测 | **通过**（479/479，M2.2.1 与 STABILITY-01 都验过） |
 | 真实游戏：模组加载（两个分片无 Lua 错误） | **RUNTIME：通过** |
 | 真实游戏：`get_state` / `nearby` | **RUNTIME：通过**（9 桶、`#N` 唯一、上限生效） |
