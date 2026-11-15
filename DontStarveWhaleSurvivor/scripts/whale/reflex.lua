@@ -61,13 +61,19 @@ local inflight = nil     -- 当前在跑的反射意图 { key, job, priority }
 local pending = nil      -- 已发起、待核对的意图 { kind, ... }
 
 --- ★ 火把燃料账（游戏原生数值，scripts/tuning.lua）：
----   seg_time=30, dusk_segs=4, night_segs=2 → dusk 120s + night 60s = 黑暗 180s
+---   seg_time=30, dusk_segs=4, night_segs=2 → dusk 120s + night 60s
 ---   TORCH_FUEL = night_time*1.25 = 60*1.25 = 75 秒/把
---- 所以一把火把盖不住一整夜，必须**按需点火 + 平时囤料**，不能白天就点着烧。
-local DARK_SECONDS = 180        -- 黄昏+夜晚总长（秒）
-local TORCH_SECONDS = 75        -- 一把火把能烧多久（秒）
-local TORCHES_PER_NIGHT = 3     -- ceil(180/75)，一整夜最多要几把
-local RESERVE_TORCHES = 2       -- 平时至少备好几把的材料（够熬过大半夜 + 一次意外）
+--- ★ 真正需要光的只有 **night 的 60 秒**：grue 的伤害条件是 `not inst:IsInLight()`
+---   （scripts/components/grue.lua），黄昏仍有自然光、不掉血。真机第 14 夜验证：
+---   整个 dusk 血量 200/200 没动，进 night 10 秒就掉到 99.95。
+---   所以一把 75s 的火把足够盖住 60s 黑夜 —— 关键是**别在黄昏就点着**。
+---   旧版把 dusk 也当黑暗（TORCHES_PER_NIGHT=ceil(180/75)=3），黄昏举起点燃，
+---   75s 燃料全烧在还有自然光的时段，进夜时刚好空了 —— 真机就是这么死的。
+local DUSK_SECONDS = 120      -- 黄昏（仍有自然光，不需要火把）
+local NIGHT_SECONDS = 60      -- 完全黑暗（grue 才会攻击）
+local TORCH_SECONDS = 75      -- 一把火把能烧多久（秒）
+local TORCHES_PER_NIGHT = 1   -- ceil(NIGHT_SECONDS/TORCH_SECONDS)，只需一把
+local RESERVE_TORCHES = 2     -- 平时备好几把的材料（保险：补做/意外）
 local SEEK_RADIUS = 28          -- 附近采不到时，最多看多远（格）
 local SEEK_MAX_TILES = 22       -- 一次最多主动走多远（格），不无限远离安全区
 
@@ -546,12 +552,14 @@ local function craft_torch(p)
     return false
 end
 
---- 白天把举在手上的火把收回背包（燃料只在手持时消耗）。
---- 只在"天亮着、手上不是唯一光源、也没有威胁"时收，避免夜里把光收了。
+--- 白天/黄昏把举在手上的火把收回背包（燃料只在手持时消耗）。
+--- ★ 真机第 14 夜：黄昏不收 → 火把在还有自然光的 120 秒里烧掉 75 秒燃料，
+---   进 night 刚好空了，黑暗致死。黄昏完全可以收（grue 只在 night 攻击）。
+---   只有 **night** 才必须举着光，绝不能收。
 local function reflex_stow_light(p, rep)
     if rep == nil then rep = light_report(p) end
     local phase = rep.phase
-    if phase ~= "day" then return false end          -- 只有大白天才收
+    if phase == "night" then return false end       -- 只有黑透的夜里才留着光
     if rep.hand == nil then return false end          -- 手上没火把
     if not cooldown_ok("stow_light") then return false end
     -- 只有"会追人的活怪"贴脸才暂缓；固定巢穴（hostile+structure）不算，
@@ -632,6 +640,22 @@ local function reflex_light(p)
     mark_fail("light", 6)
     return false
 end
+--- 抢占前的"能不能真的帮上忙"预判。
+--- 真机第 13 天：饥饿 13% 时 P1 每 5 秒以 `hunger_emergency` 打断一次模型动作，
+--- 但背包里没有任何食物，reflex_eat 返回 false —— 抢占了却什么也没做，
+--- 结果模型和反射互相锁死，活活饿死。和 0.36.0 的光照死锁同源。
+local function food_available(p)
+    local rules = Whale ~= nil and Whale.eatrules or nil
+    local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
+    if rules == nil or inv == nil then return false end
+    return rules.PickBest(inv) ~= nil
+end
+
+local function heal_available(p)
+    if find_healer_prefab(p) ~= nil then return true end
+    return food_available(p)   -- 没药时 reflex_heal 靠吃东西
+end
+
 --- 吃（安全白名单）
 local function reflex_eat(p)
     local rules = Whale ~= nil and Whale.eatrules or nil
@@ -676,7 +700,7 @@ end
 ---   · 目标必须**先被观察到**（不是盲走），且距离 ≤ SEEK_MAX_TILES 格
 ---   · 12 秒独立冷却，不会每秒重复起步
 local function reflex_seek_light(p, rep, candidates)
-    if rep.phase ~= "day" then return false end
+    if rep.phase == "night" then return false end   -- 白天/黄昏都可以找料，入夜就别走远
     if not cooldown_ok("seek_light") then return false end
     if active_threat(p, 6) ~= nil then return false end
 
@@ -749,7 +773,9 @@ local function reflex_stock_light(p, rep)
     end
     table.sort(candidates, function(a, b) return a.prefab < b.prefab end)
 
-    -- ★ 先捡地上现成的（比采草丛快，且常常是死亡掉落/别人割剩的）
+    -- ★ 先捡地上现成的（比采草丛快，且常常是死亡掉落/别人割剩的）。
+    --   PICK / PICKUP 都带 extra_arrive_dist：loco:PushAction 的 BufferedAction
+    --   会自己走到目标，不需要我们先 move_to（别凭"够不着"的直觉乱加距离限制）。
     local ground = ready_ground_material(p, wanted, 12)
     if ground ~= nil and push_pickup(p, ground) then
         mark("stock")
@@ -759,7 +785,7 @@ local function reflex_stock_light(p, rep)
     end
 
     for _, c in ipairs(candidates) do
-        -- 用附近观察半径（16 格）找，但不走出安全区（不 move_to）
+        -- 16 格内才直接采；更远的交给下面的有界 seek 走过去
         local target = exact_ready(p, c.source, 16)
         if target ~= nil then
             if push_pick(p, target) then
@@ -831,7 +857,7 @@ local function reflex_sanity(p)
     if sanity == nil or sanity >= SANITY_LOW then return false end
     if not cooldown_ok("sanity") then return false end
     local phase = current_phase()
-    if (phase == "dusk" or phase == "night") and not has_light(p) then return false end
+    if phase == "night" and not has_light(p) then return false end
     local flower = exact_ready(p, "flower", 10)
     if flower ~= nil and push_pick(p, flower) then
         mark("sanity")
@@ -841,7 +867,9 @@ local function reflex_sanity(p)
     return false
 end
 
---- 温度异常（P1，只做安全的"靠近/远离火"）
+--- 温度异常（P1，只做安全的"靠近/远离火"）。
+--- can_run：附近必须真的有火，否则别抢占（否则和 eat / light 死锁同源）。
+--- 定义顺序上 temperature_available 放在 temperature_need 之后，避免 Lua 前向引用。
 local function temperature_need(p)
     local comp = p ~= nil and p.components ~= nil and p.components.temperature or nil
     if comp == nil then return nil end
@@ -850,15 +878,21 @@ local function temperature_need(p)
     local cold = t < 5
     local hot = t > 65
     if not cold and not hot then return nil end
+    -- 抢占前先确认附近真的有火；没有就返回 can_run=false，让 try_action 跳过
+    local fire = U.find_nearest(p, 20, { "fire" }, nil, function(e)
+        local fueled = e.components ~= nil and e.components.fueled or nil
+        return fueled == nil or not fueled:IsEmpty()
+    end)
+    if fire == nil then
+        diag("temperature", { "too_" .. (cold and "cold" or "hot") .. "=true", "fire=none" })
+        return nil
+    end
     return {
         reason = cold and "temperature_cold" or "temperature_hot",
+        can_run = true,
         run = function(p2)
-            local fire = U.find_nearest(p2, 20, { "fire" }, nil, function(e)
-                local fueled = e.components ~= nil and e.components.fueled or nil
-                return fueled == nil or not fueled:IsEmpty()
-            end)
-            if fire == nil then
-                diag("temperature", { "too_" .. (cold and "cold" or "hot") .. "=true", "fire=none" })
+            -- 用抢占前查到的火（同一 tick，实体还有效）
+            if fire == nil or not fire:IsValid() then
                 mark_fail("temperature", 10)
                 return false
             end
@@ -999,11 +1033,12 @@ local function confirm_pending(p)
         })
         if not ok then
             mark_fail("craft_light", 8)
-        elseif pending.phase == "day" and hand ~= nil then
-            -- ★ 白天刚做出来又被自动装备了：立刻安排收回背包，别让燃料在白天烧掉
+        elseif pending.phase ~= "night" and hand ~= nil then
+            -- ★ 白天/黄昏刚做出来又被自动装备了：立刻安排收回背包。
+            --   黄昏也要收（grue 只在 night 攻击），否则燃料烧在还有自然光的时段。
             last["stow_light"] = nil
             fail_until["stow_light"] = nil
-            diag("stow_light", { "scheduled=true", "reason=crafted_in_daytime" })
+            diag("stow_light", { "scheduled=true", "reason=crafted_before_night" })
         end
     elseif pending.kind == "eat" then
         local now = hunger_percent(p)
@@ -1041,9 +1076,9 @@ function R.Priority(p)
     local attacker = nearest_hostile(p, 3)
     if attacker ~= nil and combat_targeting(attacker, p) then return P0, "under_attack" end
     if hp ~= nil and hp < 0.25 and nearest_hostile(p, 2.5) ~= nil then return P0, "critical_health" end
-    if (phase == "dusk" or phase == "night") and not rep.has_usable then return P0, "dark_no_light" end
+    if phase == "night" and not rep.has_usable then return P0, "dark_no_light" end
 
-    if phase ~= "dusk" and phase ~= "night" and not rep.portable then
+    if phase ~= "night" and not rep.portable then
         if rep.can_craft then return P1, "light_preparation" end
         return P2, "light_materials"
     end
@@ -1080,7 +1115,9 @@ local function run(p)
     if hp ~= nil and hp < 0.25 and nearest_hostile(p, 2.5) ~= nil then
         if try_action(p, "flee", P0, "critical_health", function() return reflex_flee(p) end) then return end
     end
-    if (phase == "dusk" or phase == "night") and not rep.has_usable then
+    -- ★ 只在**完全黑透的 night** 才点火（P0）。黄昏仍有自然光、grue 不攻击，
+    --   黄昏点火只会把 75s 燃料烧在不需要光的地方（真机第 14 夜致死原因）。
+    if phase == "night" and not rep.has_usable then
         if try_action(p, "light", P0, "dark_no_light",
                       function() return reflex_light(p) end,
                       function() return light_action_available(p) end) then return end
@@ -1089,17 +1126,25 @@ local function run(p)
     -- ── P1：高优先生存需求（可在安全时中断普通采集/探索）
     -- 白天只在"完全没料可做"时才补做一把（做完立刻收回背包，见 craft_torch 注释）；
     -- 备料够就交给 P2 囤料，别在白天把火把点着烧。
-    if phase ~= "dusk" and phase ~= "night" and (not rep.portable) and rep.can_craft then
+    if phase ~= "night" and (not rep.portable) and rep.can_craft then
         if try_action(p, "craft_light", P1, "light_preparation", function() return craft_torch(p) end) then return end
     end
+    -- ★ 抢占前先判"能不能真的帮上忙"：背包里没食物时 reflex_eat 必然失败，
+    --   若仍抢占，就会把模型正在做的采集/移动反复打断（真机第 13 天：饥饿 13%、
+    --   `hunger_emergency` 抢占却什么都没吃到，模型和反射互相锁死）。
+    --   和 0.36.0 光照动作的 light_action_available 是同一条规则。
     if hunger ~= nil and hunger < EAT_EMERGENCY then
-        if try_action(p, "eat", P1, "hunger_emergency", function() return reflex_eat(p) end) then return end
+        if try_action(p, "eat", P1, "hunger_emergency",
+                      function() return reflex_eat(p) end,
+                      function() return food_available(p) end) then return end
     end
     if hp ~= nil and hp < HEAL_EMERGENCY then
-        if try_action(p, "heal", P1, "health_low", function() return reflex_heal(p) end) then return end
+        if try_action(p, "heal", P1, "health_low",
+                      function() return reflex_heal(p) end,
+                      function() return heal_available(p) end) then return end
     end
     local temp = temperature_need(p)
-    if temp ~= nil then
+    if temp ~= nil and temp.can_run == true then
         if try_action(p, "temperature", P1, temp.reason, temp.run) then return end
     end
 
@@ -1108,8 +1153,8 @@ local function run(p)
     -- ★ 白天把手上火把收回背包（燃料只在手持时消耗）。
     --   放在 P2：不能抢在"饿了要吃 / 做完收尾"前面（真机验证时就是这么把 RF-11/RF-12 挤掉的）。
     if reflex_stow_light(p, rep) then return end
-    -- 囤料不再要求"没有火把"：只要备料不够撑过夜就一直囤
-    if phase ~= "dusk" and phase ~= "night" then
+    -- 囤料不再要求"没有火把"：只要备料不够撑过夜就一直囤（黄昏是最后窗口）
+    if phase ~= "night" then
         if reflex_stock_light(p, rep) then return end
     end
     if reflex_forage(p) then return end

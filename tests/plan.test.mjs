@@ -100,8 +100,9 @@ test('PLAN-3：夜里没光 —— 用背包材料做火把', () => {
   assert.match(plan.next, /craft torch/)
 })
 
-test('PLAN-4：背包里已经有火把 —— 直接装备', () => {
-  const snapshot = makeSnapshot({ phase: 'dusk', items: ITEMS(['torch', 1]) })
+test('PLAN-4：入夜后背包里已经有火把 —— 直接装备', () => {
+  // 真机 0.37.0：黄昏仍有自然光（grue 不攻击），不该举火把；只有 night 才举
+  const snapshot = makeSnapshot({ phase: 'night', items: ITEMS(['torch', 1]) })
   const plan = derivePlan(snapshot)
   assert.equal(plan.goalId, 'light')
   assert.match(plan.next, /equip torch/)

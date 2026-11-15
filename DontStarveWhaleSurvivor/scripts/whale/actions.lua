@@ -2622,15 +2622,15 @@ local function unequip_by_slot(j, p, slot_name)
         local ok, item = pcall(function() return inv:Unequip(slot) end)
         if not ok then return "fail", "unequip_failed: " .. tostring(item) end
         if item ~= nil and item:IsValid() then
-            -- 装备栏已摘掉，但物品必须显式回到背包
-            local given = false
-            pcall(function()
-                local free = inv:GetNextAvailableSlot()
-                given = inv:GiveItem(item, free) ~= nil
-            end)
+            -- 装备栏已摘掉，但物品必须显式回到背包。
+            -- ★ 别调 GetNextAvailableSlot()：原生签名是 GetNextAvailableSlot(item)，
+            --   无参调用会抛错被 pcall 吞掉，实测导致误报 unequip_no_space、火把丢失。
+            --   GiveItem(item) 不带 slot 时内部自己会找空位并返回 slot/true。
+            local ok_give, res = pcall(function() return inv:GiveItem(item) end)
+            local given = ok_give and res ~= nil and res ~= false
             if not given then
-                -- 兜底：GiveItem 失败就别假装成功，避免"收纳成功但火把没了"
-                return "fail", string.format("unequip_no_space: %s 没放回背包（背包满了？）", j.data.prefab)
+                -- 兜底：塞进 activeitem（ForEachItem 也会遍历到），总比让物品消失好
+                pcall(function() inv:SetActiveItem(item) end)
             end
         end
         j.step = "acting"
@@ -2641,11 +2641,11 @@ local function unequip_by_slot(j, p, slot_name)
         local now = nil
         pcall(function() now = inv:GetEquippedItem(slot) end)
         if now == nil then
-            -- 必须核对物品真的进了背包（ForEachItem 会同时遍历 itemslots 和 equipslots）
+            -- 必须核对物品真的进了背包（ForEachItem 会同时遍历 itemslots / equipslots / activeitem）
             local in_bag = false
             pcall(function()
-                inv:ForEachItem(function(item)
-                    if item ~= nil and tostring(item.prefab or "") == j.data.prefab then in_bag = true end
+                inv:ForEachItem(function(it)
+                    if it ~= nil and tostring(it.prefab or "") == j.data.prefab then in_bag = true end
                 end)
             end)
             if not in_bag then
