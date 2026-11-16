@@ -329,3 +329,98 @@ test('SL-16：clearState（覆盖写）会把操作序号和周边记忆一起�
   r.tick()
   assert.equal(r.events.filter((e) => e.kind === 'env').length, 1, '清空后同一帧要能重新记一条')
 })
+
+test('SL-18：recordAiTurn 和 recordAiThought 输出结构化 TURN 和 THINK 行', () => {
+  const dir = tempDir()
+  const src = makeBridgeFiles(dir)
+  const out = path.join(dir, 'session.jsonl')
+  const r = new SessionRecorder({ ...src, out, stateEveryMs: 0, envEveryMs: 0 })
+
+  r.recordAiTurn({
+    step: 5,
+    day: 3,
+    phase: 'night',
+    observeReason: 'periodic',
+    plan: '砍树并生火',
+    inv: 'axe:1,torch:1',
+    preview: '当前健康良好，准备照明',
+  })
+
+  r.recordAiThought({
+    step: 5,
+    thought: '天黑了，周围没有光源，需要立刻装备火把。\n然后再找附近的树。',
+    content: '正在装备火把并准备砍树。',
+    model: 'claude-3-5-sonnet',
+    latencyMs: 1420,
+    tokens: 450,
+    toolCalls: [{ name: 'equip', args: { item: 'torch' } }],
+  })
+
+  const turns = r.events.filter((e) => e.kind === 'ai_turn')
+  const thoughts = r.events.filter((e) => e.kind === 'ai_thought')
+  assert.equal(turns.length, 1)
+  assert.equal(thoughts.length, 1)
+
+  assert.equal(turns[0].step, 5)
+  assert.equal(turns[0].plan, '砍树并生火')
+  assert.equal(thoughts[0].latencyMs, 1420)
+  assert.equal(thoughts[0].model, 'claude-3-5-sonnet')
+
+  const txt = fs.readFileSync(r.txtOut, 'utf8')
+  assert.match(txt, /TURN   \| #5 \[night 第3天\] reason=periodic/)
+  assert.match(txt, /当前计划：砍树并生火/)
+  assert.match(txt, /THINK  \| #5 耗时=1420ms 模型=claude-3-5-sonnet tokens=450 动作数=1/)
+  assert.match(txt, /\[思考\] 天黑了，周围没有光源/)
+  assert.match(txt, /\[回复\] 正在装备火把并准备砍树。/)
+})
+
+test('SL-19：带 step 的 beginTool/endTool 在 CALL 和 DONE 里带上 [S<step>]', () => {
+  const dir = tempDir()
+  const src = makeBridgeFiles(dir)
+  const r = new SessionRecorder({ ...src, out: path.join(dir, 's.jsonl'), stateEveryMs: 0, envEveryMs: 0 })
+
+  const seq = r.beginTool({ tool: 'chop', args: { target_ref: '#3' }, by: 'f8_agent', step: 12 })
+  r.endTool({ seq, tool: 'chop', by: 'f8_agent', ok: true, ms: 850, text: '砍倒了', step: 12 })
+
+  const txt = fs.readFileSync(r.txtOut, 'utf8')
+  assert.match(txt, /CALL   \| #1 \[S12\] chop args=\{"target_ref":"#3"\} by=f8_agent/)
+  assert.match(txt, /DONE   \| #1 \[S12\] chop ok 850ms/)
+})
+
+test('SL-20：archive 现场归档与死亡自动归档', () => {
+  const dir = tempDir()
+  const src = makeBridgeFiles(dir)
+  const out = path.join(dir, 'session.jsonl')
+  const r = new SessionRecorder({ ...src, out, stateEveryMs: 0, envEveryMs: 0 })
+
+  r.note('测试准备归档')
+  const archived = r.archive('test_reason')
+  assert.ok(archived)
+  assert.ok(fs.existsSync(archived), '归档 txt 必须存在')
+  assert.match(archived, /session_\d+_\d+_test_reason\.txt/)
+
+  const archiveJsonl = archived.replace(/\.txt$/, '.jsonl')
+  assert.ok(fs.existsSync(archiveJsonl), '归档 jsonl 必须存在')
+
+  // 重复同一原因不会重复写
+  assert.equal(r.archive('test_reason'), null)
+})
+
+test('SL-21：状态相同 30 秒内去重降噪', () => {
+  const dir = tempDir()
+  const file = path.join(dir, 'whale_state.json')
+  fs.writeFileSync(file, 'KLEI     1 {"data":{"day":1,"phase":"day","player":{"health":{"current":200,"max":200}}}}')
+  const r = new SessionRecorder({ bridgeDir: dir, out: path.join(dir, 's.jsonl'), stateEveryMs: 0, stateThrottleMs: 30000, envEveryMs: 100000 })
+
+  r.tick()
+  assert.equal(r.events.filter((e) => e.kind === 'state').length, 1)
+
+  // 相同内容再次 tick 被抑制
+  r.tick()
+  assert.equal(r.events.filter((e) => e.kind === 'state').length, 1, '相同状态被去重抑制')
+
+  // 状态改变后会再次触发
+  fs.writeFileSync(file, 'KLEI     1 {"data":{"day":1,"phase":"day","player":{"health":{"current":180,"max":200}}}}')
+  r.tick()
+  assert.equal(r.events.filter((e) => e.kind === 'state').length, 2, '状态改变后正常触发')
+})
