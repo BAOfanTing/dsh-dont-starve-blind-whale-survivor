@@ -1858,3 +1858,40 @@ test('S8-7：guard 不再用"范围内没成熟目标"拒绝（那是便利判�
   assert.match(code, /prefab_not_allowed/, 'gather_area 的 prefab 白名单校验必须还在')
   assert.match(code, /actor_busy/, 'actor_busy 校验必须还在')
 })
+
+test('PROBE-1：probe 返回的格坐标 (tx, tz) 能正确读取 z 轴（不会恒为 0）', async () => {
+  const { run, runFile, global } = loadMod(await import('fengari'))
+  run(ENT_HELPER, '实体辅助')
+  runFile(`
+    Whale.bridge = { Report = function(ok, text) REPORTED = { ok = ok, text = text } end, WriteState = function() end }
+    local p = GLOBAL.AllPlayers[1]
+    p._x, p._z = 100, 200
+    p.Transform = { GetWorldPosition = function() return p._x, 0, p._z end }
+    NEARBY = { mkent("berrybush", 101, 120, 240) }
+    Whale.actions.Start("probe", {}, "c-probe", { probe_prefab = "berrybush", probe_radius = 40 })
+    Whale.actions.Tick()
+    OUT_OK = tostring(REPORTED ~= nil and REPORTED.ok)
+    OUT_TEXT = REPORTED ~= nil and REPORTED.text or "未结束"
+  `)
+  assert.equal(global('OUT_OK'), 'true')
+  assert.match(global('OUT_TEXT'), /\(30,60\)/, 'tz 应该基于真实的 z 坐标（60），不该恒为 0')
+})
+
+test('RECIPE-ALIAS-1：chest 和 sciencemachine 能正确解析到原生配方与建筑名', async () => {
+  const { run, runFile, global } = loadMod(await import('fengari'))
+  runFile(`
+    Whale.bridge = { Report = function(ok, text) REPORTED = { ok = ok, text = text } end, WriteState = function() end }
+    GLOBAL.AllRecipes.treasurechest = { name = "treasurechest", placer = "treasurechest_placer", ingredients = {} }
+    GLOBAL.AllRecipes.researchlab = { name = "researchlab", placer = "researchlab_placer", ingredients = {} }
+
+    Whale.actions.Start("lookup", {}, "c-lookup-chest", { lookup_query = "chest" })
+    Whale.actions.Tick()
+    OUT_LOOKUP_CHEST = REPORTED ~= nil and REPORTED.text or ""
+
+    Whale.actions.Start("lookup", {}, "c-lookup-sm", { lookup_query = "sciencemachine" })
+    Whale.actions.Tick()
+    OUT_LOOKUP_SM = REPORTED ~= nil and REPORTED.text or ""
+  `)
+  assert.match(global('OUT_LOOKUP_CHEST'), /配方 chest|treasurechest/, 'chest 应该解析到 treasurechest')
+  assert.match(global('OUT_LOOKUP_SM'), /配方 sciencemachine|researchlab/, 'sciencemachine 应该解析到 researchlab')
+})

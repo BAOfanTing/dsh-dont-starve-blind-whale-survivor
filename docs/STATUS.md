@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：FOOD-EXPANSION (v0.38.1)｜修复 Reflex push_harvest 为 ACTIONS.PICK + 开放自然食物植物与地面肉类拾取 + 原版能力复用｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：BUGFIX-BUILD-PROBE (v0.38.2)｜修复 probe z轴坐标多返回值截断 bug + 建造/查询别名转换（chest/sciencemachine）与缺失材料报错崩溃修复｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -8,7 +8,7 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.38.1** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.38.2** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
 | `package.json` | **0.9.3** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号描述两个交付物：模组装进游戏 `mods/`，插件装进 DSH。给 AI 报告的状态以模组版本为准。
@@ -66,6 +66,7 @@
 | **SURVIVAL-01 ~ 06** | 基础生存链闭环：采草/采枝/做斧镐火把/穿脱/进食/范围采集/工具交互/建筑/容器/烹饪 | UNIT + RUNTIME |
 | **NATIVE-REUSE** | 复用原版照明/逃跑避障/玩家挥砍逻辑；收窄 Reflex 为 5 项生死职责并引入紧急需求上报 | UNIT (722/722) |
 | **FOOD-EXPANSION (0.38.1)** | 修复 Reflex 下发 `ACTIONS.PICK`（解决采浆果死锁）；开放胡萝卜苗/多汁浆果/蘑菇采摘及地面全食物拾取 | UNIT (727/727) |
+| **BUGFIX-BUILD-PROBE (0.38.2)** | 修复 `probe` 坐标 z 轴被多返回值截断（恒为 0）；修复 `build`/`lookup` 别名（chest→treasurechest，sciencemachine→researchlab）；修复 `build_by_ctx` 缺少材料时的 `table.concat` 崩溃 | UNIT (730/730) + RUNTIME |
 
 ---
 

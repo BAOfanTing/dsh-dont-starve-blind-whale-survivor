@@ -1090,13 +1090,24 @@ JOBS.cook = function(j, p)
     return "done", string.format("把 %s 放到火上烤了（烤好的东西在火堆旁边/背包里，记得吃掉）", j.data.name)
 end
 
+local RECIPE_ALIASES = {
+    chest = "treasurechest",
+    treasurechest = "treasurechest",
+    sciencemachine = "researchlab",
+    researchlab = "researchlab",
+}
+
 local function recipe_of(name)
     if name == nil then return nil end
     local key = tostring(name)
+    local lower = string.lower(key)
+    if RECIPE_ALIASES[lower] ~= nil then
+        lower = RECIPE_ALIASES[lower]
+        key = lower
+    end
     local recipes = GLOBAL.AllRecipes or {}
     local recipe = recipes[key]
     if recipe ~= nil then return recipe, key end
-    local lower = string.lower(key)
     for k, r in pairs(recipes) do
         if string.lower(k) == lower then return r, k end
     end
@@ -3135,9 +3146,11 @@ end
 local BUILD_ALLOWED = {
     campfire = true,      -- 营火：2 草 + 3 树枝，TECH.NONE
     firepit = true,       -- 石头火坑：2 石头 + 12 木头，TECH.NONE
-    chest = true,         -- 箱子：3 木板，TECH.NONE
+    chest = true,         -- 箱子：3 木板，TECH.NONE（原生配方名 treasurechest）
+    treasurechest = true,
     cookpot = true,       -- 锅：3 木炭 + 6 树枝 + 6 石头，TECH.SCIENCE_ONE
-    sciencemachine = true,-- 科学机器：4 木板 + 4 石头 + 1 金块，TECH.NONE
+    sciencemachine = true,-- 科学机器：4 木板 + 4 石头 + 1 金块，TECH.NONE（原生配方名 researchlab）
+    researchlab = true,
 }
 
 --- 放在地上：选点 → MakeRecipe → 用"附近同 prefab 数量变多"确认
@@ -3151,12 +3164,13 @@ local function build_by_ctx(j, p)
     local builder = p.components ~= nil and p.components.builder or nil
     if builder == nil then return "fail", "no_builder: 这个角色不能制作" end
 
+    local expected_prefab = RECIPE_ALIASES[name] or name
     -- 附近这个 prefab 现在有几个（用来判断"我真的放下去了一个"）
     local function count_near(x, z)
         if x == nil then return 0 end
         local n = 0
         local list = U.find_all(p, 12, nil, nil, function(e)
-            return e ~= nil and e.prefab == name
+            return e ~= nil and e.prefab == expected_prefab
         end)
         for _, entry in ipairs(list or {}) do
             local e = entry.ent or entry
@@ -3196,7 +3210,7 @@ local function build_by_ctx(j, p)
         local can = U.try(function() return builder:CanBuild(j.data.recipe.name) end)
         if not can then
             local missing = missing_ingredients(p, j.data.recipe)
-            if #missing > 0 then return "fail", "ingredients_missing: " .. table.concat(missing, "、") end
+            if missing ~= nil then return "fail", "ingredients_missing: " .. tostring(missing) end
             return "fail", "cannot_build: 造不了 " .. name .. "（科技不够？）"
         end
 
@@ -3350,7 +3364,8 @@ JOBS.probe = function(j, p)
     for _, entry in ipairs(list or {}) do
         local e = entry.ent or entry
         if e ~= nil and e:IsValid() then
-            local tx, tz = U.tile_of(e.Transform:GetWorldPosition())
+            local ex, _, ez = U.pos(e)
+            local tx, tz = U.tile_of(ex, ez)
             hits[#hits + 1] = { tx = tx, tz = tz, dist = U.dist(p, e) }
         end
     end

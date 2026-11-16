@@ -46,6 +46,26 @@ test('S6-4：build 核对 —— 附近多了这个建筑算成功', () => {
   assert.equal(v.product, 'campfire')
 })
 
+test('S6-4b：build 核对 —— 别名转换（chest 对应 treasurechest，sciencemachine 对应 researchlab）', () => {
+  const spec = ACTION_SPECS.build
+  const before = { nearby: { buckets: { structures: [] } }, player: { inventory: { items: [] } } }
+  const afterChest = {
+    nearby: { buckets: { structures: [{ ref: '#1', prefab: 'treasurechest', position: { x: 1, z: 1 } }] } },
+    player: { inventory: { items: [] } },
+  }
+  const vChest = spec.verify(before, afterChest, { recipe: 'chest' })
+  assert.equal(vChest.ok, true)
+  assert.equal(vChest.product, 'chest')
+
+  const afterSm = {
+    nearby: { buckets: { structures: [{ ref: '#1', prefab: 'researchlab', position: { x: 1, z: 1 } }] } },
+    player: { inventory: { items: [] } },
+  }
+  const vSm = spec.verify(before, afterSm, { recipe: 'sciencemachine' })
+  assert.equal(vSm.ok, true)
+  assert.equal(vSm.product, 'sciencemachine')
+})
+
 test('S6-5：build 核对 —— 建筑还没进附近列表但材料被扣了，也算成功（弱证据）', () => {
   const spec = ACTION_SPECS.build
   const before = { nearby: { buckets: {} }, player: { inventory: { items: [{ prefab: 'cutgrass', count: 2 }, { prefab: 'twigs', count: 3 }] } } }

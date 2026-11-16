@@ -814,7 +814,15 @@ function G.validate(cmd)
     -- ═══════════ SURVIVAL-06：build 的建筑白名单 ═══════════
     if action == "build" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
-        local BUILD_OK = { campfire = true, firepit = true, chest = true, cookpot = true, sciencemachine = true }
+        local BUILD_OK = {
+            campfire = true,
+            firepit = true,
+            chest = true,
+            treasurechest = true,
+            cookpot = true,
+            sciencemachine = true,
+            researchlab = true,
+        }
         local want = cmd.args.recipe
         if want == nil or BUILD_OK[tostring(want)] ~= true then
             return false, "recipe_not_allowed", nil
