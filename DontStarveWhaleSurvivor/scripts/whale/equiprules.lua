@@ -21,6 +21,7 @@ Q.ITEMS = {
     torch = "火把",
     lantern = "提灯",
     minerhat = "矿工帽",
+    flowerhat = "花环",
     axe = "斧头",
     pickaxe = "镐",
 }

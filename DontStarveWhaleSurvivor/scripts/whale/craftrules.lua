@@ -24,6 +24,7 @@ C.RECIPES = {
     axe = { ingredients = { twigs = 1, flint = 1 }, label = "斧头" },
     pickaxe = { ingredients = { twigs = 2, flint = 2 }, label = "镐" },
     torch = { ingredients = { cutgrass = 2, twigs = 2 }, label = "火把" },
+    flowerhat = { ingredients = { petals = 12 }, label = "花环" },
 }
 
 --- 配方名是否在白名单里

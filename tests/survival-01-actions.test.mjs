@@ -209,6 +209,6 @@ test('survival-12：工具表里的四个新工具描述必须讲清白名单/�
   assert.match(byName.craft.description, /ingredients_missing/, 'craft 要说明材料不足的返回')
   assert.match(byName.equip.description, /torch/, 'equip 要列出手持物品')
   // craft/equip 的 enum 必须锁死
-  assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum, ['torch', 'axe', 'pickaxe'])
-  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat'])
+  assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum, ['torch', 'axe', 'pickaxe', 'flowerhat'])
+  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat', 'flowerhat'])
 })
