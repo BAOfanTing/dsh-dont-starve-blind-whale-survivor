@@ -205,6 +205,8 @@ local function report_need(kind, reason, detail)
         reason = reason,
         missing = detail.missing,
         radius = detail.radius,
+        -- TARGET-REFRESH：附近到底有没有能救急的东西（给 Plan 规划路线用）
+        nearby = detail.nearby,
     }
     diag("need", { "kind=" .. tostring(kind), "reason=" .. tostring(reason) })
 end
@@ -225,6 +227,7 @@ function R.Needs()
                 reason = item.reason,
                 missing = item.missing,
                 radius = item.radius,
+                nearby = item.nearby,
                 age_s = math.floor(now - item.at),
             }
         end
@@ -1307,8 +1310,15 @@ local function run(p)
     --   和 0.36.0 光照动作的 light_action_available 是同一条规则。
     if hunger ~= nil and hunger < EAT_EMERGENCY then
         if not food_available(p) then
-            -- 饿到极限但背包没吃的 → 不抢占（抢了也吃不到），但要让模型知道
-            report_need("food", "hungry_without_food", { radius = 12 })
+            -- 饿到极限但背包没吃的 → 不抢占（抢了也吃不到），但要让模型知道。
+            -- TARGET-REFRESH：需求里写清"要什么、附近有没有"，交给 Plan 做搜索与路线规划；
+            -- report_need 自带 30 秒去重，所以不会反复刷同一条需求。
+            local nearby_food = ready_ground_food(p, 12) or ready_food_plant(p, 12)
+            report_need("food", "hungry_without_food", {
+                radius = 12,
+                missing = "safe_food",
+                nearby = nearby_food ~= nil and true or false,
+            })
         elseif try_action(p, "eat", P1, "hunger_emergency",
                       function() return reflex_eat(p) end,
                       function() return food_available(p) end) then return end

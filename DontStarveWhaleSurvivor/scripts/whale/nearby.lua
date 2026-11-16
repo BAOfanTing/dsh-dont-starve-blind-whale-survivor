@@ -681,6 +681,19 @@ local function build(actor, info, now, opts, identity)
     local list = scanned.entities
     sort_entities(list)
 
+    -- ★ TARGET-REFRESH：给这一帧的"可操作"实体续期/分配稳定句柄（不暴露 GUID）。
+    --   句柄注册表在 Whale.targetrules；这里只负责告诉它"这一帧看到它们了"。
+    --   必须在截断之前用**完整扫描列表**，否则被 60 条上限挤掉的实体会莫名失效。
+    --   句柄与 #N 并存：#N 仍是"当前观察里的展示编号"，句柄才是"跨帧稳定的引用"。
+    pcall(function()
+        local tr = Whale ~= nil and Whale.targetrules or nil
+        if tr ~= nil then
+            tr.BindSession(RUNTIME_ID, identity ~= nil and identity.session_id or nil,
+                info ~= nil and info.actor_id or nil)
+            tr.NoteScan(list, actor)
+        end
+    end)
+
     -- ★ 内容指纹没变就复用上一个编号（详见上面 last_fingerprint 的说明）。
     --   这样模型手里的 #N 在"东西没变"时一直有效，不会因为扫了几次就作废。
     local fp = fingerprint_of(list)
@@ -846,6 +859,16 @@ function N.Resolve(snapshot_id, ref)
     if not ok or not valid then return nil, "entity_gone" end
     if ent:HasTag("INLIMBO") then return nil, "in_limbo" end
     return ent, nil
+end
+
+--- TARGET-REFRESH：把稳定句柄解析回实体。
+--- 与 #N 的区别：#N 绑定"某一帧扫描"，句柄绑定"这个东西还在不在"。
+--- 实现放在 Whale.targetrules（它才持有句柄注册表）；这里只是给 guard 一个统一入口。
+--- 句柄过期一律返回原因，**绝不自动替换成别的对象**。
+function N.ResolveHandle(handle)
+    local tr = Whale ~= nil and Whale.targetrules or nil
+    if tr == nil or tr.ResolveHandle == nil then return nil, "targetrules_missing" end
+    return tr.ResolveHandle(handle)
 end
 
 --- 按 (snapshot_id, ref) 反查这个目标的分类/距离/预制体名（给动作前置校验用）

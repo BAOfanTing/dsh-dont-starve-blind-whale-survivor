@@ -133,8 +133,12 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     -- M2.3：按 #N 收获**已成熟**的试点对象（本阶段只有普通浆果丛）。
@@ -143,8 +147,58 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
+        },
+    },
+    -- ═══════════════ TARGET-REFRESH：实时目标选择（不依赖 #N / snapshot_id）═══════════════
+    -- 为什么需要：真机 94 次调用里 23 次 pickup + 3 次 chop + 2 次 harvest 全是 stale_snapshot。
+    -- #N 只在当前扫描帧内有效，而模型一轮思考 30~60 秒 —— 拿到引用时那一帧早换了。
+    -- 这五个动作让模型只说"要哪一类"，由 Lua 在授权那一刻用当前世界状态重新找目标。
+    -- ★ target_kind 是**固定枚举**（Whale.targetrules.KINDS），模型不能传 prefab / GUID / 表达式。
+    pickup_nearest = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_kind = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            radius = { type = "number", min = 2, max = 40 },
+        },
+    },
+    pickup_food = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            -- 不填 = safe_ground_food（白名单地面食物，生蘑菇不算）
+            target_kind = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+            radius = { type = "number", min = 2, max = 40 },
+        },
+    },
+    harvest_nearest = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_kind = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            radius = { type = "number", min = 2, max = 40 },
+        },
+    },
+    chop_nearest = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_kind = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            radius = { type = "number", min = 2, max = 40 },
+        },
+    },
+    mine_nearest = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "inventory" },
+        args = {
+            target_kind = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            radius = { type = "number", min = 2, max = 40 },
         },
     },
     -- ═══════════════ SURVIVAL-01：四个基础生存动作 ═══════════════
@@ -153,8 +207,12 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     -- eat：吃背包里的白名单食物。food 可选（不填 = 服务端挑最该吃的）
@@ -162,7 +220,7 @@ G.ACTIONS = {
         risk = "R1",
         required_components = { "health", "hunger", "inventory" },
         args = {
-            food = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+            food = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32 },
         },
     },
     -- craft：只做白名单里的 3 个工具。recipe 必填且必须是白名单里的名字
@@ -170,7 +228,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "builder", "inventory" },
         args = {
-            recipe = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            recipe = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
     -- equip：只装备白名单里的手持物品。item 必填
@@ -178,7 +236,7 @@ G.ACTIONS = {
         risk = "R1",
         required_components = { "inventory" },
         args = {
-            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
     -- ═══════════ SURVIVAL-02 ═══════════
@@ -187,7 +245,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            prefab = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+            prefab = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32 },
             radius = { type = "number", min = 2, max = 40 },
             limit = { type = "number", min = 1, max = 30, integer = true },
         },
@@ -197,7 +255,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
-            prefab = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            prefab = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
             step = { type = "number", min = 4, max = 30 },
             max_tiles = { type = "number", min = 4, max = 80 },
             look = { type = "number", min = 8, max = 40 },
@@ -209,32 +267,48 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     mine = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     dig = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     hammer = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     -- attack / kill：对目标重复 ATTACK（kill 打到死）
@@ -242,8 +316,12 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
             times = { type = "number", min = 1, max = 50, integer = true },
         },
     },
@@ -251,8 +329,12 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     -- wait / drop
@@ -267,7 +349,7 @@ G.ACTIONS = {
         risk = "R1",
         required_components = { "inventory" },
         args = {
-            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
     -- ═══════════ SURVIVAL-04：第二批 ═══════════
@@ -289,17 +371,25 @@ G.ACTIONS = {
         risk = "R1",
         required_components = { "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
-            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
+            item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32 },
         },
     },
     use = {
         risk = "R2",
         required_components = { "locomotor" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
             action = { type = "string", pattern = "^[A-Z_]+$", max_len = 16 },
         },
     },
@@ -307,8 +397,12 @@ G.ACTIONS = {
         risk = "R1",
         required_components = {},
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
     -- ═══════════ SURVIVAL-05：容器 / 给予 / 烹饪 ═══════════
@@ -316,9 +410,13 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
-            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32 },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
+            item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32 },
             count = { type = "number", min = 1, max = 40, integer = true },
         },
     },
@@ -326,26 +424,38 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
-            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
+            item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
     give = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
-            item = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
+            item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
     cook = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
             items = { type = "string", max_len = 120 },
         },
     },
@@ -354,7 +464,7 @@ G.ACTIONS = {
         risk = "R2",
         required_components = { "locomotor", "builder" },
         args = {
-            recipe = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            recipe = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
     recipes = {
@@ -376,7 +486,8 @@ G.ACTIONS = {
         risk = "R1",
         required_components = {},
         args = {
-            prefab = { type = "string", pattern = "^[a-z_]+$", max_len = 32, required = true },
+            -- TARGET-REFRESH：允许数字 —— 石头真名是 rock1 / rock2（只放 [a-z_] 会挡掉它们）
+            prefab = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
             radius = { type = "number", min = 4, max = 40 },
         },
     },
@@ -529,6 +640,86 @@ function G.reset()
     lease_state = { generation = 0, owner = nil, actor_id = nil, updated = 0 }
 end
 
+-- ─────────────────────────── 目标引用（TARGET-REFRESH）───────────────────────────
+--
+-- ★ 这三个 helper 必须定义在 G.validate **之前**：G.validate 里会调用它们
+--   （Lua 的 local 只在声明之后可见，放到文件末尾会变成 nil 全局 —— 真机/测试都会崩）。
+
+--- 带 target_handle 时，target_ref / snapshot_id 不再是必填。
+--- 这只改**参数形状**（"用哪一种引用"），没有放宽任何一条校验：
+--- 句柄照样要过 ResolveHandle 的真实实体复检 + 候选/成熟度/距离检查。
+local function spec_for_args(spec, args)
+    if spec == nil or type(args) ~= "table" then return spec end
+    local handle = args.target_handle
+    if type(handle) ~= "string" or handle == "" then return spec end
+    local relaxed = { risk = spec.risk, required_components = spec.required_components, args = {} }
+    for name, rule in pairs(spec.args) do
+        local copy = rule
+        if (name == "target_ref" or name == "snapshot_id") and rule.required then
+            copy = {}
+            for k, v in pairs(rule) do copy[k] = v end
+            copy.required = nil
+        end
+        relaxed.args[name] = copy
+    end
+    return relaxed
+end
+
+--- 解析动作目标。两条路都要在**授权这一刻**重新校验真实实体：
+---   ① target_handle：稳定句柄 → 真实实体（过期返回 target_gone，绝不替换成别的对象）
+---   ② target_ref + snapshot_id：当前帧的 #N（原有逻辑，一字不改）
+local function resolve_action_target(cmd)
+    local args = type(cmd.args) == "table" and cmd.args or {}
+    local handle = args.target_handle
+    if type(handle) == "string" and handle ~= "" then
+        local nearby = Whale ~= nil and Whale.nearby or nil
+        if nearby == nil or nearby.ResolveHandle == nil then return nil, "nearby_unavailable" end
+        return nearby.ResolveHandle(handle)
+    end
+    local snapshot_id = tostring(args.snapshot_id)
+    local ref = tostring(args.target_ref)
+    return G.resolve_target(snapshot_id, ref, {})
+end
+
+--- 实时目标选择：从当前世界状态里重新找一类目标（模型只给固定枚举 target_kind）。
+--- 通过后仍走**原有**的动作执行链（ctx.target → JOBS.* → BufferedAction → push）。
+local function resolve_nearest_target(action, cmd, actor)
+    local args = type(cmd.args) == "table" and cmd.args or {}
+    local tr = Whale ~= nil and Whale.targetrules or nil
+    if tr == nil then return nil, "target_rules_missing", nil end
+
+    local kind = args.target_kind
+    if kind == nil or kind == "" then
+        -- 只有 pickup_food 允许省略：默认"地面白名单食物"
+        if action == "pickup_food" then
+            kind = "safe_ground_food"
+        else
+            return nil, "missing_arg:target_kind", nil
+        end
+    end
+    kind = tostring(kind)
+    if not tr.IsKind(kind) then
+        return nil, "target_kind_not_allowed", {
+            hint = "合法的 target_kind：" .. table.concat(tr.KindList(), " / "),
+        }
+    end
+    -- 动作与类别必须对得上（不许用 chop_nearest 去挖石头之类）
+    local want = tr.ActionOf(kind)
+    local expect = (action == "pickup_food") and "food" or action:gsub("_nearest", "")
+    if want ~= expect then
+        return nil, "target_kind_mismatch", {
+            hint = string.format("%s 不能用 target_kind=%s（那是给 %s 用的）", action, kind, want),
+        }
+    end
+
+    local ent, why, detail = tr.FindNearest(kind, actor, args.radius)
+    if ent == nil then
+        local hint = tr.ExplainMiss(kind, why, detail)
+        return nil, why or "no_target", hint ~= nil and { hint = hint } or nil
+    end
+    return ent, nil, nil
+end
+
 -- ─────────────────────────── 命令校验（对外唯一入口）───────────────────────────
 
 -- 近期处理过的 command_id（环形，防重复执行；比原来的"只记最后一个"可靠）
@@ -637,8 +828,8 @@ function G.validate(cmd)
     local created = tonumber(cmd.created_at)
     if created ~= nil and now > 0 and created > now + 300000 then return false, "clock_skew", nil end
 
-    -- 参数
-    local ok_args, why = validate_args(spec, type(cmd.args) == "table" and cmd.args or {})
+    -- 参数（带 target_handle 时 target_ref/snapshot_id 不再必填，见 spec_for_args）
+    local ok_args, why = validate_args(spec_for_args(spec, cmd.args), type(cmd.args) == "table" and cmd.args or {})
     if not ok_args then return false, why, nil end
 
     local provider = Whale ~= nil and Whale.actor or nil
@@ -654,9 +845,7 @@ function G.validate(cmd)
         -- 一个 Actor 同时只允许一个动作（pickup 不做静默替换）
         if Whale.job ~= nil then return false, "actor_busy", nil end
 
-        local snapshot_id = tostring(cmd.args.snapshot_id)
-        local ref = tostring(cmd.args.target_ref)
-        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
 
         -- ★ M2.2：候选判定与观察侧（nearby 的 pickupables 桶）**共用同一份规则**，
@@ -692,9 +881,7 @@ function G.validate(cmd)
     if action == "harvest" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
 
-        local snapshot_id = tostring(cmd.args.snapshot_id)
-        local ref = tostring(cmd.args.target_ref)
-        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
 
         local hr = Whale ~= nil and Whale.harvestrules or nil
@@ -715,13 +902,62 @@ function G.validate(cmd)
         target = ent
     end
 
+    -- ═══════════════ TARGET-REFRESH：五个实时目标选择动作 ═══════════════
+    -- 目标在**授权这一刻**从当前世界状态重新搜索（完全不依赖 #N / snapshot_id），
+    -- 通过后仍走原有执行链：ctx.target → JOBS.* → BufferedAction → push()。
+    -- 下面逐条复核候选资格 / 成熟度 / 距离 / 背包容量 / actor_busy —— 一条都没省。
+    if action == "pickup_nearest" or action == "pickup_food"
+        or action == "harvest_nearest" or action == "chop_nearest" or action == "mine_nearest" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+
+        local near_ent, near_why, near_detail = resolve_nearest_target(action, cmd, actor)
+        if near_ent == nil then return false, near_why or "no_target", near_detail end
+
+        if action == "pickup_nearest" or action == "pickup_food" then
+            local rules = Whale ~= nil and Whale.pickuprules or nil
+            if rules == nil then return false, "pickup_rules_missing", nil end
+            local ok_cand, why_cand = rules.IsCandidate(near_ent, actor)
+            if not ok_cand then return false, why_cand or "target_not_pickable", nil end
+
+            local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
+            if inv == nil then return false, "missing_component:inventory", nil end
+            local ok_acc, can = pcall(function() return inv:CanAcceptCount(near_ent, 1) end)
+            if ok_acc and type(can) == "number" and can <= 0 then return false, "inventory_full", nil end
+
+            local ax, _, az = U.pos(actor)
+            local ex, _, ez = U.pos(near_ent)
+            if ax == nil or ex == nil then return false, "target_not_pickable", nil end
+            local dx, dz = ax - ex, az - ez
+            local tiles = math.sqrt(dx * dx + dz * dz) / U.TILE
+            if tiles > G.PICKUP_MAX_TILES then return false, "out_of_range", nil end
+        elseif action == "harvest_nearest" then
+            local hr = Whale ~= nil and Whale.harvestrules or nil
+            if hr == nil then return false, "harvest_rules_missing", nil end
+            local ok_cand, why_cand = hr.IsCandidate(near_ent, actor)
+            if not ok_cand then return false, why_cand or "target_not_harvestable", nil end
+            -- ★ 成熟度必须在执行前再判一次：Candidate != Ready（未成熟不许采）
+            local ok_ready, why_ready = hr.IsReady(near_ent)
+            if not ok_ready then return false, why_ready or "not_ready", nil end
+            if not hr.InNativeRange(actor, near_ent) then return false, "out_of_range", nil end
+        else
+            local want_action = (action == "chop_nearest") and "CHOP" or "MINE"
+            local w = near_ent.components ~= nil and near_ent.components.workable or nil
+            if w == nil then return false, "target_not_workable", nil end
+            local ok_a, act = pcall(function() return w.action end)
+            if not ok_a or act == nil or tostring(act.id) ~= want_action then
+                return false, "wrong_work_action", nil
+            end
+            local d = U.dist(actor, near_ent)
+            if d ~= nil and d > 6 * 4 then return false, "out_of_range", nil end
+        end
+        target = near_ent
+    end
+
     -- ═══════════════ SURVIVAL-01 ═══════════════
     if action == "gather" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
 
-        local snapshot_id = tostring(cmd.args.snapshot_id)
-        local ref = tostring(cmd.args.target_ref)
-        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
 
         local gr = Whale ~= nil and Whale.gatherrules or nil
@@ -756,21 +992,46 @@ function G.validate(cmd)
         local food = cmd.args.food
         if food ~= nil and food ~= "" then
             local ok_f, why_f = er.IsAllowedPrefab(tostring(food))
-            if not ok_f then return false, why_f or "food_not_allowed", nil end
+            if not ok_f then
+                -- ★ TARGET-REFRESH：说清"这个名字为什么不行 + 你是不是想说 X"，
+                --   否则模型只看到 food_not_allowed，只能反复换名字猜（真机猜了 6 次）。
+                local suggest = er.SuggestPrefab ~= nil and er.SuggestPrefab(tostring(food)) or nil
+                local lead = string.format("「%s」不在可吃白名单里。", tostring(food))
+                if suggest ~= nil then
+                    lead = string.format("「%s」不是可食物品名；你要找的应该是 %s（%s）——地上那株植物和采下来的物品名不一样。",
+                        tostring(food), suggest, er.FOODS[suggest] or suggest)
+                end
+                return false, why_f or "food_not_allowed", { hint = lead .. er.DiagnoseHint(inv) }
+            end
             inv:ForEachItem(function(it)
                 if item ~= nil then return end
                 if it ~= nil and it:IsValid() and tostring(it.prefab) == tostring(food) and er.IsEdible(it) then item = it end
             end)
-            if item == nil then return false, "not_in_inventory", nil end
+            if item == nil then
+                -- ★ 这是"模型记忆过期"最常见的表现：Reflex 刚把它吃掉 / 装进箱子 / 被别人拿走。
+                --   回执必须给出**当前真实背包**，让模型能立刻改主意，而不是继续重试同一个名字。
+                return false, "not_in_inventory", {
+                    hint = string.format("背包里**现在没有** %s 了（可能刚被 Reflex 吃掉或收走；不要相信上一轮的背包）。%s",
+                        tostring(food), er.DiagnoseHint(inv)),
+                }
+            end
         else
             item = er.PickBest(inv, full)
-            if item == nil then return false, full and "not_hungry" or "no_food", nil end
+            if item == nil then
+                if full then return false, "not_hungry", { hint = er.DiagnoseHint(inv) } end
+                return false, "no_food", {
+                    hint = er.DiagnoseHint(inv)
+                        .. "；没有 AUTO_SAFE 食物时：先 cook 烤熟，或用 pickup_food / harvest_nearest 去找吃的",
+                }
+            end
         end
 
         if full then
             local health = actor.components.health
             if health.currenthealth >= health.maxhealth or not er.CanHeal(item) then
-                return false, "not_hungry", nil
+                return false, "not_hungry", {
+                    hint = "饥饿和血都满了，没必要吃。" .. er.DiagnoseHint(inv),
+                }
             end
         end
     end
@@ -787,13 +1048,71 @@ function G.validate(cmd)
         local builder = actor ~= nil and actor.components ~= nil and actor.components.builder or nil
         if builder == nil then return false, "missing_component:builder", nil end
 
-        -- 材料不够就明确回 ingredients_missing（不要下发一条注定失败的命令）
+        -- ① **先判材料**（能给出"差什么、差几个"的精确报账）。
+        --    必须放在科技判定之前：因为下面用 `CanBuild` 判科技，而 `CanBuild` 也含材料，
+        --    材料不足时它返回 false，会被误报成 recipe_locked（真机踩过：缺 1 个燧石却报"科技没解锁"）。
         local missing = cr.MissingIngredients(actor, recipe)
         if missing ~= nil then
-            if string.sub(missing, 1, 19) == "ingredients_missing" then
-                return false, missing, nil
-            end
             return false, missing, nil
+        end
+
+        -- ② 再判科技：**由游戏自己判**，不复制 TECH 表。
+        --
+        -- 真机 bug（2026-11-16，用户："先做出科学机器"）：
+        --   这里原来用 `builder:KnowsRecipe(recipe_obj)` —— 它**不认**"站在科学机器旁边"
+        --   那种**临时科技加成**（`_tempbonus` 要靠 `UpdateTempTechBonuses` 刷新，
+        --   而那个刷新由玩家 controller 驱动，服务端 actor 上经常还没刷到）。
+        --   结果：机器造好了、人站在 0.7 格内，`craft rope` 仍报 recipe_locked；
+        --   而同一角色用 `lookup rope`（走 `builder:CanBuild`）却显示"现在就能做" —— 自相矛盾。
+        --
+        -- `CanBuild(name)` 是原版 UI 判"这个配方现在能不能造"的入口，包含
+        --   永久解锁 + 临时科技（附近科学机器/远古站）+ 当前 prototyper + 材料。
+        --   材料上面已经单独判过了，所以这里的 false 就真的是科技/条件不够。
+        local knows = nil
+        do
+            local ok_c, can = pcall(function() return builder:CanBuild(recipe) end)
+            if ok_c and can ~= nil then
+                knows = can == true
+            else
+                -- 兜底：CanBuild 不可用时退回 KnowsRecipe（至少能判永久解锁）
+                local all = GLOBAL.AllRecipes
+                local recipe_obj = all ~= nil and all[recipe] or nil
+                if recipe_obj ~= nil then
+                    local ok_k, k = pcall(function() return builder:KnowsRecipe(recipe_obj) end)
+                    if ok_k then knows = k == true end
+                end
+            end
+        end
+        if knows == false then
+            -- ★ 兜底：`CanBuild` 在**服务端 actor** 上可能因为临时科技还没刷新而返回 false，
+            --   即使人已经站在科学机器旁边（`_tempbonus` 由玩家 controller 驱动刷新）。
+            --   所以这里再独立看一眼"身边有没有对应的 prototyper"：
+            --   有的话就不拦，交给执行层用真正的 `builder:MakeRecipe` 去判（那是权威的，
+            --   真造不出来会返回 fail，比在门口瞎猜强）。
+            local station_ok = false
+            if cr.NeedsScience ~= nil and cr.NeedsScience(recipe) then
+                local px, _, pz = U.pos(actor)
+                if px ~= nil then
+                    local found = U.find_nearest(actor, 8, nil, nil, function(e)
+                        if e == nil or not e:IsValid() then return false end
+                        local proto = e.components ~= nil and e.components.prototyper or nil
+                        if proto == nil then return false end
+                        local ok_t, trees = pcall(function() return proto.trees end)
+                        return ok_t and trees ~= nil
+                    end)
+                    station_ok = found ~= nil
+                end
+            end
+            if not station_ok then
+                local tech = cr.TechOf ~= nil and cr.TechOf(recipe) or nil
+                local hint
+                if tech == "SCIENCE_ONE" then
+                    hint = recipe .. " 是第一阶段科技配方：先 build sciencemachine，站到它旁边再做"
+                else
+                    hint = recipe .. " 还没解锁"
+                end
+                return false, "recipe_locked", { hint = hint }
+            end
         end
     end
 
@@ -832,9 +1151,7 @@ function G.validate(cmd)
     -- ═══════════ SURVIVAL-05：container_* / give / cook 都要 #N 引用 ═══════════
     if action == "container_take" or action == "container_put" or action == "give" or action == "cook" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
-        local snapshot_id = tostring(cmd.args.snapshot_id)
-        local ref = tostring(cmd.args.target_ref)
-        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
         if action == "container_take" or action == "container_put" then
             if ent.components == nil or ent.components.container == nil then
@@ -856,9 +1173,7 @@ function G.validate(cmd)
     -- ═══════════ SURVIVAL-04：fuel / use / inspect 都要 #N 引用 ═══════════
     if action == "fuel" or action == "use" or action == "inspect" then
         if action ~= "inspect" and Whale.job ~= nil then return false, "actor_busy", nil end
-        local snapshot_id = tostring(cmd.args.snapshot_id)
-        local ref = tostring(cmd.args.target_ref)
-        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
         if action == "fuel" then
             if ent.components == nil or ent.components.fueled == nil then
@@ -874,24 +1189,34 @@ function G.validate(cmd)
     -- ═══════════ SURVIVAL-03：chop / mine / dig / hammer / attack / kill ═══════════
     if action == "chop" or action == "mine" or action == "dig" or action == "hammer" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
-        local snapshot_id = tostring(cmd.args.snapshot_id)
-        local ref = tostring(cmd.args.target_ref)
-        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
-        if ent.components == nil or ent.components.workable == nil then
+        local w = ent.components ~= nil and ent.components.workable or nil
+        if w == nil then
             return false, "target_not_workable", nil
         end
-        -- 距离：workable 动作靠引擎自己走过去，但太远（>6 格）先拒绝，避免"隔着半张地图砍树"
+        -- ★ TARGET-REFRESH：动作类型必须和目标对得上。
+        --   原来只判"有没有 workable" —— 走 #N 时因为引用只能来自 nearby 的资源桶，
+        --   隐含上是对的；但句柄路径下模型可以指到任意 workable（比如拿砍树的动作去指石头）。
+        --   现在两边都显式判一次：CHOP 只能砍树、MINE 只能挖矿……对不上就拒。
+        local WANT_WORK = { chop = "CHOP", mine = "MINE", dig = "DIG", hammer = "HAMMER" }
+        local want_work = WANT_WORK[action]
+        local ok_a, act = pcall(function() return w.action end)
+        if ok_a and act ~= nil and want_work ~= nil and tostring(act.id) ~= want_work then
+            return false, "wrong_work_action", nil
+        end
+        -- 距离：原生 CHOP/MINE 要贴到 ~1 格才挥得动。这里放到 1.6 格
+        --（引擎会自己微调最后一点点），超过就直接拒 —— 和 actions/gathering.lua 的
+        -- `work_by_ref` 用**同一个阈值**，避免"guard 放行了、Lua 又拒"的两套标准。
+        -- 真机踩到：树在 2 格外，guard 放行 → Lua push 之后引擎要走过去 → 被误报成"推不动"。
         local d = U.dist(actor, ent)
-        if d ~= nil and d > 6 * 4 then return false, "out_of_range", nil end
+        if d ~= nil and d > 2.5 * U.TILE then return false, "out_of_range", nil end
         target = ent
     end
 
     if action == "attack" or action == "kill" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
-        local snapshot_id = tostring(cmd.args.snapshot_id)
-        local ref = tostring(cmd.args.target_ref)
-        local ent, why_t = G.resolve_target(snapshot_id, ref, {})
+        local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
         if ent.components == nil or ent.components.health == nil then
             return false, "target_not_attackable", nil

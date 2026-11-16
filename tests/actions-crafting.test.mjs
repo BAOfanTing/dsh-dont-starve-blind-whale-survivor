@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 
 import { ACTION_SPECS, OPEN_ACTIONS, validateArgs } from '../lib/dispatcher.js'
 import { TOOLS } from '../lib/tools.js'
+import { BUILDABLE_RECIPES } from '../lib/actions/specs/crafting.js'
 
 const NEW = ['container_take', 'container_put', 'give', 'cook']
 
@@ -212,13 +213,15 @@ test('S6-4b：build 核对 —— 别名转换（chest 对应 treasurechest，sc
   assert.equal(vSm.product, 'sciencemachine')
 })
 
-test('S6-5：build 核对 —— 建筑还没进附近列表但材料被扣了，也算成功（弱证据）', () => {
+test('S6-5：build 核对 —— 建筑没进附近列表、只有材料被扣 → **不算成功**（TARGET-REFRESH）', () => {
+  // 任务书明确禁止："不允许仅因背包材料减少就认为建造成功"。
+  // 材料可能被别的动作吃掉、建造可能中途失败、产物也可能放下后立刻被拆 —— 所以只认建筑实体。
   const spec = ACTION_SPECS.build
   const before = { nearby: { buckets: {} }, player: { inventory: { items: [{ prefab: 'cutgrass', count: 2 }, { prefab: 'twigs', count: 3 }] } } }
   const after = { nearby: { buckets: {} }, player: { inventory: { items: [] } } }
   const v = spec.verify(before, after, { recipe: 'campfire' })
-  assert.equal(v.ok, true)
-  assert.equal(v.how, 'materials_consumed')
+  assert.equal(v.ok, false)
+  assert.equal(v.reason, 'build_not_found')
 })
 
 test('S6-6：build 核对 —— 建筑没出现、材料也没扣 → 判失败', () => {
@@ -260,11 +263,13 @@ test('S6-10：4 个工具的描述必须讲清用途', () => {
   assert.match(byName.recipes.description, /查配方|配方/, 'recipes 要说清查配方')
   assert.match(byName.lookup.description, /查游戏数据|查/, 'lookup 要说清查数据')
   assert.match(byName.probe.description, /探测|附近/, 'probe 要说清是探测')
-  // build 的 enum 必须和 dispatcher 白名单一致
+  // build 的 enum 必须和 dispatcher 白名单**同源**（TARGET-REFRESH：直接引用 BUILDABLE_RECIPES，
+  // 不再手抄一份 —— 以前抄的 5 项漏了 researchlab，模型填原生名会被 schema 拒）
   assert.deepEqual(
     [...byName.build.inputSchema.properties.recipe.enum].sort(),
-    ['campfire', 'chest', 'cookpot', 'firepit', 'sciencemachine'],
+    [...BUILDABLE_RECIPES].sort(),
   )
+  assert.ok(BUILDABLE_RECIPES.includes('sciencemachine'), '科学机器必须能造')
 })
 
 test('S6-11：全部常用动作都开放后，工具表里不该出现"野生"动作名', () => {

@@ -20,12 +20,44 @@ local pairs = pairs
 local C = {}
 
 --- 白名单配方 → 兜底材料表（读不到原生配方时才用；正常路径走 C.Ingredients）
+---
+--- ★ TARGET-REFRESH：科技阶段与配方名**必须和 Node 侧 lib/actions/specs/crafting.js 完全一致**
+--- （有 tests/recipe-parity.test.mjs 盯着）。数字全部核对自本机 scripts.zip 的 recipes.lua：
+---   rope       cutgrass×3                                          TECH.SCIENCE_ONE
+---   boards     log×4                                              TECH.SCIENCE_ONE
+---   backpack   cutgrass×4 + twigs×4                                TECH.SCIENCE_ONE
+---   spear      twigs×2 + rope×1 + flint×1                          TECH.SCIENCE_ONE
+---   armorwood  log×8 + rope×2                                     TECH.SCIENCE_ONE
+---   axe        twigs×1 + flint×1                                   TECH.NONE
+---   pickaxe    twigs×2 + flint×2                                   TECH.NONE
+---   torch      cutgrass×2 + twigs×2                                TECH.NONE
+---   flowerhat  petals×12                                          TECH.NONE
+--- 注意：SCIENCE_ONE 那五个**不是**"不需要科技"，而是要站在科学机器旁边才能做 ——
+--- 这正是"第一阶段科技"的完整含义。科技条件由游戏自己判（builder:KnowsRecipe 会把
+--- 附近的 prototyper 折算成临时科技加成），我们**不复制一套 TECH 表**去猜，免得和游戏更新漂移。
 C.RECIPES = {
-    axe = { ingredients = { twigs = 1, flint = 1 }, label = "斧头" },
-    pickaxe = { ingredients = { twigs = 2, flint = 2 }, label = "镐" },
-    torch = { ingredients = { cutgrass = 2, twigs = 2 }, label = "火把" },
-    flowerhat = { ingredients = { petals = 12 }, label = "花环" },
+    axe = { ingredients = { twigs = 1, flint = 1 }, label = "斧头", tech = "NONE" },
+    pickaxe = { ingredients = { twigs = 2, flint = 2 }, label = "镐", tech = "NONE" },
+    torch = { ingredients = { cutgrass = 2, twigs = 2 }, label = "火把", tech = "NONE" },
+    flowerhat = { ingredients = { petals = 12 }, label = "花环", tech = "NONE" },
+    -- ── 第一阶段科技（需要科学机器）──
+    rope = { ingredients = { cutgrass = 3 }, label = "绳子", tech = "SCIENCE_ONE" },
+    boards = { ingredients = { log = 4 }, label = "木板", tech = "SCIENCE_ONE" },
+    backpack = { ingredients = { cutgrass = 4, twigs = 4 }, label = "背包", tech = "SCIENCE_ONE" },
+    spear = { ingredients = { twigs = 2, rope = 1, flint = 1 }, label = "长矛", tech = "SCIENCE_ONE" },
+    armorwood = { ingredients = { log = 8, rope = 2 }, label = "木甲", tech = "SCIENCE_ONE" },
 }
+
+--- 配方名 → 科技阶段（只有白名单里的名字有值；Node 侧有同一张表）
+function C.TechOf(name)
+    local def = C.RECIPES[tostring(name)]
+    return def ~= nil and def.tech or nil
+end
+
+--- 是不是"需要科学机器"的第一阶段配方
+function C.NeedsScience(name)
+    return C.TechOf(name) == "SCIENCE_ONE"
+end
 
 --- 配方名是否在白名单里
 function C.IsAllowed(name)

@@ -296,7 +296,7 @@ test('PLAN-23：白天识别熟食和多汁浆果，不带着食物继续找浆�
   assert.doesNotMatch(mushrooms.next, /^eat/)
 })
 
-test('PLAN-24：缺食物时优先捡可见安全食物，保留当前目标引用', () => {
+test('PLAN-24：缺食物时优先捡可见安全食物，且建议**不会过期**（TARGET-REFRESH）', () => {
   const buckets = {
     pickupables: [
       { ref: '#1', prefab: 'monstermeat', distance: 1 },
@@ -308,7 +308,10 @@ test('PLAN-24：缺食物时优先捡可见安全食物，保留当前目标引�
   for (const hunger of [20, 60]) {
     const plan = derivePlan(makeSnapshot({ hunger, buckets }))
     assert.equal(plan.goalId, hunger < 40 ? 'eat' : 'stock_food')
-    assert.match(plan.next, /pickup.*#2.*r1-n2/)
+    // 以前是 `pickup target_ref=#2 snapshot_id=r1-n2` —— 模型思考一轮之后必然 stale_snapshot。
+    // 现在只给类别，由服务端实时找：pickup_food target_kind=carrot
+    assert.match(plan.next, /pickup_food target_kind=carrot/, '近处的胡萝卜优先，且用不会过期的类别写法')
+    assert.doesNotMatch(plan.next, /snapshot_id=/, '建议里不能再带会过期的 snapshot_id')
     assert.doesNotMatch(plan.next, /monstermeat/)
   }
 })

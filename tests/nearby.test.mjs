@@ -1839,10 +1839,14 @@ test('M2.2-06 树枝(ROUGHAGE)/种子(SEEDS)/齿轮(GEARS)/木头(WOOD) 都不�
   }`, '非食物')
   const { nearby } = env.observe()
   assert.equal(nearby.buckets.food.length, 0, '这些都不该进 food')
-  // 白名单里的 twigs 仍然进 pickupables；其余落回 resources
-  assert.equal(nearby.buckets.pickupables.length, 1)
-  assert.equal(nearby.buckets.pickupables[0].prefab, 'twigs')
-  assert.equal(nearby.buckets.resources.length, 4)
+  // ★ TARGET-REFRESH：白名单扩了 —— 砍树产物（log/nitre）现在也是可拾取候选，
+  //   否则"树砍倒了、木头掉在脚边"却永远捡不起来（真机踩过）。
+  //   但**食物**判定没变：log/seeds/gears/nitre/twigs 都不是食物。
+  const picks = nearby.buckets.pickupables.map((e) => e.prefab).sort()
+  assert.deepEqual(picks, ['log', 'nitre', 'twigs'], '白名单内的地面物品进 pickupables')
+  // 不在白名单的（seeds / gears）落回 resources
+  const res = nearby.buckets.resources.map((e) => e.prefab).sort()
+  assert.deepEqual(res, ['gears', 'seeds'], '非白名单物品仍落回 resources')
 })
 
 test('M2.2-07 树/岩石/生物/建筑/南瓜灯都不进 pickupables', async () => {
@@ -1877,13 +1881,17 @@ test('M2.2-09 不是候选的三种情况：已被别人拿着 / canbepickedup=f
   }`, '非候选')
   const { nearby } = env.observe()
   const flat = env.flat
-  assert.equal(nearby.buckets.pickupables.length, 0, '这三种都不是候选')
+  // ★ TARGET-REFRESH：goldnugget 现在在拾取白名单里（挖金矿的产物，不然挖完捡不到），
+  //   所以"不在白名单"那一例换成 seeds（真正不在白名单的物品）。
+  assert.equal(nearby.buckets.pickupables.length, 1, '只有 goldnugget 是候选')
+  assert.equal(nearby.buckets.pickupables[0].prefab, 'goldnugget')
   const byPrefab = Object.fromEntries(flat(nearby).map((e) => [e.prefab, e.bucket]))
   // 被玩家拿着的物品：真机里会因进 limbo 被扫描直接过滤掉；万一漏进来，
   // 也绝不能是拾取候选（它既不是"地上的资源"，也不该被捡 —— 落到 other 是兜底行为）
   assert.equal(byPrefab.flint, 'other')
   assert.equal(byPrefab.twigs, 'resources')
-  assert.equal(byPrefab.goldnugget, 'resources')
+  // TARGET-REFRESH：金块在拾取白名单里了（挖金矿的产物，不然挖完捡不到）
+  assert.equal(byPrefab.goldnugget, 'pickupables')
 })
 
 test('M2.2-10 limbo / 失效实体不进任何桶（扫描层就过滤）', async () => {
@@ -2098,7 +2106,7 @@ test('M2.2-21 guard 与 Observer 共用同一份白名单（同一张表，不�
             OUT_MAX = tostring(Whale.guard.PICKUP_MAX_TILES)`, '一致性')
   assert.equal(env.get('OUT_SAME'), 'true', '必须是同一张表（杜绝两份规则漂移）')
   assert.equal(env.get('OUT_LIST'),
-    'berries,berries_cooked,berries_juicy,berries_juicy_cooked,blue_cap,carrot,carrot_cooked,corn,corn_cooked,cutgrass,eggplant,eggplant_cooked,fish,fish_cooked,flint,froglegs,froglegs_cooked,green_cap,honey,meat,meat_cooked,pumpkin,pumpkin_cooked,red_cap,smallmeat,smallmeat_cooked,twigs',
+    'acorn,berries,berries_cooked,berries_juicy,berries_juicy_cooked,blue_cap,carrot,carrot_cooked,charcoal,corn,corn_cooked,cutgrass,eggplant,eggplant_cooked,fish,fish_cooked,flint,froglegs,froglegs_cooked,goldnugget,green_cap,honey,log,meat,meat_cooked,nitre,pinecone,pumpkin,pumpkin_cooked,red_cap,rocks,smallmeat,smallmeat_cooked,twigs',
     '放行了地上的材料与基础/熟食食物（其它非白名单 prefab 仍然拒绝）')
   assert.equal(env.get('OUT_MAX'), '2.5', '执行距离上限仍在执行侧')
 })

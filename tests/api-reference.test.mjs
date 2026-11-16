@@ -14,6 +14,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { CRAFTABLE_RECIPES } from '../lib/actions/specs/crafting.js'
 import { fileURLToPath } from 'node:url'
 
 import { findGameDirs } from '../lib/bridge.js'
@@ -137,9 +138,13 @@ test('API-3：API 文档和参考表都在仓库里，且提到的工具都存�
   assert.ok(existsSync(join(REPO, 'tools', 'bridge-call.mjs')), 'bridge-call.mjs（dump-reference 的依赖）必须存在')
 })
 
-test('API-4：合成表覆盖了我在 craft 白名单里放的那三个配方', () => {
+test('API-4：合成表覆盖了 craft 白名单里的**每一个**配方（含第一阶段科技）', () => {
   const table = readFileSync(join(REPO, 'docs', 'reference', '合成表.md'), 'utf8')
-  for (const recipe of ['axe', 'pickaxe', 'torch']) {
+  // TARGET-REFRESH：白名单从 4 个扩到 9 个（rope/boards/backpack/spear/armorwood 是第一阶段科技）。
+  // 清单直接取 ACTION_SPECS，避免以后加了配方忘了改这条断言。
+  for (const recipe of CRAFTABLE_RECIPES) {
     assert.match(table, new RegExp(`^- ${recipe}/`, 'm'), `合成表里应该有 ${recipe}`)
   }
+  // 顺手确认原版配方表里真的有这几个名字（dump 出来的表就是 AllRecipes）
+  assert.ok(CRAFTABLE_RECIPES.length >= 9, 'craft 白名单至少有 9 个配方')
 })

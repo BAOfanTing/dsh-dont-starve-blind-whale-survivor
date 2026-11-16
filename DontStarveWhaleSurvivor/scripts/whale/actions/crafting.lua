@@ -130,7 +130,8 @@ local BUILD_ALLOWED = {
     chest = true,         -- 箱子：3 木板，TECH.NONE（原生配方名 treasurechest）
     treasurechest = true,
     cookpot = true,       -- 锅：3 木炭 + 6 树枝 + 6 石头，TECH.SCIENCE_ONE
-    sciencemachine = true,-- 科学机器：4 木板 + 4 石头 + 1 金块，TECH.NONE（原生配方名 researchlab）
+    sciencemachine = true,-- 科学机器：**log 4** + rocks 4 + goldnugget 1，TECH.NONE（原生配方名 researchlab）
+                          -- 注意是原木 log，不是木板 boards（boards 要 TECH.SCIENCE_ONE，得先有机器）
     researchlab = true,
 }
 
@@ -190,6 +191,23 @@ local function build_by_ctx(j, p)
         -- ② 材料 / 科技
         local can = U.try(function() return builder:CanBuild(j.data.recipe.name) end)
         if not can then
+            -- ★ TARGET-REFRESH：缺料要说清"差什么、差几个"。
+            --   以前这里只回一句"材料不够"，模型不知道还差 goldnugget 1 还是 rocks 4，
+            --   只能反复盲试（真机 `build sciencemachine` 就是这么卡住的）。
+            --   材料数字优先读原版 AllRecipes（craftrules.MissingIngredients 内部就是这条路径）。
+            local cr = Whale ~= nil and Whale.craftrules or nil
+            local detailed = nil
+            if cr ~= nil and cr.MissingIngredients ~= nil then
+                -- ★ 注意用**原生配方名**（expected_prefab）：craftrules 的表键是 researchlab，
+                --   传 sciencemachine 会查不到配方、反而退化成"材料不够"。
+                detailed = cr.MissingIngredients(p, expected_prefab)
+                if detailed == nil and expected_prefab ~= name then
+                    detailed = cr.MissingIngredients(p, name)
+                end
+            end
+            if detailed ~= nil and string.sub(detailed, 1, 19) == "ingredients_missing" then
+                return "fail", detailed
+            end
             local missing = missing_ingredients(p, j.data.recipe)
             if missing ~= nil then return "fail", "ingredients_missing: " .. tostring(missing) end
             return "fail", "cannot_build: 造不了 " .. name .. "（科技不够？）"
@@ -264,7 +282,7 @@ JOBS.craft = function(j, p)
                 return "fail", missing
             end
             j.data.name = name
-            j.data.label = rules.RECIPES[name].label
+            j.data.label = (rules.RECIPES[name] ~= nil and rules.RECIPES[name].label) or name
             j.data.before = snapshot_counts(p)
             -- ★ 真机 bug：空手做 torch 时，原生 DoBuild 会**直接装备**而不是放进背包。
             --   只比较背包数量会把"做成功且已拿在手里"误判成"成品没进背包"，
@@ -294,8 +312,11 @@ JOBS.craft = function(j, p)
         if made > 0 or auto_equipped then
             -- 顺便报告材料消耗
             local used = {}
-            local def = rules.RECIPES[j.data.name]
-            for prefab, need in pairs(def.ingredients) do
+            -- ★ TARGET-REFRESH：材料表优先读原版 AllRecipes（和 guard 的 MissingIngredients
+            -- 同一份来源），读不到才退回兜底表 —— 不在这里再抄一份数字。
+            local need = (rules.NeededIngredients ~= nil and rules.NeededIngredients(j.data.name))
+                or (rules.RECIPES[j.data.name] ~= nil and rules.RECIPES[j.data.name].ingredients) or {}
+            for prefab in pairs(need) do
                 local spent = (j.data.before[prefab] or 0) - (after[prefab] or 0)
                 if spent > 0 then used[#used + 1] = string.format("%s-%d", prefab, spent) end
             end

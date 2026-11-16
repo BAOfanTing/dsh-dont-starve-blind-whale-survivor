@@ -820,22 +820,99 @@ local WORK_ACTIONS = {
 }
 
 --- 目标的 workable 是不是已经完成（挖碎/砍倒/拆掉）
+---
+--- ★ TARGET-REFRESH：这里必须**同时**看 workleft 和 workable.action。
+---   真机踩到：树砍倒后 `workleft` 不一定变 0，而是**变成树桩** ——
+---   `workable.action` 从 CHOP 变成 DIG。只看 workleft 会判"没砍完"，
+---   于是树明明倒了、木头都掉在地上了，回执却报「推不动 常青树…」。
+---   `job_work` 里一直是两个都看（见它的 done_this 判断），这里对齐。
 local function work_done(ent, action_id)
     if ent == nil or not ent:IsValid() then return true end
     local workable = ent.components ~= nil and ent.components.workable or nil
     if workable == nil then return true end
+    -- ① 动作换了（树 → 树桩：CHOP 变 DIG/MINE）就算干完了
+    if action_id ~= nil then
+        local ok_a, act = pcall(function() return workable.action end)
+        if ok_a and act ~= nil and tostring(act.id) ~= tostring(action_id) then return true end
+    end
+    -- ② 剩余工作量归零
     local ok, left = pcall(function() return workable.workleft end)
     if ok and type(left) == "number" then return left <= 0 end
     return false
+end
+
+--- 干活之后"把脚边掉出来的产物捡起来"这一步（chop / mine 共用）。
+---
+--- 为什么单独抽出来：挖矿时岩石一碎实体就 `IsValid()=false`，
+--- `work_by_ref` 开头那句"目标没了 → done"会**直接跳过捡东西** ——
+--- 真机表现就是「挖了 岩石」但 rocks/flint/nitre 全躺在地上（用户看到的就是这个）。
+--- 所以 loot 必须能在"目标已经失效"的情况下继续跑。
+---
+--- ★ 不要在这里加任何"等掉落动画"的延迟：`lootdropper:SpawnLootPrefab` 是
+---   `SpawnPrefab(...)` **同步**生成，树倒那一刻产物就已经在地上了（查过 scripts.zip）。
+---   这里唯一的等待来自引擎本身：一次只能演一个 PICKUP（`loco:PushAction` 会清掉上一个），
+---   所以每 tick 推一个、捡到没有为止。
+local function work_loot_step(j, p, def)
+    local rules = Whale ~= nil and Whale.pickuprules or nil
+    local picked_now = false
+    if rules ~= nil then
+        local list = U.find_all(p, 3, nil, nil, function(e)
+            if e == nil or not e:IsValid() then return false end
+            return rules.IsCandidate(e, p) == true
+        end)
+        for _, entry in ipairs(list or {}) do
+            local e = entry.ent or entry
+            if e ~= nil and e:IsValid() and not busy(p) then
+                push(p, BufferedAction(p, e, ACTIONS.PICKUP, nil))
+                j.data.looted[#j.data.looted + 1] = tostring(e.prefab or "?")
+                picked_now = true
+                j.data.loot_wait = U.now()
+                break                       -- 一次捡一个（引擎限制），下一 tick 继续
+            end
+        end
+    end
+    -- 结算条件：这一 tick 没东西可捡了、而且人也不忙（手空了）→ 立刻收工。
+    -- 时间上限只是兜底（背包满 / 够不着时别把一轮动作拖住）。
+    local overtime = U.now() > (j.data.loot_until or 0)
+    if not picked_now and (overtime or not busy(p)) then
+        local after = snapshot_counts(p)
+        local gained = {}
+        for prefab, n in pairs(after) do
+            local d = n - (j.data.before[prefab] or 0)
+            if d > 0 then gained[#gained + 1] = string.format("%s+%d", prefab, d) end
+        end
+        table.sort(gained)
+        local tail = #gained > 0 and ("（" .. table.concat(gained, "，") .. "）") or ""
+        -- 捡到了就报数量；没捡到就明说"东西在地上"，别让模型以为已经到手
+        local note = ""
+        if #gained == 0 then
+            note = "；产物掉在脚下但没进背包（背包满了？），可以 pickup_nearest 捡"
+        end
+        return "done", string.format("%s了 %s%s%s", def.verb, j.data.label or "目标", tail, note)
+    end
+    return "run"
 end
 
 --- 对实体干活（chop/mine/dig/hammer 共用）
 local function work_by_ref(j, p, target, kind)
     local def = WORK_ACTIONS[kind]
     if def == nil then return "fail", "unknown_work_action" end
+    -- ★ TARGET-REFRESH：**loot 必须先处理**。
+    --   挖矿时岩石一碎实体就失效（IsValid()=false），如果先走下面那句"目标没了 → done"，
+    --   就再也进不到捡东西那一步 —— 真机表现就是「挖了 岩石」但石头/燧石全躺在地上没捡。
+    if j.step == "loot" then
+        return work_loot_step(j, p, def)
+    end
     if target == nil or not target:IsValid() then
         -- 已经动过手、目标却没了 = 被我们干掉了（岩石挖碎会消失，树倒变树桩）
         if j.data ~= nil and j.data.pushed ~= nil then
+            -- 也别直接 done：先进 loot 把脚边掉的东西捡了（上面已处理 loot 步骤）
+            if j.data.loot_until == nil then
+                j.data.loot_until = U.now() + 3.5   -- 只是兜底上限（背包满/够不着时别拖住一轮动作）
+                j.data.looted = {}
+                j.step = "loot"
+                return "run"
+            end
             return "done", string.format("%s了 %s", def.verb, j.data.label or "目标")
         end
         return "fail", "entity_gone: 目标已经不存在了"
@@ -849,6 +926,22 @@ local function work_by_ref(j, p, target, kind)
 
     if j.step == "start" then
         if target:IsInLimbo() then return "fail", "in_limbo: 目标进入了 limbo" end
+        -- ★ TARGET-REFRESH：先看距离，够不着就别推。
+        --   真机踩到：桦栗树在 2 格外，push 之后引擎要先走过去，结果被当成"推不动/工具不对"。
+        --   原生 CHOP/MINE 要贴到 ~1 格；这里放宽到 1.6 格（引擎会自己微调），
+        --   超过就直接告诉模型"先 move_to 靠近"，省一次注定失败的动作。
+        do
+            local d0 = U.dist(p, target)
+            local tiles0 = d0 ~= nil and (d0 / U.TILE) or nil
+            if tiles0 ~= nil and tiles0 > 2.5 then
+                local tx, tz = nil, nil
+                local px, _, pz = U.pos(target)
+                if px ~= nil then tx, tz = U.tile_of(px, pz) end
+                return "fail", string.format("out_of_range: 目标 %s 在 %.1f 格外（%s）：先 move_to 靠近再%s",
+                    U.pretty(target), tiles0,
+                    tx ~= nil and string.format("%d,%d", tx, tz) or "?", def.verb)
+            end
+        end
         j.data.target = target
         j.data.kind = kind
         j.data.label = U.pretty(target)
@@ -870,27 +963,110 @@ local function work_by_ref(j, p, target, kind)
         -- 官方"按住 F"连砍时会给动作打这个标记
         pcall(function() ba.options.no_predict_fastforward = true end)
         push(p, ba)
+        j.data.ba = ba
+        j.data.tool = tool
+        j.data.hits = 1
         j.data.pushed = U.now()
+        j.data.last_push = j.data.pushed
+        -- ★ TARGET-REFRESH：这里原来只 push **一次**就干等 —— 树要 4~5 下才倒、石头要挖好几下，
+        --   于是永远等不到 work_done，最后 120 秒超时（真机 `chop_nearest` 就是这么失败的）。
+        --   现在照 `job_work` 的老办法：把"按住动作键"置上，让引擎自己在状态机里重推同一个动作
+        --   （官方"按住空格/F"连砍就是这条机制，实测 push 1 次能连砍到倒）。
+        hold_control(p, true)
         j.step = "acting"
         return "run"
     end
 
     if j.step == "acting" then
         local alive = target:IsValid()
-        if work_done(target, def.action) or not alive then
-            local after = snapshot_counts(p)
-            -- 产物核对：砍树出 log、挖矿出 rocks/flint/goldnugget
-            local gained = {}
-            for prefab, n in pairs(after) do
-                local d = n - (j.data.before[prefab] or 0)
-                if d > 0 then gained[#gained + 1] = string.format("%s+%d", prefab, d) end
+        -- ★ TARGET-REFRESH：**先判目标有没有倒，再判忙不忙**。
+        --   顺序很关键：`hold_control` 一开，引擎在状态机内部自己连砍，人物**一直是 busy**，
+        --   如果先走 busy 分支就永远回不到这里（job_work 在 2026-11-12 真机踩过同一个坑）。
+        local done_now = work_done(target, def.action) or not alive
+        if done_now then
+            -- 目标倒了：立刻松手，别一路砍到下一棵
+            hold_control(p, false)
+            j.data.done_at = j.data.done_at or U.now()
+            -- ★ TARGET-REFRESH：砍倒 ≠ 木头到手。原生会把 log/松果/石头**掉在脚下**，
+            --   真机踩到：树砍倒了、木头就在 0.3 格外，但回执只说"砍了常青树"，
+            --   模型以为东西已经进包了，于是没去捡（用户看到的就是"砍了但没捡木头"）。
+            --   所以这里进一个 loot 步骤：把脚边这次掉出来的产物捡起来，再一起报账。
+            if j.data.loot_until == nil then
+                j.data.loot_until = U.now() + 3.5   -- 只是兜底上限（背包满/够不着时别拖住一轮动作）
+                j.data.looted = {}
+                j.step = "loot"
+                return "run"
             end
-            table.sort(gained)
-            local tail = #gained > 0 and ("（" .. table.concat(gained, "，") .. "）") or ""
-            return "done", string.format("%s了 %s%s", def.verb, j.data.label or "目标", tail)
         end
         if U.now() - j.data.phase_start > 120 then
+            hold_control(p, false)
             return "fail", "work_failed: 干了 120 秒还没弄完（可能够不着或工具不对）"
+        end
+        -- 引擎连砍时单次动作永远不结束 → 必须有一个按**任务总时长**的出口，
+        -- 否则上面那个 120 秒（按单次 push 计时）永远不会触发（job_work 踩过同一个坑）。
+        if busy(p) and U.now() - (j.t0 or j.data.phase_start) > (tonumber(j.args.timeout) or 240) then
+            hold_control(p, false)
+            return "fail", string.format("%s了 %d 下还没倒（超时；工具太弱或够不着）", def.verb, j.data.hits or 0)
+        end
+        -- 还没真正动起来：先分清"够不着"和"工具不对"，别一律报"推不动"。
+        -- 真机踩到：桦栗树在 2 格外，引擎要先走过去，3 秒不够 → 被误报成"推不动/工具不对"。
+        -- 注意：这里**不能**用 `hits <= 1` 当条件 —— 兜底重推每 tick 都会加 hits，
+        -- 距离不够时它也会一直重推，hits 早就 > 1 了（真机就是这么绕过诊断的）。
+        if not busy(p) then
+            local waited = U.now() - j.data.phase_start
+            local d = U.dist(p, target)
+            local tiles = d ~= nil and (d / U.TILE) or nil
+            -- ① 距离明显不够（原生 CHOP 要贴到 ~1 格）：直接说清楚，让模型先靠近。
+            if tiles ~= nil and tiles > 2.5 and waited > 1.5 then
+                local tx, tz = nil, nil
+                local px, _, pz = U.pos(target)
+                if px ~= nil then tx, tz = U.tile_of(px, pz) end
+                hold_control(p, false)
+                return "fail", string.format("out_of_range: 目标 %s 在 %.1f 格外（%s）：先 move_to 靠近再%s",
+                    j.data.label or "目标", tiles,
+                    tx ~= nil and string.format("%d,%d", tx, tz) or "?",
+                    def.verb)
+            end
+            -- ② 距离够了却一直没动起来（8 秒）→ 才判工具不对 / 被挡。
+            if waited > 8 and (j.data.hits or 0) <= 2 then
+                local hands = nil
+                local inv2 = p.components ~= nil and p.components.inventory or nil
+                if inv2 ~= nil then hands = inv2:GetEquippedItem(EQUIPSLOTS.HANDS) end
+                hold_control(p, false)
+                return "fail", string.format("推不动 %s（prefab=%s）：手里是 %s，可能工具不对或者够不着",
+                    j.data.label or "目标", tostring(target ~= nil and target.prefab or "?"),
+                    hands ~= nil and U.describe_item(hands) or "空手")
+            end
+        end
+        -- ★ TARGET-REFRESH：连砍兜底（照 `job_work` 的节奏，它真机验证过）。
+        --   真机踩到：`hold_control` 在这个构建里不足以让引擎自己连推，
+        --   于是"推一次 → 站着不动 → 8 秒后报推不动"。job_work 的做法是**主动重推**。
+        --   这里每 0.4 秒重推一次（复用同一个 ba，重建会打断 sg 状态机）。
+        local now = U.now()
+        if (now - (j.data.last_push or 0) > 0.4) then
+            local ba = j.data.ba
+            if ba ~= nil then
+                -- 复用同一个动作：清掉上一次的收尾状态，允许重放
+                ba.doable = nil
+                pcall(function()
+                    ba.options.no_predict_fastforward = true
+                end)
+                -- 工具可能被换掉（耐久耗尽），重推前再确认一次
+                local act2 = ACTIONS[def.action]
+                local tool2 = best_tool(p, act2)
+                if tool2 ~= nil then
+                    ba.invobject = tool2
+                    equip_if_needed(p, tool2)
+                end
+                push(p, ba)
+                j.data.last_push = now
+                j.data.hits = (j.data.hits or 0) + 1
+                j.data.pushed = now
+                if j.data.hits > 40 then
+                    hold_control(p, false)
+                    return "fail", string.format("%s了 %d 下还没倒（工具太弱或够不着）", def.verb, j.data.hits)
+                end
+            end
         end
         return "run"
     end
@@ -961,6 +1137,62 @@ JOBS.harvest = function(j, p)
     push(p, BufferedAction(p, thing, ACTIONS.HARVEST, nil))
     j.data.phase_start = U.now()
     return "done", "收割了 " .. U.pretty(thing)
+end
+
+-- ═══════════════ TARGET-REFRESH：实时目标选择（复用上面原有的实现）═══════════════
+--
+-- 这五个动作**没有自己的执行逻辑**：目标由 guard 在授权那一刻用当前世界状态重新找到
+-- （放在 ctx.target），这里只是把它交给已有的 pickup_by_ref / harvest_by_ref / work_by_ref。
+-- 所以执行链、成功判据、超时、工具装备全部和 #N 那条路**一模一样**，
+-- 不存在"第二套不受安全约束的执行通道"。
+--
+-- 关键：ctx.target == nil 时一律 fail，**绝不退回按 prefab 搜目标**
+--（否则就等于绕过了 guard 的白名单与距离校验）。
+local function require_resolved(ctx, what)
+    if ctx == nil or ctx.target == nil then
+        return "fail", "no_resolved_target: " .. what .. " 必须由服务端实时选中目标（不要传 prefab）"
+    end
+    return nil, nil
+end
+
+-- 捡最近的一类资源（flint / twigs / cutgrass / log / rocks / goldnugget / charcoal / petals）
+JOBS.pickup_nearest = function(j, p)
+    local ctx = j.ctx or {}
+    local err, why = require_resolved(ctx, "pickup_nearest")
+    if err ~= nil then return err, why end
+    return pickup_by_ref(j, p, ctx.target)
+end
+
+-- 捡最近的地面白名单食物（carrot / berries / berries_juicy / pumpkin / …；生蘑菇不算）
+JOBS.pickup_food = function(j, p)
+    local ctx = j.ctx or {}
+    local err, why = require_resolved(ctx, "pickup_food")
+    if err ~= nil then return err, why end
+    return pickup_by_ref(j, p, ctx.target)
+end
+
+-- 采最近**已成熟**的食物植株（未成熟的在 guard 里就被跳过了）
+JOBS.harvest_nearest = function(j, p)
+    local ctx = j.ctx or {}
+    local err, why = require_resolved(ctx, "harvest_nearest")
+    if err ~= nil then return err, why end
+    return harvest_by_ref(j, p, ctx.target)
+end
+
+-- 砍最近的树
+JOBS.chop_nearest = function(j, p)
+    local ctx = j.ctx or {}
+    local err, why = require_resolved(ctx, "chop_nearest")
+    if err ~= nil then return err, why end
+    return work_by_ref(j, p, ctx.target, "chop")
+end
+
+-- 挖最近的矿（ordinary_rock / gold_vein）
+JOBS.mine_nearest = function(j, p)
+    local ctx = j.ctx or {}
+    local err, why = require_resolved(ctx, "mine_nearest")
+    if err ~= nil then return err, why end
+    return work_by_ref(j, p, ctx.target, "mine")
 end
 
 return A

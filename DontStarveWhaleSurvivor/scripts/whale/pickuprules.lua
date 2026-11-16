@@ -38,6 +38,19 @@ P.PREFABS = {
     twigs = true,
     cutgrass = true,
     flint = true,
+    -- ★ TARGET-REFRESH：**砍树/挖矿的产物**。
+    --   真机踩到（用户原话："你能把树砍了啊，就是没捡木头"）：
+    --   树砍倒了、木头就掉在 0.3 格外，但 `log` 不在拾取白名单 →
+    --   pickup / pickup_nearest(log) 全都被拒，模型只能干看着。
+    --   这些都是原生 AddComponent("inventoryitem") 的普通地面物品，捡起来完全安全。
+    log = true,
+    rocks = true,
+    goldnugget = true,
+    nitre = true,
+    charcoal = true,
+    -- 松果/桦栗果：砍树会掉，留着能种树（不进白名单的话永远捡不起来）
+    pinecone = true,
+    acorn = true,
     -- 地上的食物：与 eatrules 基础食物与熟食完全对齐，掉在地上都可以被原生 ACTIONS.PICKUP 捡起
     carrot = true,
     berries = true,

@@ -278,7 +278,14 @@ local function handle_command(json_text)
     local ok_cmd, reason, detail = guard.validate(cmd)
     if not ok_cmd then
         log("拒绝指令 " .. id .. "：" .. tostring(reason))
-        B.Report(false, "拒绝：" .. tostring(reason), id, tostring(reason))
+        -- TARGET-REFRESH：被拒时把可操作的说明一起回给模型（合法 target_kind 清单、
+        -- 当前真实背包里能吃什么、最近的目标在多远……）。reason 代码一个字没变，
+        -- 所以状态分类、去重、既有测试全都不受影响。
+        local text = "拒绝：" .. tostring(reason)
+        if type(detail) == "table" and detail.hint ~= nil then
+            text = text .. "｜" .. tostring(detail.hint)
+        end
+        B.Report(false, text, id, tostring(reason))
         return
     end
     guard.accept(cmd)
@@ -322,6 +329,10 @@ local function handle_command(json_text)
             cook_items = cmd.args ~= nil and cmd.args.items or nil,
             -- SURVIVAL-06
             survival_build = (action == "build") or nil,
+            -- TARGET-REFRESH：实时目标选择的类别（诊断/回执用；目标实体由 guard 解析好放在 target）
+            target_kind = cmd.args ~= nil and cmd.args.target_kind or nil,
+            -- TARGET-REFRESH：稳定句柄路径（有它就没走 snapshot_id）
+            target_handle = cmd.args ~= nil and cmd.args.target_handle or nil,
             build_recipe = cmd.args ~= nil and cmd.args.recipe or nil,
             recipe_filter = cmd.args ~= nil and cmd.args.filter or nil,
             lookup_query = cmd.args ~= nil and cmd.args.q or nil,

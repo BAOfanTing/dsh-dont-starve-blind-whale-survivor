@@ -395,6 +395,13 @@ function O.Render(data)
     head = head .. " · 状态 " .. tostring(obs.status or "?")
     lines[#lines + 1] = head
 
+    -- TARGET-REFRESH：世界标识（长期笔记按它分开存，换世界不会把旧基地坐标带过来）
+    local ident = data.identity or {}
+    if ident.world_key ~= nil and ident.world_key ~= "unknown" then
+        lines[#lines + 1] = "世界标识：" .. tostring(ident.world_key)
+            .. "（来源 " .. tostring(ident.world_key_source or "?") .. "）"
+    end
+
     if actor == nil then
         lines[#lines + 1] = "现在没有可观察的角色（" .. tostring(obs.status) .. "）。"
         local errs = obs.errors or {}
@@ -514,7 +521,13 @@ function O.Render(data)
                             else
                                 text = text .. " 可收(harvest)"
                             end
+                        elseif item.is_harvestable == false then
+                            -- TARGET-REFRESH：未成熟的**不是目标**，写清楚免得模型反复试
+                            text = text .. " 未成熟（现在不能采）"
                         end
+                        -- TARGET-REFRESH：稳定句柄。它跨扫描有效（#N 只在这一帧有效），
+                        -- 目标没了就作废；模型可以直接把它填进 target_handle。
+                        if item.handle ~= nil then text = text .. " 句柄" .. tostring(item.handle) end
                         if item.fuel_percent ~= nil then text = text .. " 燃料 " .. tostring(item.fuel_percent) .. "%" end
                         if item.targeting_you then text = text .. " 正在追你" end
                         parts[#parts + 1] = text
@@ -527,6 +540,10 @@ function O.Render(data)
             if nearby_sid ~= nil then
                 lines[#lines + 1] = "  ↑ 以上 #N 引用属于 Nearby 快照 ID：" .. nearby_sid
                     .. "；调 pickup/harvest 时 snapshot_id 必须填这个（不要填上面的状态快照序列号）"
+                -- TARGET-REFRESH：给出**不会过期**的两条替代路，省掉模型"猜编号"的整类错误
+                lines[#lines + 1] = "  ↑ 不想管快照号时：只说类别（pickup_nearest / pickup_food / "
+                    .. "harvest_nearest / chop_nearest / mine_nearest + target_kind），服务端会实时找目标；"
+                    .. "要指定上面某一个具体目标时，用它的 句柄h… （跨帧有效）或 #N + Nearby 快照 ID"
             end
         end
 
@@ -573,6 +590,26 @@ end
 -- ─────────────────────────── 组装 ───────────────────────────
 
 local sample_cache = { at = nil, actor_guid = nil, data = nil }
+
+--- TARGET-REFRESH：长期记忆必须绑定"哪个世界（存档 + 分片）"。
+--- 真机证据：换了存档之后笔记里还留着旧基地 (21,-81)，而角色其实在 (-21,-5)。
+--- 优先用 cluster_id（真正的存档标识，跨读档稳定）；读不到才退回 session_id
+--- （每次读档都会变 —— 会牺牲跨读档的记忆连续性，但**绝不会把两个世界的坐标混在一起**，
+--- 失败要安全）。world_key_source 如实标注用的是哪一个，不编造。
+local function world_key_of(identity)
+    if identity == nil then return "unknown", "none" end
+    local shard = tostring(identity.shard_id or "?")
+    local cluster = identity.cluster_id
+    if type(cluster) == "string" and cluster ~= "" then
+        return "cluster:" .. cluster .. "/shard:" .. shard, "cluster_id"
+    end
+    local session = identity.session_id
+    if type(session) == "string" and session ~= "" then
+        return "session:" .. session .. "/shard:" .. shard, "session_id"
+    end
+    return "unknown", "none"
+end
+O.world_key_of = world_key_of
 
 --- 采样一次（真正读游戏）。opts = { seq, now }
 function O.BuildData(actor, opts)
@@ -630,6 +667,7 @@ function O.BuildData(actor, opts)
 
     if status ~= "ok" then info = nil end
 
+    local wk, wk_source = world_key_of(identity)
     local data = {
         schema = O.SCHEMA,
         identity = {
@@ -637,6 +675,9 @@ function O.BuildData(actor, opts)
             cluster_id = identity.cluster_id,
             cluster_id_source = identity.cluster_id_source,
             shard_id = identity.shard_id,
+            -- TARGET-REFRESH：长期笔记按这个键分开存，换世界不会串坐标
+            world_key = wk,
+            world_key_source = wk_source,
         },
         actor = info,
         player = nil,

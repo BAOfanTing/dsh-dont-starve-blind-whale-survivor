@@ -3,7 +3,7 @@
 > 本文只描述**现在真正在跑**的系统。历史架构（A 栈的 TypeScript bridge / mcp-server / agent、
 > HTTP 18788 那一套）已全部归档，见 [`archive/milestones/INDEX.md`](archive/milestones/INDEX.md)。
 >
-> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.31.1）+ `lib/`（DSH 插件，0.9.2）
+> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.39.0）+ `lib/`（DSH 插件，0.10.0）
 
 ---
 
@@ -23,7 +23,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  ① DSH 会话：模型 → MCP 工具（Streamable HTTP + SSE）                                      │
 │  ② 游戏里按 F8：插件内置 AI → 同一套工具定义                                               │
 └───────────────────────────────────────┬─────────────────────────────────────────────────┘
-                                        │  工具 = lib/tools.js 的 TOOLS（34 个 = 3 本地 + 31 动作）
+                                        │  工具 = lib/tools.js 的 TOOLS（39 个 = 3 本地 + 36 动作）
                                         ▼
 ┌──────────────────────────── DSH 插件进程（Node，lib/）────────────────────────────────────┐
 │                                                                                          │
@@ -32,7 +32,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │     └─ 动作      → dispatcher.dispatch()  ────────────────┐                               │
 │                                                            │                               │
 │  dispatcher.js  ①参数与快照校验 ②拿控制租约 ③写命令 ④等结果 ⑤核对真实状态  ◄── 唯一允许    │
-│                 （白名单：ACTION_SPECS 的全部 31 个动作）                      下发动作的地方 │
+│                 （白名单：ACTION_SPECS 的全部 36 个动作）                      下发动作的地方 │
 │                                                                                          │
 │  actions/specs/*.js   按领域拆分的动作规格（movement / gathering / crafting / ...）        │
 │                       每个动作声明 riskLevel / 参数白名单 / verify（核对方式）              │
@@ -55,7 +55,8 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 ┌──────────────────────────── 游戏进程（Lua 模组，DontStarveWhaleSurvivor/）────────────────┐
 │                                                                                          │
 │  observe.lua    把世界翻成文字（时间/位置/三维/背包/附近/威胁）→ 写 state                  │
-│  nearby.lua     结构化附近：9 个桶、带 #N 引用、带 snapshot_id、带 delta                   │
+│  nearby.lua     结构化附近：9 个桶、带 #N 引用、带 snapshot_id、带 delta、带稳定句柄 h…             │
+│  targetrules.lua ★ TARGET-REFRESH：固定 target_kind 枚举 + 实时找最近目标 + 稳定句柄注册表          │
 │  actor.lua      Actor Provider：只认"本地主机、活着、非灵魂"的那个玩家                     │
 │  bridge.lua     读命令、写结果、维护租约回执（含 job_cleared）                             │
 │  guard.lua      ★ 第二道闸：白名单 + 参数 + 目标 + 租约 + 代际 + 权限，逐条复核             │
@@ -125,6 +126,10 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 - **引用**：每个条目有 `#N`，**只在当前 `snapshot_id` 内有效**。
   `snapshot_id = <runtime_id>-n<扫描序号>`：`runtime_id` 区分进程/世界，`n` 区分第几次扫描。
   世界重载后 `runtime_id` 变，旧引用自动作废。
+- **稳定句柄（TARGET-REFRESH）**：能操作的目标还会带一个 `handle`（形如 `h1a`）。
+  它**不含 GUID**，键是 `prefab + 格子坐标`，所以同一个目标在多次扫描之间句柄不变；
+  这一帧没扫到（= 目标没了/被捡走）就立刻作废，并记下"为什么失效"（`target_gone` / `target_taken` /
+  `in_limbo`），让回执能说实话而不是含糊的 `unknown_handle`。`#N` 仍然只是**当前观察里的展示编号**。
 - **Delta**：与上一次**完整扫描集合**（不是上一帧截断后的列表）对比，算出新增/消失/变化，
   避免"因为超出上限被截掉"被误报成"消失了"。
 - 只有 `pickupables` / `harvestables` 里的条目能被对应动作使用；
@@ -132,11 +137,11 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 
 ---
 
-## 7. 工具表面（34 个）与共用链路
+## 7. 工具表面（39 个）与共用链路
 
 ```
 TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写笔记
-      + ACTION_SPECS 的 31 个动作                   ← 必须过 dispatcher
+      + ACTION_SPECS 的 36 个动作                   ← 必须过 dispatcher
 ```
 
 动作按领域放在 `lib/actions/specs/`：
@@ -144,7 +149,7 @@ TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写
 | 文件 | 动作 | 数量 |
 |---|---|---|
 | `movement.js` | move_to / stop / seek | 3 |
-| `gathering.js` | pickup / harvest / gather / gather_area / chop / mine / dig / hammer | 8 |
+| gathering.js | pickup_nearest / pickup_food / harvest_nearest / chop_nearest / mine_nearest / pickup / harvest / gather / gather_area / chop / mine / dig / hammer | 13 |
 | `crafting.js` | craft / build / cook | 3 |
 | `survival.js` | eat / equip / unequip / drop / fuel / wait | 6 |
 | `interaction.js` | use / container_take / container_put / give | 4 |
@@ -243,7 +248,35 @@ dispatch({tool, args, owner})
 
 ---
 
-## 12. 安全边界（这些不能因为"瘦身"被删掉）
+## 12. TARGET-REFRESH：目标引用（三层，安全边界一条没少）
+
+真机日志（session.txt，Mod 0.38.4）里 94 次工具调用有 23 次 `pickup` + 3 次 `chop` + 2 次 `harvest`
+全是 `stale_snapshot`：`#N` 只在**一帧扫描**内有效，而模型一轮思考 30~60 秒 —— 拿到引用时那一帧早换了。
+修法不是放宽校验（那会操作错目标），而是给模型**不会过期**的引用方式：
+
+| 方式 | 模型给什么 | 谁选目标 | 有效期 | 典型动作 |
+|---|---|---|---|---|
+| ㋐ 类别 | `target_kind`（固定枚举） | **Lua 在执行那一刻**用当前世界状态重新找 | 不过期 | `pickup_nearest` / `pickup_food` / `harvest_nearest` / `chop_nearest` / `mine_nearest` |
+| ㋑ 稳定句柄 | `target_handle`（形如 `h1a`，**不是 GUID**） | 注册表里那一个（目标消失即作废） | 跨扫描，目标还在就有效 | 上面 5 个 + 全部 16 个 `#N` 动作 |
+| ㋒ `#N` + 快照 | `target_ref` + `snapshot_id` | 当前帧的 `nearby.refs` | 只在这一帧 | 语义完全不变 |
+
+- **㋐/㋑ 的实现都在 `scripts/whale/targetrules.lua`**（固定枚举 + 候选判定 + 最近目标 + 句柄注册表），
+  它是目标类别的**唯一真来源**；Node 侧 `lib/actions/target-kinds.js` 是同一份枚举，
+  有 `tests/target-nearest.test.mjs` 逐条 parity 断言盯着。
+- **㋑ 的硬要求**：句柄不含 GUID；绑定 `runtime_id|session_id|actor_id`（换世界整体作废）；
+  只能由 Lua 发放（查不到 = `unknown_handle`）；**执行前必须重新解析真实实体**；
+  过期一律给准确原因（`target_gone` / `target_taken` / `in_limbo`），**绝不自动替换成别的对象**。
+- **㋐ 的硬要求**：`target_kind` 必须是固定枚举；Lua 在执行那一刻重新搜候选，然后逐条复核
+  存在性 / prefab 白名单 / 是否真的可采可挖 / 距离 / 背包容量 / 工具 / `actor_busy` / 原 Guard，
+  通过后仍然走**原有**的 `BufferedAction → JOBS → push()`。
+  模型**不能**传 prefab、GUID 或 Lua 表达式。
+- **熔断**：同一个旧引用连续两次 `stale_snapshot` → `stale_snapshot_circuit_open`
+  （不再把注定失败的请求发到游戏），并给出可执行的替代方案。成功 / 换引用 / 换世界后清零。
+  明确**不**做：放宽校验、允许旧 `#N`、自动 `+1`、盲用同编号实体。
+
+---
+
+## 13. 安全边界（这些不能因为"瘦身"被删掉）
 
 1. Actor Provider（只认一个玩家）
 2. Nearby 的 `#N` 引用 + `snapshot_id`（引用不能跨快照）
@@ -257,10 +290,13 @@ dispatch({tool, args, owner})
 10. 动作执行与结果确认（以真实状态为准）
 
 M2.2.1 的瘦身**只删了模型可见但永远被拒的工具定义**，上面 10 条一条没动（有测试守着）。
+TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然只有一个 Dispatcher 出口、
+一个 Guard、一条 `BufferedAction → push()`；句柄与实时选目标都只是**在 Guard 内部换了解析方式**
+（`tests/target-nearest.test.mjs` 的 TN-13 盯着"没有自己的执行通道"）。
 
 ---
 
-## 13. 计划层（Plan：减少每轮重新规划）
+## 14. 计划层（Plan：减少每轮重新规划）
 
 `lib/plan.js` 是**纯函数**：输入一份归一化快照，输出「当前目标 + 原因 + 下一步」。
 它不调模型、不改世界、不写游戏文件，只把"现在最值得做的一件事"固定下来。
@@ -268,11 +304,28 @@ M2.2.1 的瘦身**只删了模型可见但永远被拒的工具定义**，上面
 - **优先级固定**：灵魂（revive）> 脱战（retreat）> 光源（light）> 回血（heal）> 进食（eat）
   > 补理智（sanity）> 存粮（stock_food）> 白天备火把材料（prep_light）> 斧头（tool_axe）
   > 镐（tool_pickaxe）> 探索（explore）。
-- **稳定保持**：上一份计划的世界（`nearby.runtime_id`）没变、旧目标仍然成立、
+- **食物建议不会过期**：`eat` / `stock_food` / `heal` 的下一步现在是
+  `pickup_food target_kind=…` / `harvest_nearest target_kind=…`，**不再**拼 `#N + snapshot_id`
+  （那正是模型思考一轮之后就作废的东西）。
+- **稳定保持**：上一份计划的世界（`identity.worldKey|nearby.runtime_id`）没变、旧目标仍然成立、
   且没有更高优先级的新目标时，沿用旧目标（`changed=false`，`since` 不变），
-  避免模型每轮在"吃 / 砍树 / 探路"之间来回翻烧饼。
+  避免模型每轮在"吃 / 砍树 / 探路"之间来回翻烧饼。**换世界一定重推**。
 - **可核对**：目标是否成立只看快照字段（灵魂、血量、饥饿、相位、背包、附近桶），
   不依赖模型自己说"做完了"。
 - **省 token 的注入方式**：`get_state` 文本末尾输出完整计划，JSON 模式放在 `plan` 字段；
   F8 每轮只注入一行紧凑计划，只有目标切换时才展开完整版。
 - F8 与 MCP 通过 `lib/index.js` 的 `sharedPlan` 共用同一份计划，换入口不会重新规划。
+
+---
+
+## 15. 长期记忆按世界分开（TARGET-REFRESH）
+
+真机踩到：换了存档之后笔记里还留着旧基地 `(21,-81)`，而角色其实在 `(-21,-5)`。
+
+- Lua 侧 `observe.lua` 输出 `identity.world_key` / `world_key_source`：
+  `cluster:<cluster_id>/shard:<shard_id>`，**读不到才**退回 `session:<session_id>` 并如实标注来源。
+- Node 侧 `lib/notes-store.js` 按 `world_key` 分文件存（`notes/<key>.md`）；
+  `world_key` 缺失时退回旧的单文件 `notes.md` 并**明确标成"未绑定世界"**（不保证坐标属于当前世界）。
+- 旧世界的笔记**不删**：换回去还能看见；当前世界看不到，也不会被当成当前坐标。
+  `get_state` 在世界切换时显式提示「旧世界的基地坐标和未完成目标已归档」。
+

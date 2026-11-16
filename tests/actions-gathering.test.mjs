@@ -133,7 +133,7 @@ test('work-2：workable 类（chop/mine/dig/hammer）都要 #N + snapshot_id', (
   for (const name of ['chop', 'mine', 'dig', 'hammer']) {
     const spec = ACTION_SPECS[name]
     assert.equal(spec.requiresSnapshot, true, `${name} 必须校验快照`)
-    assert.deepEqual(Object.keys(spec.args).sort(), ['snapshot_id', 'target_ref'])
+    assert.deepEqual(Object.keys(spec.args).sort(), ['snapshot_id', 'target_handle', 'target_ref'])
     assert.equal(validateArgs(spec, { target_ref: '#3', snapshot_id: 'r1-n2' }).ok, true)
     assert.equal(validateArgs(spec, { target_ref: 'evergreen', snapshot_id: 'r1-n2' }).ok, false, `${name} 不许按 prefab`)
     assert.equal(validateArgs(spec, { target_ref: '#3' }).ok, false, `${name} 缺 snapshot_id 要拒`)

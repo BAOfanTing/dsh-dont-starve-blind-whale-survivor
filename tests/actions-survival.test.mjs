@@ -27,7 +27,7 @@ test('survival-1：四个新动作都在 dispatcher 白名单里，且都有 ris
 test('survival-2：gather 只接受 target_ref + snapshot_id（和 harvest 同构）', () => {
   const spec = ACTION_SPECS.gather
   assert.equal(spec.requiresSnapshot, true, 'gather 必须校验快照')
-  assert.deepEqual(Object.keys(spec.args).sort(), ['snapshot_id', 'target_ref'])
+  assert.deepEqual(Object.keys(spec.args).sort(), ['snapshot_id', 'target_handle', 'target_ref'])
   // OBSERVATION-02：引用是 1 起的，#0 不该合法
   assert.deepEqual(spec.args.target_ref.pattern, '^#[1-9][0-9]{0,3}$')
   assert.equal(validateArgs(spec, { target_ref: '#0', snapshot_id: 'r1-n2' }).ok, false, '#0 要拒')
@@ -48,14 +48,15 @@ test('survival-3：eat 的 food 只能是小写 prefab 名，且可以不填', (
   assert.equal(validateArgs(spec, { prefab: 'berries' }).ok, false, '不许传 prefab 字段')
 })
 
-test('survival-4：craft 的 recipe 必填且只能是白名单三个', () => {
+test('survival-4：craft 的 recipe 必填且只能填白名单里的配方', () => {
   const spec = ACTION_SPECS.craft
   assert.equal(validateArgs(spec, {}).ok, false, 'recipe 必填')
-  for (const r of ['torch', 'axe', 'pickaxe']) {
+  for (const r of ['torch', 'axe', 'pickaxe', 'flowerhat', 'rope', 'boards', 'backpack', 'spear', 'armorwood']) {
     assert.equal(validateArgs(spec, { recipe: r }).ok, true, `${r} 应该合法`)
   }
-  assert.equal(validateArgs(spec, { recipe: 'campfire' }).ok, true, 'schema 层允许（白名单在 Lua/verify 里判）')
-  // verify 里必须拒非白名单
+  // TARGET-REFRESH：enum 现在锁死在白名单上（以前 schema 层放行、只在 verify 里拦）
+  assert.equal(validateArgs(spec, { recipe: 'campfire' }).ok, false, 'campfire 归 build，不属于 craft')
+  // verify 里也必须拒非白名单
   const v = spec.verify({}, {}, { recipe: 'campfire' })
   assert.equal(v.ok, false)
   assert.equal(v.reason, 'recipe_not_allowed')
@@ -195,10 +196,23 @@ test('survival-11：equip 核对 —— 装备栏真的变了才算成功', () =
   const after = snap({ worn: { hands: 'torch' } })
   assert.equal(spec.verify(before, after, { item: 'torch' }).ok, true)
 
-  // 装备栏没变 → 失败
+  // 装备栏没变 → 失败。★ 真机 bug（2026-11-16）：以前 reason 叫 `hand_unchanged`，
+  // 但"手没变"既可能是幂等成功（本来就拿着）也可能是真失败 —— 模型会误读。
+  // 现在统一叫 `equip_failed`，并且把幂等成功单独判掉（见下一条）。
   const bad = spec.verify(before, before, { item: 'torch' })
   assert.equal(bad.ok, false)
-  assert.equal(bad.reason, 'hand_unchanged')
+  assert.equal(bad.reason, 'equip_failed')
+
+  // 幂等：本来就已经拿着它 → 算成功（不算失败）
+  const already = snap({ worn: { hands: 'torch' } })
+  const idem = spec.verify(already, already, { item: 'torch' })
+  assert.equal(idem.ok, true, '本来就拿着 torch 时 equip 应该成功（幂等）')
+
+  // 之前拿着但被换掉了 → 失败，并说明原因
+  const swapped = spec.verify(snap({ worn: { hands: 'torch' } }), snap({ worn: { hands: 'axe' } }), { item: 'torch' })
+  assert.equal(swapped.ok, false)
+  assert.equal(swapped.reason, 'equip_failed')
+  assert.match(String(swapped.note || ''), /换掉/, '要说明是被换掉了')
 })
 
 test('survival-12：工具表里的四个新工具描述必须讲清白名单/限制', async () => {
@@ -211,7 +225,9 @@ test('survival-12：工具表里的四个新工具描述必须讲清白名单/�
   assert.match(byName.craft.description, /ingredients_missing/, 'craft 要说明材料不足的返回')
   assert.match(byName.equip.description, /torch/, 'equip 要列出手持物品')
   // craft/equip 的 enum 必须锁死
-  assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum, ['torch', 'axe', 'pickaxe', 'flowerhat'])
+  assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum,
+    ['axe', 'pickaxe', 'torch', 'flowerhat', 'rope', 'boards', 'backpack', 'spear', 'armorwood'],
+    'TARGET-REFRESH：craft 的 enum 必须和 Node/Lua 白名单逐条一致')
   assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat', 'flowerhat'])
 })
 

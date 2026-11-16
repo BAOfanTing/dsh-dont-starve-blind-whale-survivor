@@ -502,7 +502,7 @@ test('harvest-21 Node 工具：harvest 已注册，参数只有 target_ref + sna
   assert.ok(ACTION_NAMES.has('harvest'), 'F8/MCP 共用同一份工具表')
   const tool = TOOLS.find((t) => t.name === 'harvest')
   assert.deepEqual(tool.inputSchema.required, ['target_ref', 'snapshot_id'])
-  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['snapshot_id', 'target_ref'])
+  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['snapshot_id', 'target_handle', 'target_ref'])
   assert.equal(ACTION_SPECS.harvest.riskLevel, 'R2')
   for (const w of ['浆果丛', '成熟', 'snapshot_id', 'out_of_range', 'not_ready', '不会', 'pickup']) {
     assert.ok(tool.description.includes(w), `描述里必须提到 ${w}`)
@@ -669,7 +669,7 @@ test('harvest-27 Harvest 与 Pickup 边界：不自动接续、不换目标、�
 
 test('harvest-28 回归：move_to / stop / pickup 语义未变，白名单只多了一个 harvest', async () => {
   const { OPEN_ACTIONS, ACTION_SPECS, validateArgs } = await import('../lib/dispatcher.js')
-  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'inspect', 'kill', 'lookup', 'mine', 'move_to', 'pickup', 'probe', 'recipes', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
+  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
   assert.equal(validateArgs(ACTION_SPECS.move_to, { x: 1, z: 2 }).ok, true)
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
   // OBSERVATION-02：引用 1 起

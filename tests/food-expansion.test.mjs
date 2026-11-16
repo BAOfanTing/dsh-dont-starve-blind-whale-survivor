@@ -277,5 +277,8 @@ test('FE-5 plan.js 能够在 harvestables 中识别并推荐采摘 carrot_plante
   const snapshot = normalizeState(raw, { ageMs: 0 })
   const plan = derivePlan(snapshot)
   assert.equal(plan.goalId, 'eat', '饥饿危急下目标为 eat')
-  assert.match(plan.next, /harvest target_ref=#1.*snapshot_id=r1-n1/, 'next 必须引导去采摘 #1 胡萝卜')
+  // TARGET-REFRESH：不再建议"harvest #1 + snapshot_id"（模型思考 30~60 秒后必然过期），
+  // 改成只描述**类别**的实时动作 —— 服务端在动手那一刻重新找最近的目标。
+  assert.match(plan.next, /harvest_nearest target_kind=carrot_plant/, 'next 必须引导去采胡萝卜植株（不依赖 #N）')
+  assert.doesNotMatch(plan.next, /snapshot_id=/, '不能再把会过期的 snapshot_id 写进建议里')
 })

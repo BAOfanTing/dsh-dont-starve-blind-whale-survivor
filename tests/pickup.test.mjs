@@ -79,7 +79,7 @@ test('pickup-1 工具注册：pickup 在工具表里、必填 target_ref + snaps
   const tool = TOOLS.find((t) => t.name === 'pickup')
   assert.ok(tool, 'TOOLS 里要有 pickup')
   assert.deepEqual(tool.inputSchema.required, ['target_ref', 'snapshot_id'])
-  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['snapshot_id', 'target_ref'])
+  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['snapshot_id', 'target_handle', 'target_ref'])
   // 描述必须写清"不许当树/建筑/容器/生物"，否则模型会乱试
   assert.match(tool.description, /树枝|twigs/)
   for (const word of ['树', '建筑', '容器', '生物', 'snapshot_id', 'out_of_range', 'inventory_full']) {

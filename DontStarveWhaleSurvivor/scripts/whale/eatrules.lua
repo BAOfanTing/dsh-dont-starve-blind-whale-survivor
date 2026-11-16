@@ -11,6 +11,7 @@
 -- 这里只放行"生的基础素食"，把"要不要烤"留给以后（本阶段不做烹饪）。
 local GLOBAL = GLOBAL
 local pcall = GLOBAL.pcall
+local tonumber = GLOBAL.tonumber
 local tostring = tostring
 local type = type
 
@@ -158,6 +159,118 @@ function E.ListEdible(inventory)
         end)
     end)
     return out
+end
+
+-- ─────────────────────────── TARGET-REFRESH：失败时把"真实背包"回给模型 ───────────────────────────
+--
+-- 真机证据（session.txt）：Reflex 在 07:57:51 / 08:01:26 把胡萝卜吃掉，模型凭**上轮记忆**继续
+-- eat carrot，收到一句光秃秃的 `not_in_inventory`，不知道该改什么，于是反复猜了十几次。
+-- 需求：eat 失败时必须返回**当前真实可食用物品及其正确 prefab 名**。
+
+--- 地上植株 prefab → 采下来的**物品** prefab。
+--- 模型最容易在这里搞混：背包里显示"绿蘑菇"时物品名是 green_cap，
+--- 而它传的 green_mushroom 是**地上那株植物**（harvestrules 的表）。
+E.PLANT_TO_ITEM = {
+    red_mushroom = "red_cap",
+    green_mushroom = "green_cap",
+    blue_mushroom = "blue_cap",
+    berrybush = "berries",
+    berrybush2 = "berries",
+    berrybush_juicy = "berries_juicy",
+    carrot_planted = "carrot",
+}
+
+--- 把模型给的（可能是错的）名字映射到白名单里的正确 prefab；映射不出来返回 nil。
+--- 只做"指路"，不改变放行规则 —— 映射出来的名字仍然要过 IsAllowedPrefab。
+function E.SuggestPrefab(name)
+    if name == nil then return nil end
+    local key = tostring(name)
+    if key == "" then return nil end
+    if E.FOODS[key] ~= nil then return key end
+    local lower = string.lower(key)
+    if E.FOODS[lower] ~= nil then return lower end
+    local mapped = E.PLANT_TO_ITEM[lower]
+    if mapped ~= nil and E.FOODS[mapped] ~= nil then return mapped end
+    if E.FOODS[lower .. "_cooked"] ~= nil then return lower .. "_cooked" end
+    return nil
+end
+
+--- 一个物品占几格（读不到就按 1；绝不因为读不到就当成 0）
+local function stack_count(item)
+    local st = item ~= nil and item.components ~= nil and item.components.stackable or nil
+    if st == nil then return 1 end
+    local ok, v = pcall(function() return st:StackSize() end)
+    if ok and type(v) == "number" and v > 0 then return v end
+    return 1
+end
+
+--- 背包里"有 edible 但不在白名单"的（怪物肉、腐烂物、种子……）。
+--- 为什么要说这些：真机里模型反复猜名字，很大一部分原因是回执只说"没有白名单食物"，
+--- 它看不见背包里到底有什么，就继续瞎试。把"有什么、为什么不能吃"一起说出来，它才会改主意。
+local NOT_AUTO_EAT_NOTE = "不能自动吃"
+
+function E.ListDeniedEdibles(inventory, limit)
+    local out, counts, order = {}, {}, {}
+    if inventory == nil then return out end
+    local max = tonumber(limit) or 5
+    pcall(function()
+        inventory:ForEachItem(function(item)
+            if item == nil or not item:IsValid() then return end
+            if item.components == nil or item.components.edible == nil then return end
+            local prefab = tostring(item.prefab or "")
+            if E.FOODS[prefab] ~= nil then return end
+            if counts[prefab] == nil then
+                counts[prefab] = 0
+                order[#order + 1] = prefab
+            end
+            counts[prefab] = counts[prefab] + stack_count(item)
+        end)
+    end)
+    table.sort(order)
+    for i = 1, #order do
+        if #out >= max then break end
+        local prefab = order[i]
+        local why = E.DENIED[prefab] or NOT_AUTO_EAT_NOTE
+        out[#out + 1] = string.format("%s×%d（%s）", prefab, counts[prefab], why)
+    end
+    return out
+end
+
+--- 背包里**真正**能吃的东西（带数量），拼成一句给模型看的话。
+--- 这是"当前真实值"，不是模型记忆里的值。
+function E.DiagnoseHint(inventory)
+    if inventory == nil then return "读不到背包" end
+    local counts, order = {}, {}
+    pcall(function()
+        inventory:ForEachItem(function(item)
+            if item == nil or not item:IsValid() then return end
+            local can = E.IsEdible(item)
+            if not can then return end
+            local prefab = tostring(item.prefab)
+            if counts[prefab] == nil then
+                counts[prefab] = 0
+                order[#order + 1] = prefab
+            end
+            local n = stack_count(item)
+            counts[prefab] = counts[prefab] + n
+        end)
+    end)
+
+    -- 顺带把"有但吃不了"的也列出来（同样只在失败回执里用，不参与任何放行判断）
+    local denied = E.ListDeniedEdibles(inventory, 5)
+    local denied_text = #denied > 0 and ("；另外背包里有（都不在可吃白名单）：" .. table.concat(denied, "、")) or ""
+
+    if #order == 0 then
+        return "背包里现在没有白名单食物（生蘑菇要先用 cook 烤，或者去捡地上的安全食物）" .. denied_text
+    end
+    table.sort(order)
+    local parts = {}
+    for _, prefab in ipairs(order) do
+        local safe = E.AUTO_SAFE[prefab] == true
+        parts[#parts + 1] = string.format("%s×%d（%s%s）", prefab, counts[prefab],
+            E.FOODS[prefab] or prefab, safe and "，可自动吃" or "，需手动指定")
+    end
+    return "背包里现在真正能吃的：" .. table.concat(parts, "、") .. denied_text
 end
 
 Whale.eatrules = E

@@ -8,18 +8,29 @@
 
 ## 现在能做什么
 
-**模型能用的 31 个动作 + 3 个本地工具**（清单由 `ACTION_SPECS` 自动生成，不会和代码脱节）：
+**模型能用的 36 个动作 + 3 个本地工具**（清单由 `ACTION_SPECS` 自动生成，不会和代码脱节）：
 
 | 用途 | 工具 |
 |---|---|
 | 看 | `get_state`、`get_guide`、`update_notes`、`recipes`、`lookup`、`probe`、`inspect` |
 | 走 | `move_to`、`seek`、`stop` |
+| **实时找目标**（不会过期） | `pickup_nearest`、`pickup_food`、`harvest_nearest`、`chop_nearest`、`mine_nearest` |
 | 采集 | `pickup`、`harvest`、`gather`、`gather_area`、`chop`、`mine`、`dig`、`hammer` |
-| 制作 | `craft`（torch / axe / pickaxe）、`build`（营火 / 火坑 / 箱子 / 锅 / 科学机器）、`cook` |
+| 制作 | `craft`（torch / axe / pickaxe / flowerhat + 第一阶段科技 rope / boards / backpack / spear / armorwood）、`build`（营火 / 火坑 / 箱子 / 锅 / 科学机器）、`cook` |
 | 生存 | `eat`、`equip`、`unequip`、`drop`、`fuel`、`wait` |
 | 交互 | `use`、`container_take`、`container_put`、`give` |
 | 战斗 | `attack`、`kill` |
 | 社交 | `say` |
+
+**目标引用有三种方式**（前两种不会过期，优先用）：
+
+1. **只说类别**（推荐）：`pickup_nearest {"target_kind":"flint"}` —— 服务端在动手那一刻用当前世界状态
+   重新找最近的目标，不需要 `#N`、不需要 `snapshot_id`，所以**永远不会 stale_snapshot**。
+2. **稳定句柄**：`get_state` 的「附近」里每个能操作的目标后面带一个 `句柄h…`，填进 `target_handle` 即可
+   （跨快照有效；目标没了回 `target_gone`，**绝不会**被换成别的东西）。
+3. **`#N` + Nearby 快照 ID**：要精确指定"就是这一个"时才用。引用只在一帧内有效，
+   而且**不能靠猜**（把 snapshot_id 加 1 或预补偿会被连着拒并触发熔断 `stale_snapshot_circuit_open`）。
+
 
 **还没开放**：`pick`（手摘蘑菇/胡萝卜）、`heal`（主动回血）、`sleep`、`make_fire`。
 回血目前只能靠吃东西和模组自带的保命反射。
@@ -182,6 +193,20 @@ F8 开/停 · F7 显示/隐藏小窗
 **`pickup` / `harvest` 说 `out_of_range`**
 这两个动作**不会自己走过去**。先 `move_to` 靠近，再**重新 `get_state`** 拿新的 `#N` 和 `snapshot_id`。
 注意原生拾取距离只有约 1 格，而 `move_to` 的到点容差也是 1 格左右——有时要走两次才进得去。
+不想操心跳过快照的话，直接用上表的 `pickup_nearest` / `pickup_food` / `harvest_nearest`
+（只说类别，服务端实时找目标，不会过期）。
+
+**`stale_snapshot` / `stale_snapshot_circuit_open`**
+`#N` 只在一帧内有效，而模型思考一轮要几十秒，所以拿 `#N` 去动手本来就容易过期。
+**不要把 `snapshot_id` 加 1 或往上猜** —— 编号每帧重排，猜不到；连着两次用同一个旧引用会被**熔断**，
+那一轮就白费。正确做法：① 改用 `*_nearest` 系列；② 或把「附近」里那个「句柄h…」填进 `target_handle`；
+③ 或重新 `get_state` 后把打印出来的 Nearby 快照 ID **原样照抄**。
+
+**`eat` 说 `not_in_inventory` 但我明明记得背包里有**
+回执说的是**此刻真实背包**。模组的保命反射可能刚把那样东西吃掉/收走，所以别凭上一轮的背包判断。
+被拒时回执会直接列出"背包里现在真正能吃的"和正确 prefab 名，照着那个改就行。
+另外：**地上那株植物**叫 `green_mushroom` / `blue_mushroom`，**采下来的物品**才叫 `green_cap` / `blue_cap`。
+
 
 **回执是 `unknown` / `result_timeout`**
 结果文件只有一个槽位，偶尔会被保命反射的回执覆盖。**先 `get_state` 看真实状态**，再决定要不要重发。
@@ -190,7 +215,7 @@ F8 开/停 · F7 显示/隐藏小窗
 背包满了时原生会把浆果丢在地上。看回执里的说明，必要时另外调 `pickup`（它不会自动捡）。
 
 **版本号为什么有两个？**
-`modinfo.lua` 的 `0.30.x` 是**游戏内模组**的版本；`package.json` 的 `0.9.x` 是**DSH 插件**的版本。
+`modinfo.lua` 的 `0.40.x` 是**游戏内模组**的版本；`package.json` 的 `0.10.x` 是**DSH 插件**的版本。
 两者故意不同步，详见 [STATUS.md](docs/STATUS.md)。
 
 **改了插件代码后没生效**
@@ -204,6 +229,7 @@ F8 开/停 · F7 显示/隐藏小窗
 | 文档 | 看什么 |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 现在这套系统怎么搭的（一张图 + 各层职责 + 安全边界） |
+| [docs/TARGET-REFRESH.md](docs/TARGET-REFRESH.md) | 目标引用过期与食物阻塞的修复方案 + 真机验收清单 |
 | [docs/STATUS.md](docs/STATUS.md) | 当前能力、验证等级、已知问题、还没做什么 |
 | [docs/NATIVE_REUSE.md](docs/NATIVE_REUSE.md) | 哪些能力用了饥荒原版的、哪些是自己写的、为什么（含源码行号与许可证分析） |
 | [docs/TESTING.md](docs/TESTING.md) | 怎么跑测试（命令都验过） |
