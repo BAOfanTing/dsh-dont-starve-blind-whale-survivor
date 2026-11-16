@@ -82,7 +82,7 @@ local COOLDOWN = {
     eat = 5,
     light = 6,
     fuel = 6,
-    flee = 10,
+    flee = 3,           -- 逃跑防抖从 10 秒降到 3 秒，防止被怪连续攻击时长期站桩
     forage = 6,
     sanity = 8,
     stock = 3,
@@ -506,6 +506,20 @@ local function combat_targeting(foe, p)
     return ok and target == p
 end
 
+--- 正在直接锁定/攻击玩家的活体生物（不限 hostile 标签，且排除固定巢穴结构）。
+--- 真机第 2 天黄昏：蜘蛛巢（hostile+structure）比攻击玩家的蜘蛛离玩家更近，
+--- 原逻辑 nearest_hostile 锁定到巢穴，导致 combat_targeting 误判为未被攻击。
+local function find_attacker(p, radius_tiles)
+    if p == nil then return nil end
+    local limit = (radius_tiles or 6) * U.TILE
+    return U.find_nearest(p, radius_tiles or 6, nil, nil, function(e)
+        if e == nil or e == p or e:HasTag("INLIMBO") or e:HasTag("structure") then return false end
+        local h = e.components ~= nil and e.components.health or nil
+        if h ~= nil and h:IsDead() then return false end
+        return combat_targeting(e, p) and U.dist(p, e) <= limit
+    end)
+end
+
 --- 会主动伤人的威胁：**排除固定巢穴**。
 --- 真机第 9 天：蜘蛛巢同时带 `hostile` 和 `structure` 标签，却不会追人；
 --- `nearest_hostile(p,6)` 把它当敌人，于是"白天把火把收回背包"永远不执行，
@@ -539,12 +553,12 @@ end
 
 --- 残血 + 敌人已经贴脸：允许抢占模型正在跑的任务。
 function R.CriticalDanger(p)
-    local attacker = nearest_hostile(p, 3)
+    local attacker = find_attacker(p, 4) or nearest_hostile(p, 3)
     if attacker ~= nil and combat_targeting(attacker, p) then return true end
     local hp = health_percent(p)
     if hp == nil or hp >= 0.35 then return false end
-    if nearest_hostile(p, 2.5) ~= nil then return true end
-    return hp < 0.2 and nearest_hostile(p, 5) ~= nil
+    if active_threat(p, 2.5) ~= nil or nearest_hostile(p, 2.5) ~= nil then return true end
+    return hp < 0.2 and (active_threat(p, 5) ~= nil or nearest_hostile(p, 5) ~= nil)
 end
 
 --- 入夜且身边没光（查理会打人）。返回 nil 表示安全；否则返回 { in_bag = 背包里是否有可用火把 }。
@@ -570,7 +584,10 @@ local function reflex_flee(p)
     local danger_low_hp = hp ~= nil and hp < 0.5
     local danger_shadow = sanity ~= nil and sanity < 0.25
     local radius = danger_low_hp and 4 or 5
-    local foe = nearest_hostile(p, radius)
+
+    -- 优先以"正在打我的人"为逃跑目标，避免被近战蜘蛛打时反而向固定蜘蛛巢方向逃跑
+    local attacker = find_attacker(p, 8)
+    local foe = attacker or active_threat(p, radius) or nearest_hostile(p, radius)
     local attacked = foe ~= nil and combat_targeting(foe, p)
     if not danger_low_hp and not danger_shadow and not attacked then return false end
     if foe == nil then return false end
@@ -616,7 +633,7 @@ local function reflex_flee(p)
             tx, tz = U.tile_of(px + dx / len * dist, pz + dz / len * dist)
         end
     end
-    local started = A.Start("move_to", { x = tx, z = tz, timeout = 8 }, REFLEX_ID)
+    local started = A.Start("move_to", { x = tx, z = tz, timeout = 6 }, REFLEX_ID)
     if started then
         local why = danger_shadow and "暗影怪贴上来了，先撤"
             or (danger_low_hp and "血不多了，先撤到安全的地方" or "有怪在打我，先撤")
@@ -765,6 +782,10 @@ local function food_available(p, healing_only)
 end
 
 local function heal_available(p)
+    -- 如果正被攻击或有活怪贴脸（< 4 格），严禁把普通食物当成可用回血
+    if find_attacker(p, 6) ~= nil or active_threat(p, 4) ~= nil then
+        return find_healer_prefab(p) ~= nil
+    end
     if find_healer_prefab(p) ~= nil then return true end
     return food_available(p, true)
 end
@@ -799,6 +820,10 @@ local function reflex_heal(p)
             say(p, "heal", "血不多了，先上药")
             return true
         end
+        return false
+    end
+    -- 怪在眼前严禁吃浆果/胡萝卜等微量回血食物（吃食物有 1.5 秒硬直，挨一爪反而猝死）
+    if find_attacker(p, 6) ~= nil or active_threat(p, 4) ~= nil then
         return false
     end
     return reflex_eat(p, true)
@@ -982,6 +1007,14 @@ local function reflex_sanity(p)
     if not cooldown_ok("sanity") then return false end
     local phase = current_phase()
     if phase == "night" and not has_light(p) then return false end
+    -- 安全第一：附近有威胁、正在被攻击、或固定巢穴贴脸时，绝不采花送命
+    if find_attacker(p, 10) ~= nil or active_threat(p, 8) ~= nil or nearest_hostile(p, 6) ~= nil then
+        return false
+    end
+    -- 黄昏时不主动靠近怪物盲区：只在 12 格内无活怪时才采花
+    if phase == "dusk" and active_threat(p, 12) ~= nil then
+        return false
+    end
     local flower = exact_ready(p, "flower", 10)
     if flower ~= nil and push_pick(p, flower) then
         mark("sanity")
@@ -1085,7 +1118,16 @@ local function try_action(p, key, priority, reason, fn, canRun)
     if inflight ~= nil and inflight.key == key and Whale.job == inflight.job then
         return false
     end
-    if not cooldown_ok(key) then return false end
+    if not cooldown_ok(key) then
+        -- 特例：被怪攻击（under_attack）或残血贴脸（critical_health）时，若当前任务已结束（job == nil），
+        -- 不能死守防抖冷却导致站着挨打；允许以 1 秒安全间隔连续逃跑
+        if key == "flee" and (reason == "under_attack" or reason == "critical_health") and Whale.job == nil then
+            local now = U.now()
+            if last[key] ~= nil and now - last[key] < 1 then return false end
+        else
+            return false
+        end
+    end
     if canRun ~= nil and not canRun() then
         diag("skipped", { "reason=action_not_available", "intent=" .. key })
         return false
@@ -1198,9 +1240,9 @@ function R.Priority(p)
     local sanity = sanity_percent(p)
     local rep = light_report(p)
 
-    local attacker = nearest_hostile(p, 3)
+    local attacker = find_attacker(p, 4) or nearest_hostile(p, 3)
     if attacker ~= nil and combat_targeting(attacker, p) then return P0, "under_attack" end
-    if hp ~= nil and hp < 0.25 and nearest_hostile(p, 2.5) ~= nil then return P0, "critical_health" end
+    if hp ~= nil and hp < 0.25 and (active_threat(p, 2.5) ~= nil or nearest_hostile(p, 2.5) ~= nil) then return P0, "critical_health" end
     if phase == "night" and not rep.has_usable then return P0, "dark_no_light" end
 
     if phase ~= "night" and not rep.portable then
@@ -1233,11 +1275,11 @@ local function run(p)
     end
 
     -- ── P0：立即保命（可抢占任何任务）
-    local attacker = nearest_hostile(p, 3)
+    local attacker = find_attacker(p, 4) or nearest_hostile(p, 3)
     if attacker ~= nil and combat_targeting(attacker, p) then
         if try_action(p, "flee", P0, "under_attack", function() return reflex_flee(p) end) then return end
     end
-    if hp ~= nil and hp < 0.25 and nearest_hostile(p, 2.5) ~= nil then
+    if hp ~= nil and hp < 0.25 and (active_threat(p, 2.5) ~= nil or nearest_hostile(p, 2.5) ~= nil) then
         if try_action(p, "flee", P0, "critical_health", function() return reflex_flee(p) end) then return end
     end
     -- ★ 只在**完全黑透的 night** 才点火（P0）。黄昏仍有自然光、grue 不攻击，

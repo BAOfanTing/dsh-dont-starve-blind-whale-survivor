@@ -353,6 +353,9 @@ JOBS.move_to = function(j, p)
         j.step = "walk"
         j.data.lastcheck = U.now()
         j.data.retry = 0
+        local px, _, pz = U.pos(p)
+        j.data.last_px = px
+        j.data.last_pz = pz
     end
     local away = tile_away(p, tx, tz)
     if away <= 1.2 then
@@ -364,6 +367,16 @@ JOBS.move_to = function(j, p)
     end
     if U.now() - j.data.lastcheck > 2 then
         j.data.lastcheck = U.now()
+        local px, _, pz = U.pos(p)
+        local moved = 0
+        if px ~= nil and j.data.last_px ~= nil then
+            local dx = px - j.data.last_px
+            local dz = pz - j.data.last_pz
+            moved = math.sqrt(dx * dx + dz * dz) / U.TILE
+        end
+        j.data.last_px = px
+        j.data.last_pz = pz
+
         local loco = p.components.locomotor
         -- 真机 bug（2026-11-12）：loco:IsMoving() 不存在（locomotor.lua 里没有这个方法），
         -- 直接调用抛错把整个动作打成 FAILED。正确 API 是 WantsToMoveForward()。
@@ -372,12 +385,16 @@ JOBS.move_to = function(j, p)
             local ok_m, mv = pcall(function() return loco:WantsToMoveForward() end)
             if ok_m then moving = mv == true end
         end
-        if loco == nil or not moving then
+        -- 物理卡住判定：WantsToMoveForward 说明想走，但实际 2 秒内物理位移 < 0.15 格（撞墙/撞海/撞障碍物）
+        if (loco == nil or not moving) or (moved < 0.15) then
             j.data.retry = j.data.retry + 1
-            if j.data.retry > 8 then
-                return "fail", string.format("被挡死了，站在 %.1f 格外过不去", away)
+            local max_retry = (timeout <= 10) and 2 or 6
+            if j.data.retry >= max_retry then
+                return "fail", string.format("走不到 (%d,%d)：卡在 %.1f 格外（可能有东西挡着）", tx, tz, away)
             end
             walk_to(p, tx, tz)
+        else
+            j.data.retry = 0
         end
     end
     return "run"

@@ -186,13 +186,51 @@ end
 --- 把"往哪跑的角度"换成世界坐标点。
 --- 角度→偏移的约定照抄原版 `FindValidPositionByFan`（simutil.lua:322）：
 ---   offset = Vector3(radius * cos(a), 0, -radius * sin(a))
---- 所以这里用同一套换算，保证和原版算出来的角度是一致的。
+--- 同时利用原版 FindWalkableOffset 寻路与 TheWorld.Map 验证可通行性，
+--- 避免逃跑落点直接扎进大海、悬崖或障碍物导致角色在海边原地挨打。
 function N.PointFromAngle(ent, angle_deg, distance)
     if ent == nil or angle_deg == nil then return nil end
-    local px, _, pz = U.pos(ent)
+    local px, py, pz = U.pos(ent)
     if px == nil then return nil end
-    local a = angle_deg * (GLOBAL.DEGREES or (math.pi / 180))
     local d = distance or 6 * U.TILE
+    local DEGREES = GLOBAL.DEGREES or (math.pi / 180)
+    local a = angle_deg * DEGREES
+
+    -- 1) 优先利用原版 FindWalkableOffset：
+    --    结合 TheWorld.Map:IsAboveGroundAtPoint 和 Pathfinder:IsClear 确保目标点在陆地上且可达
+    local FindWalkableOffset = GLOBAL.FindWalkableOffset
+    local Vector3 = GLOBAL.Vector3 or GLOBAL.Point
+    local map = GLOBAL.TheWorld ~= nil and GLOBAL.TheWorld.Map or nil
+
+    if FindWalkableOffset ~= nil and Vector3 ~= nil then
+        for _, radius in ipairs({ d, d * 0.75, d * 0.5 }) do
+            local ok, offset = pcall(function()
+                return FindWalkableOffset(Vector3(px, py or 0, pz), a, radius, 12, true, false)
+            end)
+            if ok and offset ~= nil then
+                local cand_x = px + offset.x
+                local cand_z = pz + offset.z
+                if map == nil or try(function() return map:IsPassableAtPoint(cand_x, 0, cand_z) end, true) then
+                    return cand_x, cand_z
+                end
+            end
+        end
+    end
+
+    -- 2) 如果没有 FindWalkableOffset，但有 TheWorld.Map，做扇扫可通行性检查
+    if map ~= nil and map.IsPassableAtPoint ~= nil then
+        for _, fan in ipairs({ 0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2 }) do
+            local ang = a + fan
+            local cand_x = px + d * math.cos(ang)
+            local cand_z = pz - d * math.sin(ang)
+            local ok, passable = pcall(function() return map:IsPassableAtPoint(cand_x, 0, cand_z) end)
+            if ok and passable then
+                return cand_x, cand_z
+            end
+        end
+    end
+
+    -- 3) 纯几何兜底（测试桩或环境缺失时与原版 fan 约定一致）
     return px + d * math.cos(a), pz - d * math.sin(a)
 end
 
