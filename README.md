@@ -207,7 +207,6 @@ F8 开/停 · F7 显示/隐藏小窗
 | [docs/STATUS.md](docs/STATUS.md) | 当前能力、验证等级、已知问题、还没做什么 |
 | [docs/NATIVE_REUSE.md](docs/NATIVE_REUSE.md) | 哪些能力用了饥荒原版的、哪些是自己写的、为什么（含源码行号与许可证分析） |
 | [docs/TESTING.md](docs/TESTING.md) | 怎么跑测试（命令都验过） |
-| [docs/REFACTOR_AUDIT.md](docs/REFACTOR_AUDIT.md) | M2.2.1 全项目瘦身的审计与结果 |
 | [docs/dsh-plugin.md](docs/dsh-plugin.md) | 插件形态说明（预设、入口工具、配置项） |
 
 ---

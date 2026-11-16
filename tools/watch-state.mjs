@@ -23,7 +23,7 @@ import { join } from 'node:path'
 
 import { GameBridge } from '../lib/bridge.js'
 import { normalizeState } from '../lib/state/snapshot.js'
-import { createWatchStats } from './m14-counters.mjs'
+import { createWatchStats } from './watch-counters.mjs'
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => {

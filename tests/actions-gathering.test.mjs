@@ -1,11 +1,4 @@
-// SURVIVAL-02：gather_area（范围采集）+ seek（走出去找）
-//
-// 这两个动作是为了**减少模型调用次数**（借鉴 DontStarveAI 的 harvest_area / seek）。
-// 测试重点：
-//   · 白名单：prefab 只能给白名单里的；不给 prefab 就只采白名单内的
-//   · 参数边界：radius/limit/step/max_tiles 的上下限
-//   · 结果核对：gather_area 必须看到产物进背包；seek 只核对位置
-//   · 安全：都不接受 GUID / 坐标 / 任意 prefab
+// 采集与作业动作规格与核对测试（包含 gather_area、seek、chop、mine、dig、hammer）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -108,8 +101,91 @@ test('S2-8：两个新工具的描述必须讲清"省调用次数"和"不自动�
 
 test('S2-9：白名单扩容后仍然没有泄漏旧动作（chop/mine/attack 依然不可见）', () => {
   const names = new Set(TOOLS.map((t) => t.name))
-  // SURVIVAL-06：全部常用动作都开放了，只查这些从来不存在/不该有的
   for (const bad of ['pick', 'act', 'heal', 'night_watch', 'store']) {
     assert.ok(!names.has(bad), `${bad} 不该出现在工具表里`)
+  }
+})
+
+// ── 作业类动作（chop / mine / dig / hammer） ──
+
+const snapWork = (over = {}) => ({
+  player: {
+    inventory: {
+      items: Object.entries(over.inv ?? {}).map(([prefab, count]) => ({ prefab, count })),
+      used: 0,
+      slots: 15,
+    },
+  },
+  nearby: { buckets: { resources: over.items ?? [], creatures: over.creatures ?? [] } },
+})
+
+test('work-1：chop/mine/dig/hammer 都在白名单里，且都有 riskLevel 与 verify', () => {
+  for (const name of ['chop', 'mine', 'dig', 'hammer']) {
+    assert.ok(OPEN_ACTIONS.includes(name), `${name} 应该在白名单里`)
+    const spec = ACTION_SPECS[name]
+    assert.ok(spec, `${name} 应该有规格`)
+    assert.ok(['R1', 'R2'].includes(spec.riskLevel), `${name} 的 riskLevel 不对`)
+    assert.equal(typeof spec.verify, 'function', `${name} 必须有结果核对`)
+  }
+})
+
+test('work-2：workable 类（chop/mine/dig/hammer）都要 #N + snapshot_id', () => {
+  for (const name of ['chop', 'mine', 'dig', 'hammer']) {
+    const spec = ACTION_SPECS[name]
+    assert.equal(spec.requiresSnapshot, true, `${name} 必须校验快照`)
+    assert.deepEqual(Object.keys(spec.args).sort(), ['snapshot_id', 'target_ref'])
+    assert.equal(validateArgs(spec, { target_ref: '#3', snapshot_id: 'r1-n2' }).ok, true)
+    assert.equal(validateArgs(spec, { target_ref: 'evergreen', snapshot_id: 'r1-n2' }).ok, false, `${name} 不许按 prefab`)
+    assert.equal(validateArgs(spec, { target_ref: '#3' }).ok, false, `${name} 缺 snapshot_id 要拒`)
+    assert.equal(validateArgs(spec, { target_ref: '#3', snapshot_id: 'r1-n2', guid: 'x' }).ok, false, `${name} 不许传 GUID`)
+  }
+})
+
+test('work-3：chop 核对 —— 木头进背包算成功', () => {
+  const spec = ACTION_SPECS.chop
+  const tree = { ref: '#1', prefab: 'evergreen', position: { x: 5, z: 5 } }
+  const before = snapWork({ items: [tree], inv: { log: 0 } })
+  const after = snapWork({ items: [tree], inv: { log: 3 } })
+  const v = spec.verify(before, after, { target_ref: '#1' })
+  assert.equal(v.ok, true)
+  assert.equal(v.product, 'log')
+  assert.equal(v.gained, 3)
+})
+
+test('work-4：chop 核对 —— 树没了也算成功（倒下变树桩）', () => {
+  const spec = ACTION_SPECS.chop
+  const tree = { ref: '#1', prefab: 'evergreen', position: { x: 5, z: 5 } }
+  const before = snapWork({ items: [tree], inv: {} })
+  const after = snapWork({ items: [], inv: {} })
+  const v = spec.verify(before, after, { target_ref: '#1' })
+  assert.equal(v.ok, true)
+  assert.equal(v.how, 'target_gone')
+})
+
+test('work-5：chop 核对 —— 树还在、木头也没多 → 判失败', () => {
+  const spec = ACTION_SPECS.chop
+  const tree = { ref: '#1', prefab: 'evergreen', position: { x: 5, z: 5 } }
+  const same = snapWork({ items: [tree], inv: { log: 0 } })
+  const v = spec.verify(same, same, { target_ref: '#1' })
+  assert.equal(v.ok, false)
+  assert.equal(v.reason, 'work_state_unchanged')
+})
+
+test('work-6：mine 核对 —— 石头/燧石/金块任一出就算成功', () => {
+  const spec = ACTION_SPECS.mine
+  const rock = { ref: '#2', prefab: 'rock1', position: { x: 6, z: 6 } }
+  const before = snapWork({ items: [rock], inv: { rocks: 0, flint: 0 } })
+  const after = snapWork({ items: [rock], inv: { rocks: 0, flint: 2 } })
+  const v = spec.verify(before, after, { target_ref: '#2' })
+  assert.equal(v.ok, true)
+  assert.equal(v.product, 'flint')
+})
+
+test('work-7：作业工具的描述必须讲清"要 #N + 快照 ID"或用途', () => {
+  const byName = Object.fromEntries(TOOLS.map((t) => [t.name, t]))
+  for (const name of ['chop', 'mine', 'dig', 'hammer']) {
+    assert.match(byName[name].description, /#N/, `${name} 要说明用 #N 引用`)
+    assert.match(byName[name].description, /快照 ID|snapshot/, `${name} 要提醒带快照 ID`)
+    assert.ok(byName[name].inputSchema.required.includes('snapshot_id'), `${name} 的 snapshot_id 必填`)
   }
 })

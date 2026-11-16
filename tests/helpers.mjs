@@ -124,3 +124,77 @@ export class FakeGame {
     writeAtomic(join(this.dir, 'whale_result.json'), JSON.stringify({ v: 1, id, ok, text, t: Math.floor(Date.now() / 1000) }))
   }
 }
+
+// 权威租约文件与 Lua io.open 模拟
+export const LEASE_SCHEMA = 'bws.control-lease/1'
+
+export function authority(over = {}) {
+  return {
+    schema: LEASE_SCHEMA,
+    status: 'active',
+    authority_epoch: 'epoch-A',
+    generation: 12,
+    owner_type: 'f8_agent',
+    owner_instance_id: 'instance-A',
+    lease_id: 'lease-A',
+    runtime_id: 'r1794500000-0001',
+    session_id: 'sess-R',
+    shard_id: '1',
+    actor_id: 'player:KU_r',
+    acquired_at: 1794500000000,
+    expires_at: 1794500060000,
+    previous_owner_type: null,
+    previous_owner_instance_id: null,
+    ...over,
+  }
+}
+
+/** 生成一段 Lua：把权威 JSON 挂到 GLOBAL.io.open 可读的虚拟文件里。传 null = 文件不存在 */
+export function luaIoFiles(files) {
+  const entries = Object.entries(files)
+    .map(([name, value]) => {
+      if (value === null || value === undefined) return ''
+      const text = typeof value === 'string' ? value : JSON.stringify(value)
+      return `IO_FILES[${JSON.stringify(name)}] = ${JSON.stringify(text)}`
+    })
+    .join('\n')
+  return `
+IO_FILES = {}
+${entries}
+GLOBAL.io = {
+    open = function(name, mode)
+        local text = IO_FILES[name]
+        if text == nil or mode ~= "r" then return nil end
+        return {
+            read = function(self, how) return text end,
+            close = function(self) return true end,
+        }
+    end
+}
+`
+}
+
+/** 命令信封（与 dispatcher 生成的字段一致） */
+export function command(authorityRecord, over = {}) {
+  const a = authorityRecord ?? authority()
+  return {
+    protocol_version: 1,
+    command_id: 'cmd-1',
+    action: 'move_to',
+    args: { x: 3, z: 4 },
+    requested_by: a.owner_type,
+    owner_type: a.owner_type,
+    owner_instance_id: a.owner_instance_id,
+    authority_epoch: a.authority_epoch,
+    lease_id: a.lease_id,
+    lease_generation: a.generation,
+    lease_expires_at: a.expires_at,
+    runtime_id: a.runtime_id,
+    session_id: a.session_id,
+    shard_id: a.shard_id,
+    actor_id: a.actor_id,
+    created_at: 1794500000000,
+    expires_at: 1794500008000,
+    ...over,
+  }
+}

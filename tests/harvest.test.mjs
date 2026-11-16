@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { authority, command, luaIoFiles } from './helpers-m2.mjs'
+import { authority, command, luaIoFiles } from './helpers.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')

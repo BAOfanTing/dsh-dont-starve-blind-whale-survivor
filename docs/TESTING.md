@@ -104,32 +104,20 @@ node --test --test-force-exit "tests/m2_*.test.mjs"    # 只跑 M2 系列
 ### 6.2 启动产品 MCP（如果要用 MCP 那条路）
 
 ```powershell
-node tools/m2_0_2_start_mcp.mjs        # 默认 18090
+node tools/start-mcp.mjs        # 默认 18090
 ```
 
 > 改过 `lib/` 下的 Node 代码后**必须重启**这个进程，否则跑的还是旧代码。
 
-### 6.3 分动作验证脚本
-
-| 脚本 | 验证什么 | 支持 `--bridgeDir` |
-|---|---|---|
-| `node tools/m2_0_3_verify_lease.mjs` | 租约 / 换手 / ACK / 权威副本（**只用 stop，不移动角色**） | 否（自动定位） |
-| `node tools/m2_0_3_verify_move.mjs` | `move_to` 真实走路 + 移动中换手中断 | 否 |
-| `node tools/m2_0_3_verify_stop.mjs` | 换手 Abort 后**逐帧**确认角色停住 | 否 |
-| `node tools/m2_1_verify_pickup.mjs` | `pickup` 闭环（走 MCP 入口，桥目录由 MCP 决定） | 否（不需要） |
-| `node tools/m2_2_verify_nearby.mjs --bridgeDir "<save>"` | 9 个桶 + `pickupables` + 上限 + 性能 | 是 |
-| `node tools/m2_3_verify_harvest.mjs --bridgeDir "<save>"` | 可收获桶 / 未成熟 / 距离 / 不自动捡 | 是 |
-| 上一条加 `--harvest` | 真的采一次（会改变世界！） | 是 |
-
-**每条命令都实测过**（STABILITY-01，2026-11-13，模组 0.17.2）：
+### 6.3 分动作验证脚本（统一整合为 verify-live.mjs）
 
 ```powershell
-node tools/m2_0_3_verify_lease.mjs                                            # 11/11 PASS
-node tools/m2_1_verify_pickup.mjs                                             # 5/5 PASS
-node tools/m2_3_verify_harvest.mjs --bridgeDir "<save>" --harvest             # 13 PASS / 0 FAIL / 1 NOT_OBSERVED
-node tools/m2_0_3_verify_move.mjs                                             # 4 PASS / 1 FAIL（见下）
-node tools/m2_0_3_verify_stop.mjs                                             # 3/3 PASS
-node tools/m2_2_verify_nearby.mjs --bridgeDir "<save>"                        # 13 PASS / 0 FAIL / 1 NOT_OBSERVED
+node tools/verify-live.mjs lease                                            # 验证租约通路
+node tools/verify-live.mjs pickup                                           # 验证拾取
+node tools/verify-live.mjs harvest --bridgeDir "<save>" --harvest           # 验证采摘
+node tools/verify-live.mjs move                                             # 验证移动
+node tools/verify-live.mjs stop                                             # 验证停止
+node tools/verify-live.mjs nearby --bridgeDir "<save>"                      # 验证附近观察
 ```
 
 ⚠️ **`verify_move.mjs` 的 ⑤-3 会假报失败**：它"ack 前后各读一次位置"，而状态文件每秒才写一次、
@@ -231,9 +219,7 @@ node .runtime/survival01-run.mjs
 ### 6.4 观察类脚本（不改世界）
 
 ```powershell
-node tools/m14-watch.mjs            # 每帧状态变化
-node tools/m12-watch.mjs --seconds 60 --interval 2
-node tools/m12-roundtrip.mjs        # 往返读写一次（会在 tests/artifacts/ 留证据）
+node tools/watch-state.mjs            # 每帧状态变化
 ```
 
 ### 6.5 端到端（模型真的下指令）

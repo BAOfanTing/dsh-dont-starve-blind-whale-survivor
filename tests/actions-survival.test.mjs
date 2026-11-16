@@ -1,3 +1,4 @@
+// 生存动作规格与核对测试（包含 eat、equip、unequip、drop、fuel、wait 以及背包/手部 JSON 形状兼容）
 // SURVIVAL-01：四个基础生存动作（gather / eat / craft / equip）
 //
 // 这些测试跑**真 Lua**（fengari）+ 假游戏，验的是"拒绝得对"和"核对得对"：
@@ -10,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { ACTION_SPECS, OPEN_ACTIONS, validateArgs } from '../lib/dispatcher.js'
+import { inventoryItems, countInInventory, handItem } from '../lib/actions/state-query.js'
 
 const NEW_ACTIONS = ['gather', 'eat', 'craft', 'equip']
 
@@ -212,3 +214,156 @@ test('survival-12：工具表里的四个新工具描述必须讲清白名单/�
   assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum, ['torch', 'axe', 'pickaxe', 'flowerhat'])
   assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat', 'flowerhat'])
 })
+
+
+// ─────────────────────────── 背包数据形状兼容 ───────────────────────────
+// S9：背包 items 的两种 JSON 形状都必须能数对
+//
+// 真机 Cluster_1 #26 craft torch：
+//   回执写着「做好了 火把（torch+1）（cutgrass-2，twigs-2）（背包：cutgrass-2，torch+1，twigs-2）」
+//   —— Lua 侧自己的差异核对算出了 torch+1，Node 侧却判 craft_not_in_inventory。
+// 根因：Lua 把空表序列化成 {}（对象），countInInventory 里 `!Array.isArray → return 0` 直接放弃。
+
+
+
+
+
+const snapS9 = (items, equipment) => ({
+  player: { inventory: { items }, ...(equipment ? { equipment } : {}) },
+})
+
+test('S9-1：inventoryItems 同时接受数组和对象', () => {
+  assert.deepEqual(inventoryItems(snapS9([])), [])
+  assert.deepEqual(inventoryItems(snapS9({})), [])
+  assert.equal(inventoryItems(snapS9([{ prefab: 'log', count: 2 }])).length, 1)
+  assert.equal(inventoryItems(snapS9({ a: { prefab: 'log', count: 2 } })).length, 1)
+  // 异常输入不崩
+  assert.deepEqual(inventoryItems(null), [])
+  assert.deepEqual(inventoryItems(snapS9(null)), [])
+  assert.deepEqual(inventoryItems(snapS9('oops')), [])
+})
+
+test('S9-2：craft 核对在"对象形状"的背包上也能认出成品（真机 bug 的复现）', () => {
+  const spec = ACTION_SPECS.craft
+  // ① 对象形状：做之前是 {}，做之后多了 torch
+  const v1 = spec.verify(snapS9({}), snapS9({ t: { prefab: 'torch', count: 1 } }), { recipe: 'torch' })
+  assert.equal(v1.ok, true, '对象形状的背包必须能数出 torch')
+  assert.equal(v1.made, 1)
+
+  // ② 数组形状（原来就支持，别改坏）
+  const v2 = spec.verify(
+    snapS9([{ prefab: 'cutgrass', count: 2 }]),
+    snapS9([{ prefab: 'cutgrass', count: 2 }, { prefab: 'torch', count: 1 }]),
+    { recipe: 'torch' },
+  )
+  assert.equal(v2.ok, true)
+  assert.equal(v2.made, 1)
+})
+
+test('S9-3：修了形状也不许放松 —— 没做出来仍然判失败', () => {
+  const spec = ACTION_SPECS.craft
+  const same = snapS9({ c: { prefab: 'cutgrass', count: 2 } })
+  const v = spec.verify(same, same, { recipe: 'torch' })
+  assert.equal(v.ok, false)
+  assert.equal(v.reason, 'craft_not_in_inventory')
+  // 材料被扣了、但成品没出现 → 也必须判失败（不能因为"有变化"就说成功）
+  const v2 = spec.verify(snapS9({ c: { prefab: 'cutgrass', count: 2 } }), snapS9({}), { recipe: 'torch' })
+  assert.equal(v2.ok, false, '材料没了、成品也没有，不能算成功')
+})
+
+test('S9-4：其它依赖背包数量的核对也要吃两种形状（gather/pickup/fuel/drop）', () => {
+  const flint = { ref: '#1', prefab: 'flint', position: { x: 5, z: 5 } }
+  const withTree = (items) => ({
+    player: { inventory: { items } },
+    nearby: { buckets: { resources: [], pickupables: [flint] } },
+  })
+
+  // gather_area：对象形状下数出产物
+  const ga = ACTION_SPECS.gather_area
+  const v1 = ga.verify(withTree({}), withTree({ a: { prefab: 'cutgrass', count: 3 } }))
+  assert.equal(v1.ok, true, '对象形状也要能认出产物')
+  assert.equal(v1.gained, 3)
+
+  // pickup：对象形状
+  const pk = ACTION_SPECS.pickup
+  const v2 = pk.verify(withTree({}), withTree({ b: { prefab: 'flint', count: 1 } }), { target_ref: '#1' })
+  assert.equal(v2.ok, true, 'pickup 也要吃对象形状')
+
+  // drop：对象形状下数量减少
+  const dr = ACTION_SPECS.drop
+  const v3 = dr.verify(withTree({ x: { prefab: 'twigs', count: 5 } }), withTree({ x: { prefab: 'twigs', count: 4 } }), { item: 'twigs' })
+  assert.equal(v3.ok, true)
+  assert.equal(v3.used, 1)
+})
+
+
+// ─────────────────────────── 手部装备形状兼容 ───────────────────────────
+// S10：装备栏两种 JSON 形状都必须能读（真机 craft torch 的第二个坑）
+//
+// 真机 Cluster_1 复测：
+//   → 背包 cutgrass×1,twigs×8 | 手持 torch      ← 火把确实在手上
+//   但回执仍说「没核对上（craft_not_in_inventory）」
+// 实际形状（状态文件里同时存在）：
+//   "slots": { "hands": { "prefab": "torch", ... } }                    ← 对象
+//   "worn":  [ { "key": "hands", "item": { "prefab": "torch" } } ]      ← 数组
+// 原来只读 worn.hands（在数组上取 key）→ 永远 null。
+
+
+
+
+
+const snapS10 = (equipment, items = {}) => ({ player: { inventory: { items }, ...(equipment ? { equipment } : {}) } })
+
+const REAL = {
+  slots: { hands: { slot_key: 'hands', name: '火炬', percent: 87, prefab: 'torch', count: 1 } },
+  worn: [{ item: { slot_key: 'hands', name: '火炬', prefab: 'torch', count: 1 }, key: 'hands', label: '手持' }],
+}
+
+test('S10-1：handItem 认得真机那种"slots 对象 + worn 数组"的形状', () => {
+  assert.equal(handItem(snapS10(REAL)), 'torch', '真机形状必须读出 torch')
+  // 只有一种形状也要认（不同版本可能只写一边）
+  assert.equal(handItem(snapS10({ slots: { hands: { prefab: 'torch' } } })), 'torch')
+  assert.equal(handItem(snapS10({ worn: [{ key: 'hands', item: { prefab: 'torch' } }] })), 'torch')
+  assert.equal(handItem(snapS10({ worn: { hands: 'torch' } })), 'torch', '老的对象形状也要认')
+  // 空 / 没有 / 异常
+  assert.equal(handItem(snapS10({ slots: {}, worn: [] })), null)
+  assert.equal(handItem(snapS10(null)), null)
+  assert.equal(handItem(null), null)
+  // 只认 hands，别把头/身的东西当手持
+  assert.equal(handItem(snapS10({ slots: { head: { prefab: 'footballhat' } } })), null)
+  assert.equal(handItem(snapS10({ worn: [{ key: 'head', item: { prefab: 'footballhat' } }] })), null)
+})
+
+test('S10-2：craft 在真机形状下能认出"做好了且自动装备"（bug 复现）', () => {
+  const empty = snapS10({ slots: {}, worn: [] })
+  const v = ACTION_SPECS.craft.verify(empty, snapS10(REAL), { recipe: 'torch' })
+  assert.equal(v.ok, true, '做好了并拿在手上必须算成功')
+  assert.equal(v.how, 'auto_equipped')
+  assert.equal(v.hand, 'torch')
+})
+
+test('S10-3：craft 仍不许放松 —— 手上本来就有火把时再"做"不算成功', () => {
+  // 做之前手上就是 torch、做之后还是 torch、背包也没多 → 判失败
+  const v = ACTION_SPECS.craft.verify(snapS10(REAL), snapS10(REAL), { recipe: 'torch' })
+  assert.equal(v.ok, false)
+  assert.equal(v.reason, 'craft_not_in_inventory')
+})
+
+test('S10-4：unequip 在真机形状下能认出"手上有东西 → 空了"', () => {
+  const v = ACTION_SPECS.unequip.verify(snapS10(REAL), snapS10({ slots: {}, worn: [] }), { slot: 'hands' })
+  assert.equal(v.ok, true)
+  assert.equal(v.unequipped, 'torch')
+  // 本来空手 → 不判死
+  const v2 = ACTION_SPECS.unequip.verify(snapS10({ slots: {}, worn: [] }), snapS10({ slots: {}, worn: [] }), { slot: 'hands' })
+  assert.equal(v2.ok, true)
+  assert.equal(v2.how, 'was_empty')
+})
+
+test('S10-5：equip 在真机形状下能认出“已经拿在手里”（不能报 hand_unchanged）', () => {
+  const before = snapS10({ slots: {}, worn: [] })
+  const after = snapS10(REAL)
+  const v = ACTION_SPECS.equip.verify(before, after, { item: 'torch' })
+  assert.equal(v.ok, true, '真机形状必须读出手持 torch')
+  assert.equal(v.hand, 'torch')
+})
+
