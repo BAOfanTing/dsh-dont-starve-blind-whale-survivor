@@ -40,7 +40,13 @@ function exportsOf(text, alias) {
 function buildModuleMap() {
   const map = new Map() // 模块名 → { file, alias, exports }
   for (const f of FILES) {
-    const text = readFileSync(join(MOD_DIR, f), 'utf8')
+    let text = readFileSync(join(MOD_DIR, f), 'utf8')
+    if (f === 'actions.lua') {
+      const sub = readdirSync(join(MOD_DIR, 'actions')).filter((x) => x.endsWith('.lua'))
+      for (const s of sub) {
+        text += '\n' + readFileSync(join(MOD_DIR, 'actions', s), 'utf8')
+      }
+    }
     const m = stripComments(text).match(new RegExp(`^Whale\\.(\\w+) = ([A-Z][A-Za-z0-9]*)\\s*$`, 'm'))
     if (!m) continue
     const [, module, alias] = m
@@ -92,7 +98,11 @@ test('LUA-2：每个文件里 `别名.函数(...)` 的函数必须由对应模�
 })
 
 test('LUA-3：已知的四个历史坑不许复活（U.g / U.try 缺失 / U.best_tool / U.best_fuel）', () => {
-  const acts = readFileSync(join(MOD_DIR, 'actions.lua'), 'utf8')
+  const actionSub = readdirSync(join(MOD_DIR, 'actions')).filter((x) => x.endsWith('.lua'))
+  const acts = [
+    readFileSync(join(MOD_DIR, 'actions.lua'), 'utf8'),
+    ...actionSub.map((s) => readFileSync(join(MOD_DIR, 'actions', s), 'utf8')),
+  ].join('\n')
   const util = readFileSync(join(MOD_DIR, 'util.lua'), 'utf8')
   const code = stripComments(acts)
 
@@ -108,7 +118,11 @@ test('LUA-3：已知的四个历史坑不许复活（U.g / U.try 缺失 / U.best
 
 test('LUA-4：每个动作的 JOB 都真的注册了（工具表里有的，Lua 侧必须有实现）', async () => {
   const { OPEN_ACTIONS } = await import('../lib/dispatcher.js')
-  const acts = stripComments(readFileSync(join(MOD_DIR, 'actions.lua'), 'utf8'))
+  const actionSub = readdirSync(join(MOD_DIR, 'actions')).filter((x) => x.endsWith('.lua'))
+  const acts = stripComments([
+    readFileSync(join(MOD_DIR, 'actions.lua'), 'utf8'),
+    ...actionSub.map((s) => readFileSync(join(MOD_DIR, 'actions', s), 'utf8')),
+  ].join('\n'))
   const jobs = new Set([...acts.matchAll(/^JOBS\.([a-z_]+)\s*=/gm)].map((m) => m[1]))
   const missing = OPEN_ACTIONS.filter((a) => !jobs.has(a))
   assert.deepEqual(missing, [], `白名单里有但 Lua 没实现的：${missing.join(', ')}`)

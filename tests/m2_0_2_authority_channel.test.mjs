@@ -93,6 +93,11 @@ async function load() {
   run(luaIoFiles({})) // 没有 io 文件：模拟真机 GLOBAL.io == nil 的情况
   run('Whale = { verbose = false, version = "0.14.2", files = { lease = "whale_lease.json", io_lease = "whale_io_lease.json" } }')
   for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+    if (name === 'actions') {
+      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+        run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', sub + '.lua'), 'utf8'))
+      }
+    }
     run(readFileSync(join(MOD, 'scripts', 'whale', name + '.lua'), 'utf8'))
   }
   run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end return nil end)')

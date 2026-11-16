@@ -142,7 +142,14 @@ async function load({ withGuard = false, withActions = false } = {}) {
   run('Whale = { verbose = false, version = "0.17.0", files = { lease = "whale_lease.json", io_lease = "whale_io_lease.json", lease_ack = "whale_lease_ack.json", io_lease_ack = "whale_io_lease_ack.json" } }', 'Whale')
   const mods = ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']
   if (withGuard || withActions) mods.push('guard', 'actions', 'macros', 'bridge')
-  for (const n of mods) run(readFileSync(join(MOD, 'scripts', 'whale', n + '.lua'), 'utf8'), n + '.lua')
+  for (const n of mods) {
+    if (n === 'actions') {
+      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+        run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', `${sub}.lua`), 'utf8'), `actions/${sub}.lua`)
+      }
+    }
+    run(readFileSync(join(MOD, 'scripts', 'whale', n + '.lua'), 'utf8'), n + '.lua')
+  }
   run(`Whale.config.build(function(k)
         if k == "scan_radius" then return 16 end
         if k == "scan_seconds" then return 4 end
@@ -636,7 +643,7 @@ test('harvest-26 Lua 的 ack 确实带 job_cleared / lease_id / acked_at', () =>
   assert.match(src, /lease_id = authority\.lease_id/)
   assert.match(src, /acked_at = os\.time\(\) \* 1000\.0/)
   // Abort 必须真的把 BufferAction 清掉（换手后不能继续产生未授权副作用）
-  const acts = readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8')
+  const acts = readFileSync(join(MOD, 'scripts', 'whale', 'actions', 'core.lua'), 'utf8')
   assert.match(acts, /function A\.Abort/)
   const abortBody = acts.slice(acts.indexOf('function A.Abort'), acts.indexOf('function A.Abort') + 900)
   assert.match(abortBody, /stop_actions\(p\)/, 'Abort 必须走统一的停止清理')
@@ -649,7 +656,7 @@ test('harvest-26 Lua 的 ack 确实带 job_cleared / lease_id / acked_at', () =>
 // ═══════════════════════ 7. 回归 ═══════════════════════
 
 test('harvest-27 Harvest 与 Pickup 边界：不自动接续、不换目标、不共用 command', async () => {
-  const acts = readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8')
+  const acts = readFileSync(join(MOD, 'scripts', 'whale', 'actions', 'gathering.lua'), 'utf8')
   const harvestJob = acts.slice(acts.indexOf('local function harvest_by_ref'), acts.indexOf('JOBS.pickup = function'))
   assert.ok(harvestJob.length > 200)
   assert.doesNotMatch(harvestJob, /ACTIONS\.PICKUP/, 'harvest 里不能顺手捡东西')

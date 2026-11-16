@@ -75,6 +75,12 @@ function createLuaEnv() {
 
   // 加载模块
   for (const mod of ['util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'native', 'actions', 'reflex']) {
+    if (mod === 'actions') {
+      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+        const subSrc = readFileSync(join(MOD, `scripts/whale/actions/${sub}.lua`), 'utf8')
+        run(subSrc, `actions/${sub}`)
+      }
+    }
     const src = readFileSync(join(MOD, `scripts/whale/${mod}.lua`), 'utf8')
     run(src, mod)
   }

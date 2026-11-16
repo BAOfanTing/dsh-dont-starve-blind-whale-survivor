@@ -11,7 +11,7 @@
 //      注意：update_notes 是**写**工具（覆盖写 notes.md），只是不经过 dispatcher，不是只读。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -21,7 +21,11 @@ import { OPEN_ACTIONS } from '../lib/dispatcher.js'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MOD = join(ROOT, 'DontStarveWhaleSurvivor')
 
-const actionsLua = readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8')
+const actionSubmodules = readdirSync(join(MOD, 'scripts', 'whale', 'actions')).filter((f) => f.endsWith('.lua'))
+const actionsLua = [
+  readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8'),
+  ...actionSubmodules.map((m) => readFileSync(join(MOD, 'scripts', 'whale', 'actions', m), 'utf8')),
+].join('\n')
 const macrosLua = readFileSync(join(MOD, 'scripts', 'whale', 'macros.lua'), 'utf8')
 const reflexLua = readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8')
 

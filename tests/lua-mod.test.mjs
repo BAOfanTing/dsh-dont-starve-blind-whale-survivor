@@ -221,6 +221,11 @@ function loadMod(fengari) {
     'json', 'util', 'pickuprules', 'harvestrules', 'eatrules', 'craftrules', 'equiprules',
     'config', 'actor', 'nearby', 'observe', 'native', 'actions',
   ]) {
+    if (name === 'actions') {
+      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+        run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', `${sub}.lua`), 'utf8'), `actions/${sub}.lua`)
+      }
+    }
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const global = (name) => {

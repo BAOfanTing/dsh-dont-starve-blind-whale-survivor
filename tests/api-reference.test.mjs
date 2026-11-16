@@ -50,7 +50,18 @@ const { docActions, hasGame } = loadKnownActions()
 function collectUsedActions() {
   const dir = join(REPO, 'DontStarveWhaleSurvivor', 'scripts', 'whale')
   const used = new Map() // name → 出现它的文件
-  const files = ['actions.lua', 'macros.lua', 'reflex.lua']
+  const files = [
+    'actions.lua',
+    'actions/core.lua',
+    'actions/movement.lua',
+    'actions/gathering.lua',
+    'actions/combat.lua',
+    'actions/survival.lua',
+    'actions/crafting.lua',
+    'actions/interaction.lua',
+    'macros.lua',
+    'reflex.lua',
+  ]
   // 这些是 Whale.actions 的模块方法，不是游戏 ACTIONS（正则会把 ACTIONS.Start 之类抓进来）
   const NOT_GAME_ACTIONS = new Set([
     'Start', 'Tick', 'Abort', 'Status', 'MODNAME', 'refresh_client_walk',
@@ -90,7 +101,7 @@ test('API-1：模组里用到的每个 ACTIONS 名字都必须真实存在', () 
 })
 
 test('API-2：use 的白名单必须是真实动作（不能照抄不存在的 OPEN/USE/CLOSE）', () => {
-  const lua = readFileSync(join(REPO, 'DontStarveWhaleSurvivor', 'scripts', 'whale', 'actions.lua'), 'utf8')
+  const lua = readFileSync(join(REPO, 'DontStarveWhaleSurvivor', 'scripts', 'whale', 'actions', 'interaction.lua'), 'utf8')
   const m = lua.match(/local USE_ALLOWED = \{([\s\S]*?)\}/)
   assert.ok(m, '应该能读到 USE_ALLOWED')
   const names = [...m[1].matchAll(/"([A-Z][A-Z0-9_]*)"/g)].map((x) => x[1])

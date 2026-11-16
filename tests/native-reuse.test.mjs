@@ -41,7 +41,12 @@ const HAS_VANILLA = vanillaScript('behaviours/runaway.lua') !== null
 
 const nativeLua = LUA('native')
 const reflexLua = LUA('reflex')
-const actionsLua = LUA('actions')
+const actionsLua = [
+  LUA('actions'),
+  ...['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction'].map((s) =>
+    readFileSync(join(MOD, 'scripts', 'whale', 'actions', `${s}.lua`), 'utf8'),
+  ),
+].join('\n')
 const observeLua = LUA('observe')
 const modmain = readFileSync(join(MOD, 'modmain.lua'), 'utf8')
 
@@ -517,6 +522,9 @@ function loadChain(fengari, vanillaRunaway) {
   `, 'Whale 表 + 文件桥桩')
   run(readFileSync(join(MOD, 'scripts', 'whale', 'util.lua'), 'utf8'), 'util.lua')
   // actions 需要 ACTIONS / EQUIPSLOTS / builder 等；STUB 里已有最小集合
+  for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+    run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', `${sub}.lua`), 'utf8'), `actions/${sub}.lua`)
+  }
   run(readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8'), 'actions.lua')
   if (vanillaRunaway) {
     run(vanillaRunaway, '原版 behaviours/runaway.lua')

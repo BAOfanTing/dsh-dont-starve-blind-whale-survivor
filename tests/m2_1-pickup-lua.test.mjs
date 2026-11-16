@@ -115,6 +115,11 @@ async function load({ items = [], files } = {}) {
   run(luaIoFiles(files ?? { 'whale_io_lease.json': authority({ runtime_id: RUNTIME }) }))
   run('Whale = { verbose = false, version = "0.15.0", files = { lease = "whale_lease.json", io_lease = "whale_io_lease.json", lease_ack = "whale_lease_ack.json", io_lease_ack = "whale_io_lease_ack.json" } }')
   for (const n of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+    if (n === 'actions') {
+      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+        run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', sub + '.lua'), 'utf8'))
+      }
+    }
     run(readFileSync(join(MOD, 'scripts', 'whale', n + '.lua'), 'utf8'))
   }
   run('Whale.config.build(function(k) if k == "scan_radius" then return 16 end if k == "scan_seconds" then return 4 end return nil end)')

@@ -302,10 +302,16 @@ function loadReflex(fengari, variant) {
                      WriteState = function() end }
     REPORTS = {}
   `, '文件桥桩')
-  for (const name of variant === 'noActions'
+  const mods = variant === 'noActions'
     ? ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules', 'equiprules', 'config', 'native', 'reflex']
     : ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules',
-       'equiprules', 'config', 'native', 'actions', 'reflex']) {
+       'equiprules', 'config', 'native', 'actions', 'reflex']
+  for (const name of mods) {
+    if (name === 'actions') {
+      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+        run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', `${sub}.lua`), 'utf8'), `actions/${sub}.lua`)
+      }
+    }
     run(readFileSync(join(MOD, 'scripts', 'whale', `${name}.lua`), 'utf8'), `${name}.lua`)
   }
   const global = (name) => {
@@ -1224,7 +1230,7 @@ test('RF-32（真机 bug：收纳成功但火把消失）：unequip 后火把必
 })
 
 test('RF-33：unequip 只在火把确认进背包后才报成功（不许谎报）', () => {
-  const src = readFileSync(join(MOD, 'scripts', 'whale', 'actions.lua'), 'utf8')
+  const src = readFileSync(join(MOD, 'scripts', 'whale', 'actions', 'survival.lua'), 'utf8')
   assert.match(src, /local ok, item = pcall\(function\(\) return inv:Unequip\(slot\) end\)/, '必须接住 Unequip 的返回值')
   assert.match(src, /inv:GiveItem\(item\)/, '必须显式放回背包（不带 slot，让原生自己找空位）')
   assert.doesNotMatch(src, /inv:GetNextAvailableSlot\(\)/, '★ 不许无参调 GetNextAvailableSlot（原生签名要 item，真机会抛错）')
