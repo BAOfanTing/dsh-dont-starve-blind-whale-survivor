@@ -167,6 +167,9 @@ function mkplaya(opts)
         KnowsRecipe = function(self, rec) return true end,
         MakeRecipe = function() return true end,
     }
+    -- HasIngredients / CanBuild 默认**不装** —— 这样 craftrules.CanCraftNow 会走
+    -- "CanBuild 不可用 → 退回 KnowsRecipe" 的兜底分支，和真机上的老构建一致。
+    -- 需要精确模拟"KnowsRecipe 不认科学机器、CanBuild 认"时，用 canBuild 选项单独装。
     p.components.locomotor = {
         Stop = function() end,
         PushAction = function(self, ba) PUSHED[#PUSHED + 1] = ba end,
@@ -222,8 +225,12 @@ export const itemLua = (prefab, { count = 1, edible = false, hunger = 12.5, heal
  * @param {object} opts
  * @param {string[]} opts.entities  追加到假世界里的实体（Lua 源码片段）
  * @param {string[]} opts.items     背包里的物品（Lua 源码片段；可用 itemLua 生成）
+ * @param {boolean|null} opts.canBuild  装一个 `builder:CanBuild(name)` 桩：
+ *        true/false 直接返回该值；不传则不装（走 CanCraftNow 的 KnowsRecipe 兜底）。
+ *        真机形态是 `knowsRecipe:false, canBuild:true` —— KnowsRecipe 不认身边的科学机器，
+ *        而 CanBuild 认（含临时科技加成）。
  */
-export async function loadTargets({ entities = [], items = [], knowsRecipe = true, preload = '' } = {}) {
+export async function loadTargets({ entities = [], items = [], knowsRecipe = true, canBuild = null, preload = '' } = {}) {
   const fengari = await import('fengari')
   const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari
   const L = lauxlib.luaL_newstate()
@@ -265,6 +272,10 @@ export async function loadTargets({ entities = [], items = [], knowsRecipe = tru
     + 'LAST_REPORT_TEXT = tostring(text or ""); LAST_REPORT_REASON = reason end')
   if (knowsRecipe === false) {
     run('PLAYER.components.builder.KnowsRecipe = function() return false end')
+  }
+  if (canBuild === true || canBuild === false) {
+    // 真机形态：KnowsRecipe 说不认识、CanBuild 说能做（它算上了身边科学机器的临时科技）
+    run(`PLAYER.components.builder.CanBuild = function() return ${canBuild} end`)
   }
   if (items.length > 0) {
     run('ITEMS = { ' + items.join(', ') + ' }')

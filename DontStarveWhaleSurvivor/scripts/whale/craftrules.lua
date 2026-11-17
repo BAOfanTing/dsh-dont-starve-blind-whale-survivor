@@ -59,6 +59,49 @@ function C.NeedsScience(name)
     return C.TechOf(name) == "SCIENCE_ONE"
 end
 
+--- 角色现在**条件上**能不能造这个配方（科技/prototyper 层面，**不看材料**）。
+---
+--- ★ 真机 bug（2026-11-17）：这个判定原来在 guard 和 actions/crafting.lua **各写一遍**，
+---   而且都用了 `builder:KnowsRecipe` —— 它**不算**"站在科学机器旁边"的临时科技
+---   （`_tempbonus` 靠玩家 controller 的 UpdateTempTechBonuses 刷新，
+---   服务端 actor 上经常还没刷到）。结果机器造好了、人站在 0.7 格内，
+---   `craft rope` 仍报 recipe_locked；而同一个角色用 `lookup rope`
+---   （走 builder:CanBuild）却显示"现在就能做" —— 自相矛盾。
+---
+--- 现在**只有这一处**判定，双方都调它：
+---   ① `builder:CanBuild(name)` 是原版 UI 判"现在能不能造"的入口，
+---      会算上永久解锁 + 临时科技（附近科学机器/远古站）+ 当前 prototyper。
+---   ② 它不可用时退回 `KnowsRecipe`（至少能判永久解锁）。
+--- 返回：true/false/nil（nil = 判不了，调用方**不要拦**，交给 MakeRecipe 定）， 以及原因。
+function C.CanCraftNow(actor, name)
+    local builder = actor ~= nil and actor.components ~= nil and actor.components.builder or nil
+    if builder == nil then return false, "no_builder" end
+    local key = tostring(name)
+    local ok_c, can = pcall(function() return builder:CanBuild(key) end)
+    if ok_c and can ~= nil then return can == true, nil end
+    local all = GLOBAL.AllRecipes
+    local recipe_obj = all ~= nil and all[key] or nil
+    if recipe_obj ~= nil then
+        local ok_k, k = pcall(function() return builder:KnowsRecipe(recipe_obj) end)
+        if ok_k then return k == true, nil end
+    end
+    return nil, nil
+end
+
+--- 身边有没有 prototyper（科学机器 / 远古站…），用来给 CanCraftNow 的 false 做兜底。
+--- 有些构建/时机下 `CanBuild` 会因为临时科技没刷新而误报 false，这时只要
+--- 身边确实有机器就不该拦 —— 真造不出来 `MakeRecipe` 会自己失败（它才是权威）。
+function C.HasNearbyPrototyper(actor, radius_tiles)
+    if actor == nil then return false end
+    local U = Whale ~= nil and Whale.util or nil
+    if U == nil or U.find_nearest == nil then return false end
+    local found = U.find_nearest(actor, radius_tiles or 8, nil, nil, function(e)
+        if e == nil or not e:IsValid() then return false end
+        return e.components ~= nil and e.components.prototyper ~= nil
+    end)
+    return found ~= nil
+end
+
 --- 配方名是否在白名单里
 function C.IsAllowed(name)
     if name == nil then return false, "recipe_not_allowed" end

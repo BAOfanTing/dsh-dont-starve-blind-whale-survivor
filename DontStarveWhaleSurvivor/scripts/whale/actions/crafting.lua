@@ -24,6 +24,9 @@ local recipe_of = A.recipe_of
 local missing_ingredients = A.missing_ingredients
 local hand_prefab = A.hand_prefab
 local snapshot_counts = A.snapshot_counts
+-- 科技判定**只走这里**（craftrules.CanCraftNow），不要在动作里自己调 builder:KnowsRecipe：
+-- 那个 API 不算"站在科学机器旁边"的临时科技，真机上机器造好了也判"还不会做"。
+local craftrules = Whale.craftrules
 
 local RECIPE_ALIASES = {
     chest = "treasurechest",
@@ -68,8 +71,11 @@ local function job_build(j, p)
         end
         local builder = p.components.builder
         if builder == nil then return "fail", "你现在不能建造" end
-        local ok, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
-        if ok and knows == false then
+        -- 科技判定统一走 craftrules（内部用原版 CanBuild，会算上"站在科学机器旁边"的临时科技）
+        local knows0 = craftrules ~= nil and craftrules.CanCraftNow ~= nil and craftrules.CanCraftNow(p, key) or nil
+        if knows0 == false
+            and not (craftrules ~= nil and craftrules.HasNearbyPrototyper ~= nil
+                and craftrules.HasNearbyPrototyper(p, 8)) then
             return "fail", string.format("%s 还不会做（要先解锁）", key)
         end
         local missing = missing_ingredients(p, recipe)
@@ -273,9 +279,18 @@ JOBS.craft = function(j, p)
         if j.step == "start" then
             local recipe = recipe_of(name)
             if recipe == nil then return "fail", "recipe_unknown: 游戏里没有这个配方" end
-            local ok_k, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
-            if ok_k and knows == false then
-                return "fail", "recipe_locked: 还不会做 " .. name .. "（需要先解锁）"
+            -- ★ 真机 bug（2026-11-17）：这里原来用 `builder:KnowsRecipe(recipe)` —— 它
+            --   **不算**"站在科学机器旁边"的临时科技（`_tempbonus` 靠玩家 controller 刷新，
+            --   服务端 actor 上经常还没刷到）。真机表现：机器造好了、人站在 0.7 格内，
+            --   guard 已放行，执行层却在这里又拦一次，回执是
+            --   「recipe_locked: 还不会做 rope（需要先解锁）」。
+            --   现在科技判定**只在 craftrules.CanCraftNow 一处**，guard 与这里同源。
+            local knows = rules.CanCraftNow ~= nil and rules.CanCraftNow(p, name) or nil
+            if knows == false then
+                -- 身边真有 prototyper 就不拦，交给下面 MakeRecipe 定（它才是权威）
+                if rules.HasNearbyPrototyper == nil or not rules.HasNearbyPrototyper(p, 8) then
+                    return "fail", "recipe_locked: 还不会做 " .. name .. "（需要先解锁；第一阶段的要先 build sciencemachine 并站在它旁边）"
+                end
             end
             local missing = rules.MissingIngredients(p, name)
             if missing ~= nil then
@@ -345,8 +360,11 @@ JOBS.craft = function(j, p)
         end
         local builder = p.components.builder
         if builder == nil then return "fail", "你现在不能制作东西" end
-        local ok, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
-        if ok and knows == false then
+        -- 科技判定统一走 craftrules（旧路径 reflex/macros 也一样，别再自己调 KnowsRecipe）
+        local knows0 = craftrules ~= nil and craftrules.CanCraftNow ~= nil and craftrules.CanCraftNow(p, key) or nil
+        if knows0 == false
+            and not (craftrules ~= nil and craftrules.HasNearbyPrototyper ~= nil
+                and craftrules.HasNearbyPrototyper(p, 8)) then
             return "fail", string.format("%s 还不会做（要先做科学机器/靠近它解锁）", key)
         end
         local missing = missing_ingredients(p, recipe)
@@ -579,8 +597,10 @@ JOBS.recipes = function(j, p)
     for _, name in ipairs(names) do
         local recipe = all[name]
         if recipe ~= nil and (want == nil or want == "" or string.find(name, tostring(want), 1, true) ~= nil) then
+            -- can  = 现在能不能做（CanBuild，含"站在科学机器旁边"的临时科技）
+            -- knows = **永久**解锁了吗（KnowsRecipe 第二参 true = 忽略临时科技）
             local can = U.try(function() return builder:CanBuild(name) end) == true
-            local knows = U.try(function() return builder:KnowsRecipe(name) end) == true
+            local knows = U.try(function() return builder:KnowsRecipe(name, true) end) == true
             local cost, missing = recipe_cost_text(recipe, counts)
             local status
             if can then
@@ -678,7 +698,8 @@ JOBS.list_recipes = function(j, p)
     local craftable, known = {}, 0
     for name, recipe in pairs(GLOBAL.AllRecipes or {}) do
         if type(name) == "string" and recipe ~= nil then
-            local ok, knows = pcall(function() return builder:KnowsRecipe(recipe) end)
+            -- 只看永久解锁（第二参 true 忽略临时科技），别让"站在机器旁"影响"已解锁"统计
+            local ok, knows = pcall(function() return builder:KnowsRecipe(recipe, true) end)
             if ok and knows then
                 known = known + 1
                 local ok2, has = pcall(function() return builder:HasIngredients(recipe) end)

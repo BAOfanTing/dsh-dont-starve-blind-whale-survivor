@@ -258,13 +258,76 @@ test('SM-14：craft 的判定顺序 —— 材料先报（精确），科技后�
   const guard = readFileSync(join(MOD, 'scripts', 'whale', 'guard.lua'), 'utf8')
   const craftBlock = guard.slice(guard.indexOf('if action == "craft" then'))
   const missingIdx = craftBlock.indexOf('cr.MissingIngredients(actor, recipe)')
-  const knowIdx = craftBlock.indexOf('builder:CanBuild(recipe)')
+  const knowIdx = craftBlock.indexOf('cr.CanCraftNow(actor, recipe)')
   assert.ok(missingIdx > 0, '要调 MissingIngredients')
-  assert.ok(knowIdx > 0, '要用 CanBuild 判科技')
+  assert.ok(knowIdx > 0, '科技判定要调 cr.CanCraftNow（允许多打一层 -- 注释描述）')
   assert.ok(missingIdx < knowIdx, '材料判定必须在科技判定之前（否则缺料会被误报成 recipe_locked）')
-  // 兜底：CanBuild 为 false 时要看身边有没有 prototyper，有就不拦
-  assert.match(craftBlock, /station_ok/, '要有"身边有没有科学机器"的兜底')
-  assert.match(craftBlock, /prototyper/, '兜底要查 prototyper 组件')
+  // 兜底：CanCraftNow 说 false 时要看身边有没有 prototyper，有就不拦
+  assert.match(craftBlock, /HasNearbyPrototyper/, '要有"身边有没有科学机器"的兜底')
+})
+
+test('SM-15（INTEGRATION）：真机形态 —— KnowsRecipe 说不认识、CanBuild 说能做，执行层必须放行', async () => {
+  // 真机（2026-11-17）：guard 放行之后，**执行层** actions/crafting.lua 又用
+  // `builder:KnowsRecipe` 拦了一次，回执是「recipe_locked: 还不会做 rope（需要先解锁）」。
+  // KnowsRecipe 不算"站在科学机器旁边"的临时科技，CanBuild 才算 —— 所以两边都必须用 CanBuild。
+  const items = [
+    `(function() local it = { prefab = "cutgrass", components = { stackable = { StackSize = function() return 3 end } } } it.IsValid = function() return true end return it end)()`,
+  ]
+  const env = await loadTargets({ items, knowsRecipe: false, canBuild: true })
+  env.buildNearby()
+  env.run(`
+    MADE = {}
+    PLAYER.components.builder.MakeRecipe = function(self, recipe, pt, rot, skin)
+      MADE[#MADE + 1] = recipe and recipe.name or "?"
+      BUFFERED = { action = { id = "BUILD" } }
+      return true
+    end
+    PLAYER.components.builder.HasIngredients = function() return true end
+    Whale.actions.Start("craft", { recipe = "rope" }, "c-rope", { survival_craft = true, recipe = "rope" })
+    BUFFERED = nil
+    for i = 1, 6 do
+      Whale.actions.Tick()
+      BUFFERED = nil
+      if Whale.actions.Current() == nil then break end
+    end
+    OUT = table.concat(MADE, ",")
+  `)
+  const rep = env.report()
+  const made = env.get('OUT')
+  assert.doesNotMatch(String(rep.text), /recipe_locked/,
+    `CanBuild 说能做就不该再报 recipe_locked，实际 ${rep.text}`)
+  assert.match(made, /rope/, `应该真的走到 MakeRecipe，实际调用 ${made || '(无)'}`)
+})
+
+test('SM-16：科技判定只允许有一处 —— guard 与执行层都必须调 craftrules.CanCraftNow', () => {
+  // 真机这个 bug 犯了两次：先修 guard，执行层又拦。根因就是"两处各写一份判定"。
+  // 这条测试盯死：谁都不许再自己写 KnowsRecipe 的科技判定。
+  const guard = readFileSync(join(MOD, 'scripts', 'whale', 'guard.lua'), 'utf8')
+  const crafting = readFileSync(join(MOD, 'scripts', 'whale', 'actions', 'crafting.lua'), 'utf8')
+  const rules = readFileSync(join(MOD, 'scripts', 'whale', 'craftrules.lua'), 'utf8')
+
+  assert.match(rules, /function C\.CanCraftNow/, 'craftrules 必须提供统一的 CanCraftNow')
+  assert.match(rules, /function C\.HasNearbyPrototyper/, 'craftrules 必须提供 prototyper 兜底查询')
+  assert.match(rules, /builder:CanBuild/, 'CanCraftNow 内部要用原版 CanBuild（认临时科技）')
+
+  assert.match(guard, /cr\.CanCraftNow/, 'guard 必须调 CanCraftNow')
+  assert.match(crafting, /rules\.CanCraftNow/, '执行层也必须调 CanCraftNow')
+
+  // 不许再有"自己写一套科技门"。规则：
+  //   ① guard / 动作层都不许直接调 CanBuild 做门禁（那要走 CanCraftNow）
+  //   ② KnowsRecipe **只允许显式带第二参 true**（= 忽略临时科技，用于"永久解锁了吗"这类展示）；
+  //      默认调用会把"站在科学机器旁"混进"已解锁"，正是真机上误判的根源。
+  const stripComments = (src) => src.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
+  const guardCode = stripComments(guard)
+  const craftingCode = stripComments(crafting)
+  assert.doesNotMatch(guardCode, /builder:CanBuild/, 'guard 不该自己调 CanBuild（走 CanCraftNow）')
+  assert.doesNotMatch(guardCode, /builder:KnowsRecipe/, 'guard 不该自己调 KnowsRecipe')
+  for (const [who, code] of [['guard', guardCode], ['crafting', craftingCode]]) {
+    const calls = code.match(/builder:KnowsRecipe\([^)]*\)/g) ?? []
+    for (const c of calls) {
+      assert.match(c, /,\s*true\)$/, `${who} 里的 ${c} 必须显式传第二参 true（忽略临时科技）`)
+    }
+  }
 })
 
 test('SM-5（INTEGRATION）：不会造（远离科学机器）→ recipe_locked；游戏说会造 → 放行', async () => {

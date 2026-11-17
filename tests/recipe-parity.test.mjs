@@ -96,12 +96,18 @@ test('RP-4：材料需求优先读原版 AllRecipes（两边都不自己抄数�
 })
 
 test('RP-5：科技条件交给游戏自己判（KnowsRecipe 会把"附近有科学机器"折算进来）', () => {
-  assert.match(guardLua, /KnowsRecipe/, 'guard 必须问游戏"现在会不会做"')
-  assert.match(guardLua, /GLOBAL\.AllRecipes/, 'guard 要拿真实 recipe 对象去问')
+  // ★ 修正（2026-11-17 真机）：原来这里断言用 `KnowsRecipe` —— **错了**。
+  //   KnowsRecipe 不算"站在科学机器旁边"的临时科技（_tempbonus 靠玩家 controller 刷新），
+  //   真机上机器造好了也判"还不会做"。现在统一走 craftrules.CanCraftNow（内部用 CanBuild）。
+  assert.match(guardLua, /CanCraftNow/, 'guard 必须问游戏"现在能不能做"（走 CanCraftNow）')
   assert.match(guardLua, /recipe_locked/, '做不了要给明确原因')
   assert.match(guardLua, /sciencemachine/, '第一阶段配方要提示"先建科学机器"')
   // 我们**不**自己复制一套 TECH 表（会和游戏更新漂移）
   assert.doesNotMatch(guardLua, /TECH\.SCIENCE_ONE/, 'Lua 侧不该自己写 TECH 常量表')
+  // 判定的实现只允许在 craftrules 一处
+  const craftrulesLua = readFileSync(join(MOD, 'scripts', 'whale', 'craftrules.lua'), 'utf8')
+  assert.match(craftrulesLua, /builder:CanBuild/, 'CanCraftNow 内部要用原版 CanBuild（认临时科技）')
+  assert.match(craftrulesLua, /GLOBAL\.AllRecipes/, '兜底要拿真实 recipe 对象去问 KnowsRecipe')
 })
 
 test('RP-6：建造成功必须有建筑实体证据 —— 删掉"材料变少就算成功"那条弱证据', () => {

@@ -1056,57 +1056,20 @@ function G.validate(cmd)
             return false, missing, nil
         end
 
-        -- ② 再判科技：**由游戏自己判**，不复制 TECH 表。
+        -- ② 再判科技：**统一走 `craftrules.CanCraftNow`**（内部用原版 `builder:CanBuild`）。
         --
-        -- 真机 bug（2026-11-16，用户："先做出科学机器"）：
-        --   这里原来用 `builder:KnowsRecipe(recipe_obj)` —— 它**不认**"站在科学机器旁边"
-        --   那种**临时科技加成**（`_tempbonus` 要靠 `UpdateTempTechBonuses` 刷新，
-        --   而那个刷新由玩家 controller 驱动，服务端 actor 上经常还没刷到）。
-        --   结果：机器造好了、人站在 0.7 格内，`craft rope` 仍报 recipe_locked；
-        --   而同一角色用 `lookup rope`（走 `builder:CanBuild`）却显示"现在就能做" —— 自相矛盾。
-        --
-        -- `CanBuild(name)` 是原版 UI 判"这个配方现在能不能造"的入口，包含
-        --   永久解锁 + 临时科技（附近科学机器/远古站）+ 当前 prototyper + 材料。
-        --   材料上面已经单独判过了，所以这里的 false 就真的是科技/条件不够。
-        local knows = nil
-        do
-            local ok_c, can = pcall(function() return builder:CanBuild(recipe) end)
-            if ok_c and can ~= nil then
-                knows = can == true
-            else
-                -- 兜底：CanBuild 不可用时退回 KnowsRecipe（至少能判永久解锁）
-                local all = GLOBAL.AllRecipes
-                local recipe_obj = all ~= nil and all[recipe] or nil
-                if recipe_obj ~= nil then
-                    local ok_k, k = pcall(function() return builder:KnowsRecipe(recipe_obj) end)
-                    if ok_k then knows = k == true end
-                end
-            end
-        end
+        -- ★ 真机 bug（2026-11-17）：这个判定原来在 guard 和 actions/crafting.lua **各写一遍**，
+        --   而且两边都用 `builder:KnowsRecipe` —— 它**不算**"站在科学机器旁边"的临时科技。
+        --   结果机器造好了、人站在 0.7 格内，`craft rope` 仍报 recipe_locked，
+        --   而同一角色 `lookup rope`（走 CanBuild）却说"现在就能做"。
+        --   修 guard 之后执行层又拦了一次（同一 bug 的第二处），所以现在**只留一处判定**。
+        local knows = cr.CanCraftNow(actor, recipe)
         if knows == false then
-            -- ★ 兜底：`CanBuild` 在**服务端 actor** 上可能因为临时科技还没刷新而返回 false，
-            --   即使人已经站在科学机器旁边（`_tempbonus` 由玩家 controller 驱动刷新）。
-            --   所以这里再独立看一眼"身边有没有对应的 prototyper"：
-            --   有的话就不拦，交给执行层用真正的 `builder:MakeRecipe` 去判（那是权威的，
-            --   真造不出来会返回 fail，比在门口瞎猜强）。
-            local station_ok = false
-            if cr.NeedsScience ~= nil and cr.NeedsScience(recipe) then
-                local px, _, pz = U.pos(actor)
-                if px ~= nil then
-                    local found = U.find_nearest(actor, 8, nil, nil, function(e)
-                        if e == nil or not e:IsValid() then return false end
-                        local proto = e.components ~= nil and e.components.prototyper or nil
-                        if proto == nil then return false end
-                        local ok_t, trees = pcall(function() return proto.trees end)
-                        return ok_t and trees ~= nil
-                    end)
-                    station_ok = found ~= nil
-                end
-            end
-            if not station_ok then
-                local tech = cr.TechOf ~= nil and cr.TechOf(recipe) or nil
+            -- 兜底：`CanBuild` 可能因为临时科技还没刷新而误报 false，而人其实就站在机器旁边。
+            -- 身边确实有 prototyper 就不拦 —— 交给 `MakeRecipe` 定（它才是权威）。
+            if not cr.HasNearbyPrototyper(actor, 8) then
                 local hint
-                if tech == "SCIENCE_ONE" then
+                if cr.NeedsScience(recipe) then
                     hint = recipe .. " 是第一阶段科技配方：先 build sciencemachine，站到它旁边再做"
                 else
                     hint = recipe .. " 还没解锁"
