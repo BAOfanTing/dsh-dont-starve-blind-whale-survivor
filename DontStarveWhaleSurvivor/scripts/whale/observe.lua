@@ -694,6 +694,13 @@ function O.BuildData(actor, opts)
         data.world = world_block(actor, unavailable)
         data.nearby = nearby_block(actor, info, now, unavailable, data.identity)
         data.warnings = warnings(actor, data.player, data.world)
+        local reflex = Whale ~= nil and Whale.reflex or nil
+        if reflex ~= nil and reflex.DangerZones ~= nil then
+            local ok_dz, dzs = pcall(reflex.DangerZones)
+            if ok_dz and type(dzs) == "table" then
+                data.danger_zones = dzs
+            end
+        end
         data.dead = not info.alive
         data.x, data.z = info.tile_x, info.tile_z
         data.day = data.world ~= nil and data.world.day or nil

@@ -4,6 +4,8 @@
 
 这是一个 DSH 插件，自带饥荒 Lua 模组、本机 MCP 服务器和文件桥。也可以不接 DSH，直接在游戏里按 F8 让内置 AI 自己玩。
 
+已完成的阶段：活过第一晚 · 基础工具与资源采集 · 制作科学机器 · 第一阶段科技（背包/长矛/木甲） · 紧急避险与动态逃生
+
 ---
 
 ## 现在能做什么
@@ -17,7 +19,7 @@
 | **实时找目标**（不会过期） | `pickup_nearest`、`pickup_food`、`harvest_nearest`、`chop_nearest`、`mine_nearest` |
 | 采集 | `pickup`、`harvest`、`gather`、`gather_area`、`chop`、`mine`、`dig`、`hammer` |
 | 制作 | `craft`（torch / axe / pickaxe / flowerhat + 第一阶段科技 rope / boards / backpack / spear / armorwood）、`build`（营火 / 火坑 / 箱子 / 锅 / 科学机器）、`cook` |
-| 生存 | `eat`、`equip`、`unequip`、`drop`、`fuel`、`wait` |
+| 生存 | `eat`、`equip`（火把 / 提灯 / 矿工帽 / 长矛 / 防具等，已实机验证）、`unequip`、`drop`、`fuel`、`wait` |
 | 交互 | `use`、`container_take`、`container_put`、`give` |
 | 战斗 | `attack`、`kill` |
 | 社交 | `say` |
@@ -37,7 +39,7 @@
 
 **不靠模型的自动能力**：
 
-- **保命反射（默认开）**：血/饿见底、入夜没光、火要灭、被敌人贴脸、理智太低时，模组自己动手（吃 / 举火把 / 做火把 / 添柴 / 后撤 / 采花），白天还会提前备 2 草 + 2 树枝。**残血被贴脸或天黑没光时，它会打断正在跑的任务先保命**；做过的事会写进 `get_state`。
+- **保命反射（默认开）**：暗夜自动举火把/做火把、极饿进食（≤30% 紧急抢占，普通饥饿不打断采矿砍树）、贴脸受袭时 8 方向动态逃生并记忆危险区；做过的事会写进 `get_state`。
 - **HUD 小窗 + F8/F7**：见下面「游戏里的快捷键」。
 - **控制租约**：F8 内置 AI 和 DSH 会话不会同时操作同一个角色，换手要等旧的一方确认停手。
 

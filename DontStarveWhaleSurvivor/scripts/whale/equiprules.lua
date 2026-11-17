@@ -24,7 +24,23 @@ Q.ITEMS = {
     flowerhat = "花环",
     axe = "斧头",
     pickaxe = "镐",
+    spear = "长矛",
 }
+
+--- 根据 prefab 或物品实体识别装备槽位（HEAD / BODY / HANDS）
+function Q.SlotFor(prefab_or_item)
+    if type(prefab_or_item) == "table" and prefab_or_item.components ~= nil and prefab_or_item.components.equippable ~= nil then
+        local slot = prefab_or_item.components.equippable.equipslot
+        if slot ~= nil then return slot end
+    end
+    local name = type(prefab_or_item) == "table" and prefab_or_item.prefab or tostring(prefab_or_item or "")
+    if name == "minerhat" or name == "flowerhat" then
+        return EQUIPSLOTS ~= nil and EQUIPSLOTS.HEAD or "head"
+    elseif name == "armorwood" or name == "backpack" then
+        return EQUIPSLOTS ~= nil and EQUIPSLOTS.BODY or "body"
+    end
+    return EQUIPSLOTS ~= nil and EQUIPSLOTS.HANDS or "hands"
+end
 
 --- prefab 是否允许装备
 function Q.IsAllowedPrefab(prefab)
@@ -33,13 +49,18 @@ function Q.IsAllowedPrefab(prefab)
     return true, nil
 end
 
---- 背包物品实体是否可装备（白名单 + 真实组件）
-function Q.IsEquippable(item)
+--- 背包物品实体是否可装备（白名单 + 真实组件 + 角色兼容）
+function Q.IsEquippable(item, player)
     if item == nil or type(item) ~= "table" then return false, "item_missing" end
     local ok_p, why_p = Q.IsAllowedPrefab(item.prefab)
     if not ok_p then return false, why_p end
     local inv_item = item.components ~= nil and item.components.inventoryitem or nil
     if inv_item == nil then return false, "item_not_equippable" end
+    local eq = item.components ~= nil and item.components.equippable or nil
+    if eq ~= nil and eq.CanBeEquippedBy ~= nil and player ~= nil then
+        local ok_can, can = pcall(function() return eq:CanBeEquippedBy(player) end)
+        if ok_can and can == false then return false, "item_not_equippable" end
+    end
     return true, nil
 end
 
@@ -62,7 +83,7 @@ function Q.EquippedItem(player, prefab)
     if player == nil or player.components == nil then return nil end
     local inv = player.components.inventory
     if inv == nil then return nil end
-    local slot = prefab == "minerhat" and EQUIPSLOTS.HEAD or EQUIPSLOTS.HANDS
+    local slot = Q.SlotFor(prefab)
     return inv:GetEquippedItem(slot)
 end
 

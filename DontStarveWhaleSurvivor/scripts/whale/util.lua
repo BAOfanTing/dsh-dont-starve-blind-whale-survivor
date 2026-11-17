@@ -34,11 +34,13 @@ end
 --- 永不为真，导致「砍一下顿一下」的重放逻辑根本不生效，动作只能靠外层 120 秒兜底。
 --- 现在按优先级取：TheSim:GetTime()（存在则用）→ TheSim:GetRealTime()/1000 → os.time()。
 function U.now()
-    local ok, t = pcall(function() return GLOBAL.TheSim:GetTime() end)
+    local ok, t = pcall(function() return GLOBAL.GetTime() end)
     if ok and type(t) == "number" and t > 0 then return t end
+    local ok1, t1 = pcall(function() return GLOBAL.TheSim:GetTime() end)
+    if ok1 and type(t1) == "number" and t1 > 0 then return t1 end
     local ok2, ms = pcall(function() return GLOBAL.TheSim:GetRealTime() end)
     if ok2 and type(ms) == "number" and ms > 0 then return ms / 1000 end
-    local ok3, s = pcall(function() return GLOBAL.os.time() end)
+    local ok3, s = pcall(function() return GLOBAL.os and GLOBAL.os.time() end)
     if ok3 and type(s) == "number" then return s end
     return 0
 end

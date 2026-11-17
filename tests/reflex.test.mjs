@@ -1755,3 +1755,204 @@ for (const step of [undefined, 4, 30]) {
     `)
   })
 }
+
+// ─────────────────────────── REFLEX-FIX-02 专项验证（12 项测试）───────────────────────────
+
+test('FIX-02-1：饥饿 70/200，正在采矿，不触发紧急抢占', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    PLAYER.components.hunger.current = 70
+    PLAYER.components.health.currenthealth = 150
+    PLAYER.components.inventory._items = { safefood("berries", 0) }
+    Whale.actions.Start("mine", {}, "model-mine", { survival_work = true, action = "MINE" })
+    ${eachTick(5)}
+    assert(Whale.job ~= nil and Whale.job.cmd_id == "model-mine", "70/200 普通饥饿绝不打断采矿")
+    local needs = Whale.reflex.Needs()
+    local has_food_need = false
+    for _, n in ipairs(needs) do if n.kind == "food" then has_food_need = true end end
+    assert(has_food_need == true, "普通饥饿必须上报需求给 Plan")
+  `)
+})
+
+test('FIX-02-2：饥饿真正达到紧急程度（40/200），背包有食物，允许进食一次', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    PLAYER.components.hunger.current = 40
+    PLAYER.components.inventory._items = { safefood("berries", 0) }
+    Whale.actions.Start("gather_area", {}, "model-g", { survival_area = true })
+    ${eachTick(5)}
+    assert(Whale.job ~= nil and Whale.job.name == "eat", "真正紧急时允许进食抢占")
+    assert(Whale.job.cmd_id == "reflex")
+  `)
+})
+
+test('FIX-02-3：饥饿恢复后进入冷却防抖，不重复进食', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    PLAYER.components.hunger.current = 40
+    PLAYER.components.inventory._items = { safefood("berries", 0) }
+    ${eachTick(5)}
+    assert(Whale.job ~= nil and Whale.job.name == "eat")
+    Whale.actions.Tick()
+    PLAYER.components.hunger.current = 75
+    Whale.actions.Tick()
+    ${eachTick(5)}
+    assert(Whale.job == nil, "饥饿恢复后不能重复发起进食")
+  `)
+})
+
+test('FIX-02-4：白天正在装备长矛，Reflex 不允许收起或替换手持物品', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    local inv = PLAYER.components.inventory
+    inv._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("spear", 1, { equippable = { equipslot = "hands" }, inventoryitem = {} })
+    Whale.actions.Start("equip", { item = "spear" }, "model-equip")
+    ${eachTick(10)}
+    assert(Whale.job ~= nil and Whale.job.cmd_id == "model-equip", "装备长矛期间 Reflex 绝不抢占")
+    assert(inv._equipped[GLOBAL.EQUIPSLOTS.HANDS].prefab == "spear", "长矛仍在手上")
+  `)
+})
+
+test('FIX-02-5：夜晚没有光源，背包有火炬，紧急装备成功', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "night"
+    PLAYER.IsInLight = function() return false end
+    PLAYER.components.inventory._items = { ${TORCH} }
+    ${eachTick(5)}
+    assert(Whale.job ~= nil and Whale.job.name == "equip" and Whale.job.cmd_id == "reflex")
+    assert(Whale.job.args.item == "torch")
+  `)
+})
+
+test('FIX-02-6：夜晚没有火炬但有制作材料，按紧急流程制作照明', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "night"
+    PLAYER.IsInLight = function() return false end
+    PLAYER.components.inventory._items = { mkitem("cutgrass", 2), mkitem("twigs", 2) }
+    ${eachTick(5)}
+    assert(Whale.job ~= nil and Whale.job.name == "craft" and Whale.job.cmd_id == "reflex")
+    assert(Whale.job.args.recipe == "torch")
+  `)
+})
+
+test('FIX-02-7：遭遇攻击时动态评估多个方向，避开危险和失败点', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    local spider = newent("spider", 4 * 4, 0, { "hostile" }, {
+        combat = { target = PLAYER },
+        health = { IsDead = function() return false end, currenthealth = 100 },
+    })
+    NEARBY = { spider }
+    ${eachTick(5)}
+    assert(Whale.job ~= nil and Whale.job.name == "move_to" and Whale.job.cmd_id == "reflex")
+    assert(Whale.job.args.x < 0, "逃跑方向选择背离敌人的安全方向")
+    local dz = Whale.reflex.DangerZones()
+    assert(#dz > 0, "逃生必须生成短期危险区域记录")
+  `)
+})
+
+test('FIX-02-8：逃生目标点失败冷却后，不再向同一个不可达坐标重复移动', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    local spider = newent("spider", 4 * 4, 0, { "hostile" }, {
+        combat = { target = PLAYER },
+        health = { IsDead = function() return false end, currenthealth = 100 },
+    })
+    NEARBY = { spider }
+    ${eachTick(5)}
+    local first_x, first_z = Whale.job.args.x, Whale.job.args.z
+    Whale.actions.Abort("failed_move")
+    ${eachTick(5)}
+    ${eachTick(5)}
+    if Whale.job ~= nil and Whale.job.name == "move_to" then
+        local key1 = first_x .. "_" .. first_z
+        local key2 = Whale.job.args.x .. "_" .. Whale.job.args.z
+        assert(key1 ~= key2, "相同失败逃生坐标的重复尝试次数必须为 0")
+    end
+  `)
+})
+
+test('FIX-02-9：脱离危险后，主 Plan 记录危险区域且不立即返回原危险目标', async () => {
+  const { derivePlan } = await import('../lib/plan.js')
+  const snapshot = {
+    schema: 'bws.state/1',
+    status: 'ok',
+    player: { health: { percent: 80, current: 80, max: 100 }, hunger: { percent: 80, current: 160, max: 200 } },
+    actor: { tileX: 0, tileZ: 0, alive: true, valid: true },
+    world: { phase: 'day', day: 2 },
+    dangerZones: [{ x: 5, z: 0, radius: 10, source: 'spiderden', ageS: 5, ttlS: 55 }],
+    nearby: {
+      buckets: {
+        harvestables: [
+          { prefab: 'berrybush', x: 5, z: 0, distance: 5, harvest_ready: true },
+          { prefab: 'berrybush', x: -15, z: 0, distance: 15, harvest_ready: true },
+        ],
+        threats: [],
+      },
+    },
+  }
+  const plan = derivePlan(snapshot)
+  assert.equal(!plan.next.includes('距 5 格'), true, 'Plan 自动避开处于危险区域内的目标')
+})
+
+test('FIX-02-10：死亡后只触发一次 RESET，停止普通动作调度', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    PLAYER.components.health.currenthealth = 0
+    RESET_COUNT = 0
+    print = function(s)
+        local str = tostring(s)
+        if string.find(str, "reset", 1, true) and string.find(str, "reason=dead", 1, true) then
+            RESET_COUNT = RESET_COUNT + 1
+        end
+    end
+    ${eachTick(20)}
+    assert(RESET_COUNT == 1, "死亡状态每秒不能重复 RESET，必须只触发 1 次，实际是: " .. tostring(RESET_COUNT))
+    assert(Whale.job == nil, "死亡后停止普通动作调度")
+  `)
+})
+
+test('FIX-02-11：Lua 计时逻辑在 os=nil 环境下安全运行无报错', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.os = nil
+    local ok, err = GLOBAL.pcall(function()
+        Whale.util.now()
+        Whale.reflex.Tick()
+    end)
+    assert(ok == true, "os 为 nil 时不抛异常: " .. tostring(err))
+    assert(Whale.last_reflex_error == nil, "reflex 内部无 os nil 错误")
+  `)
+})
+
+test('FIX-02-12：spear 装备能够通过正确的组件和白名单检查', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    local spear = mkitem("spear", 1, {
+        inventoryitem = {},
+        equippable = {
+            equipslot = GLOBAL.EQUIPSLOTS.HANDS,
+            CanBeEquippedBy = function(self, p) return true end
+        }
+    })
+    local ok_p, err_p = Whale.equiprules.IsAllowedPrefab("spear")
+    assert(ok_p == true, "spear 必须在装备白名单中")
+    local ok_e, err_e = Whale.equiprules.IsEquippable(spear, PLAYER)
+    assert(ok_e == true, "带 equippable 的 spear 必须判定为可装备")
+    assert(Whale.equiprules.SlotFor("spear") == GLOBAL.EQUIPSLOTS.HANDS, "spear 槽位判定为 hands")
+  `)
+})

@@ -47,7 +47,8 @@ local PERMANENT_LIGHTS = {
 }
 
 -- ── 阈值（用角色真实上限的百分比，不写死绝对饥饿值）────────────────────────
-local EAT_EMERGENCY = 0.35     -- 饥饿 < 35%：P1 紧急进食
+local EAT_CRITICAL = 0.30     -- 真正紧急饥饿（<= 30%）：背包有安全食物时允许 P1 紧急进食
+local EAT_NOTIFY = 0.50       -- 普通饥饿（< 50%，如 70/200 = 35%）：只通知 Plan，绝不申请紧急抢占
 local HEAL_EMERGENCY = 0.35    -- 生命 < 35%：P1 回血
 local FORAGE_AHEAD = 0.45      -- 没有安全食物且饥饿 < 45%：提前去采
 local SANITY_LOW = 0.35        -- 理智 < 35%：P3 采花（暗影怪前兆）
@@ -59,6 +60,9 @@ local last_log = {}      -- 诊断日志限频
 local fail_until = {}    -- 失败退避（材料不足/目标不存在时别每秒重试）
 local inflight = nil     -- 当前在跑的反射意图 { key, job, priority }
 local pending = nil      -- 已发起、待核对的意图 { kind, ... }
+local is_dead = false    -- 角色死亡状态记忆（alive -> dead 只重置一次，避免每秒刷 reset）
+local failed_flee_targets = {} -- 失败/不可达的逃生目标点冷却 { [key] = expiry }
+local danger_zones = {}  -- 短期危险区域记忆 { x, z, radius, source, expiry, at }
 
 --- ★ 火把燃料账（游戏原生数值，scripts/tuning.lua）：
 ---   seg_time=30, dusk_segs=4, night_segs=2 → dusk 120s + night 60s
@@ -233,6 +237,46 @@ function R.Needs()
         end
     end
     table.sort(out, function(a, b) return a.kind < b.kind end)
+    return out
+end
+
+local function add_danger_zone(x, z, radius, source, duration)
+    local now = U.now()
+    danger_zones[#danger_zones + 1] = {
+        x = x,
+        z = z,
+        radius = radius or 10,
+        source = tostring(source or "threat"),
+        at = now,
+        expiry = now + (duration or 60),
+    }
+    report_need("danger_zone", "hostile_encounter", {
+        x = x,
+        z = z,
+        radius = radius or 10,
+        source = tostring(source or "threat"),
+    })
+end
+
+--- 给 observe / get_state 用：当前有效的短期危险区域记忆
+function R.DangerZones()
+    local out = {}
+    local now = U.now()
+    local active = {}
+    for _, dz in ipairs(danger_zones) do
+        if now < dz.expiry then
+            active[#active + 1] = dz
+            out[#out + 1] = {
+                x = dz.x,
+                z = dz.z,
+                radius = dz.radius,
+                source = dz.source,
+                age_s = math.floor(now - dz.at),
+                ttl_s = math.floor(dz.expiry - now),
+            }
+        end
+    end
+    danger_zones = active
     return out
 end
 
@@ -573,14 +617,140 @@ end
 
 -- ─────────────────────────── 具体反射动作 ───────────────────────────
 
+local function safe_atan2(y, x)
+    if math.atan2 ~= nil then return math.atan2(y, x) end
+    if math.atan ~= nil then return math.atan(y, x) end
+    return 0
+end
+
+--- 动态多方向逃生评估（根据附近威胁、地图可行走性、已知危险区与历史失败点智能避险）
+local function evaluate_flee_target(p, foe, threats)
+    local px, _, pz = U.pos(p)
+    if px == nil then return nil end
+    local fx, _, fz = U.pos(foe)
+    if fx == nil then fx, fz = px, pz end
+
+    -- 记录威胁发生地为短期危险区域（通知主 Agent，避免 Plan 立即重返）
+    local tfx, tfz = U.tile_of(fx, fz)
+    add_danger_zone(tfx, tfz, 10, foe.prefab or "threat", 60)
+
+    local now = U.now()
+    local all_threat_pos = {}
+    if threats ~= nil then
+        for _, t in ipairs(threats) do
+            local tx, _, tz = U.pos(t)
+            if tx ~= nil then all_threat_pos[#all_threat_pos + 1] = { x = tx, z = tz } end
+        end
+    end
+    if #all_threat_pos == 0 then
+        all_threat_pos[1] = { x = fx, z = fz }
+    end
+
+    -- 优先判断附近是否有安全的常驻光源/基地火坑
+    local base = U.find_nearest(p, 40, nil, nil, function(e)
+        if e == nil or e == p or e:HasTag("player") then return false end
+        local prefab = tostring(e.prefab or "")
+        local permanent = PERMANENT_LIGHTS[prefab] == true
+        local is_fire = e:HasTag("fire") and e.components ~= nil and e.components.fueled ~= nil
+        if not permanent and not is_fire then return false end
+        local fueled = e.components ~= nil and e.components.fueled or nil
+        if fueled ~= nil then
+            local ok_empty, empty = pcall(function() return fueled:IsEmpty() end)
+            if ok_empty and empty then return false end
+        end
+        return U.dist(e, foe) > U.dist(p, foe) + 2 * U.TILE
+    end)
+
+    if base ~= nil and U.dist(p, base) > 3 * U.TILE then
+        local bx, _, bz = U.pos(base)
+        local btx, btz = U.tile_of(bx, bz)
+        local key = btx .. "_" .. btz
+        if failed_flee_targets[key] == nil or now > failed_flee_targets[key] then
+            return btx, btz, key
+        end
+    end
+
+    local native = Whale ~= nil and Whale.native or nil
+    local base_angle = (native ~= nil and native.FleeAngle ~= nil and native.FleeAngle(p, foe, 9))
+    if base_angle == nil then
+        local dx, dz = px - fx, pz - fz
+        base_angle = safe_atan2(-dz, dx)
+    end
+
+    -- 8 个候选偏转角度
+    local candidate_angles = {
+        base_angle,
+        base_angle + math.pi / 4,
+        base_angle - math.pi / 4,
+        base_angle + math.pi / 2,
+        base_angle - math.pi / 2,
+        base_angle + 3 * math.pi / 4,
+        base_angle - 3 * math.pi / 4,
+        base_angle + math.pi,
+    }
+
+    local best_target = nil
+    local best_score = -math.huge
+
+    for _, ang in ipairs(candidate_angles) do
+        local dist = 6 * U.TILE
+        local cand_wx = px + math.cos(ang) * dist
+        local cand_wz = pz - math.sin(ang) * dist
+        local ctx, ctz = U.tile_of(cand_wx, cand_wz)
+        local key = ctx .. "_" .. ctz
+
+        -- 1. 排除此前失败或不可达的目标点（冷却 15 秒）
+        if failed_flee_targets[key] == nil or now > failed_flee_targets[key] then
+            -- 2. 检查地图可行走性（排除水域/虚空）
+            local walkable = true
+            if GLOBAL.TheWorld ~= nil and GLOBAL.TheWorld.Map ~= nil then
+                local ok_w, is_walk = pcall(function()
+                    return GLOBAL.TheWorld.Map:IsPassableAtPoint(cand_wx, 0, cand_wz)
+                end)
+                if ok_w and is_walk == false then walkable = false end
+            end
+
+            if walkable then
+                -- 3. 安全性评分：离所有威胁实体的最小距离
+                local min_threat_dist = math.huge
+                for _, tpos in ipairs(all_threat_pos) do
+                    local d = math.sqrt((cand_wx - tpos.x)^2 + (cand_wz - tpos.z)^2)
+                    if d < min_threat_dist then min_threat_dist = d end
+                end
+
+                -- 惩罚已知危险区
+                local in_danger_zone = false
+                for _, dz in ipairs(danger_zones) do
+                    if now < dz.expiry then
+                        local dz_dist = math.sqrt((ctx - dz.x)^2 + (ctz - dz.z)^2)
+                        if dz_dist <= dz.radius then in_danger_zone = true break end
+                    end
+                end
+
+                local score = min_threat_dist
+                if in_danger_zone then score = score - 20 * U.TILE end
+
+                if score > best_score then
+                    best_score = score
+                    best_target = { x = ctx, z = ctz, key = key }
+                end
+            end
+        end
+    end
+
+    if best_target ~= nil then
+        return best_target.x, best_target.z, best_target.key
+    end
+
+    -- 兜底：所有方向都被封锁时，向主威胁反方向退后
+    local dx, dz = px - fx, pz - fz
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len < 0.01 then dx, dz, len = 1, 0, 1 end
+    local ctx, ctz = U.tile_of(px + (dx / len) * 4 * U.TILE, pz + (dz / len) * 4 * U.TILE)
+    return ctx, ctz, ctx .. "_" .. ctz
+end
+
 --- 撤退（P0）
----
---- NATIVE-REUSE：**方向**交给原版 `RunAway:GetRunAngle`（behaviours/runaway.lua:33-94）。
---- 我们以前是"背离威胁的直线"（`px + dx/len*dist`），真机第 6 天就是直线撤进蜘蛛群被围死的：
---- 直线后退不绕障，撞上墙/巢/树就停在那儿被打。
---- 原版那套会先算背离角度，再用 `FindWalkableOffset`（simutil.lua:330）做 8 方向扇扫，
---- 被挡就偏转、并记住偏转角 1 秒（runaway.lua:35-42 的 avoid_angle），实在没路才直线跑。
---- 我们只取它的**纯几何结果**，移动仍然走 A.Start("move_to")，不开第二条动作通道。
 local function reflex_flee(p)
     local hp = health_percent(p)
     local sanity = sanity_percent(p)
@@ -599,48 +769,28 @@ local function reflex_flee(p)
     if px == nil then return false end
 
     local cur = U.dist(p, foe)
-    local base = U.find_nearest(p, 40, nil, nil, function(e)
-        if e == nil or e == p or e:HasTag("player") then return false end
-        local prefab = tostring(e.prefab or "")
-        local permanent = PERMANENT_LIGHTS[prefab] == true
-        local is_fire = e:HasTag("fire") and e.components ~= nil and e.components.fueled ~= nil
-        if not permanent and not is_fire then return false end
-        local fueled = e.components ~= nil and e.components.fueled or nil
-        if fueled ~= nil then
-            local ok_empty, empty = pcall(function() return fueled:IsEmpty() end)
-            if ok_empty and empty then return false end
-        end
-        return U.dist(e, foe) > cur + 2 * U.TILE
-    end)
+    local threats = {}
+    if attacker ~= nil then threats[#threats + 1] = attacker end
+    local near_f = active_threat(p, 8)
+    if near_f ~= nil and near_f ~= attacker then threats[#threats + 1] = near_f end
 
-    local tx, tz
-    if base ~= nil and U.dist(p, base) > 3 * U.TILE then
-        -- 附近有安全的火：往火边撤（火本身就是安全点，也顺手解决夜里没光）
-        local bx, _, bz = U.pos(base)
-        tx, tz = U.tile_of(bx, bz)
-    else
-        -- 没有安全点：用原版 RunAway 的几何算方向；它不可用时退回直线后退
-        local native = Whale ~= nil and Whale.native or nil
-        local angle = native ~= nil and native.FleeAngle ~= nil and native.FleeAngle(p, foe, 9) or nil
-        if angle ~= nil then
-            local wx, wz = native.PointFromAngle(p, angle, 5 * U.TILE)
-            if wx ~= nil then tx, tz = U.tile_of(wx, wz) end
-        end
-        if tx == nil then
-            local fx, _, fz = U.pos(foe)
-            if fx == nil then return false end
-            local dx, dz = px - fx, pz - fz
-            local len = math.sqrt(dx * dx + dz * dz)
-            if len < 0.01 then dx, dz, len = 1, 0, 1 end
-            local dist = 5 * U.TILE
-            tx, tz = U.tile_of(px + dx / len * dist, pz + dz / len * dist)
-        end
-    end
+    local tx, tz, key = evaluate_flee_target(p, foe, threats)
+    if tx == nil then return false end
+
     local started = A.Start("move_to", { x = tx, z = tz, timeout = 6 }, REFLEX_ID)
     if started then
+        pending = {
+            kind = "flee",
+            threat_guid = foe.GUID,
+            dist_before = cur,
+            hp_before = hp,
+            target_key = key,
+            t0 = U.now(),
+        }
         local why = danger_shadow and "暗影怪贴上来了，先撤"
             or (danger_low_hp and "血不多了，先撤到安全的地方" or "有怪在打我，先撤")
         say(p, "flee", why)
+        diag("flee", { "started=true", "target=" .. tostring(key), "dist=" .. string.format("%.1f", cur) })
         return true
     end
     return false
@@ -674,13 +824,17 @@ end
 ---   进 night 刚好空了，黑暗致死。黄昏完全可以收（grue 只在 night 攻击）。
 ---   只有 **night** 才必须举着光，绝不能收。
 local function reflex_stow_light(p, rep)
+    -- 白天收纳火把降级为普通建议，绝不允许擅自抢占任何正在执行的任务！
+    if Whale.job ~= nil then return false end
     if rep == nil then rep = light_report(p) end
     local phase = rep.phase
     if phase == "night" then return false end       -- 只有黑透的夜里才留着光
     if rep.hand == nil then return false end          -- 手上没火把
+    -- 只有手持的是便携光源才收纳，严禁收纳 spear / axe / pickaxe 等武器工具
+    local hand_name = tostring(rep.hand.prefab or "")
+    if not LIGHT_PREFABS[hand_name] then return false end
     if not cooldown_ok("stow_light") then return false end
-    -- 只有"会追人的活怪"贴脸才暂缓；固定巢穴（hostile+structure）不算，
-    -- 否则火把永远收不起来、举在手上烧光（真机第 9 天）
+    -- 只有"会追人的活怪"贴脸才暂缓；固定巢穴（hostile+structure）不算
     local foe = active_threat(p, 6)
     if foe ~= nil then return false end
 
@@ -688,6 +842,7 @@ local function reflex_stow_light(p, rep)
         { survival_unequip = true, slot = "hands" })
     if started then
         mark("stow_light")
+        pending = { kind = "stow_light", t0 = U.now() }
         say(p, "stow_light", "天还亮着，先把火把收起来省燃料")
         diag("stow_light", {
             "phase=" .. tostring(phase),
@@ -735,6 +890,7 @@ local function reflex_light(p)
     if bag ~= nil then
         local started = A.Start("equip", { item = bag.prefab }, REFLEX_ID)
         if started then
+            pending = { kind = "equip_light", t0 = U.now(), target_prefab = bag.prefab }
             say(p, "light", "天黑了，先装备 " .. U.pretty(bag))
             clear_need("light")
         end
@@ -1213,14 +1369,61 @@ local function confirm_pending(p)
     elseif pending.kind == "eat" then
         local now = hunger_percent(p)
         local delta = (now ~= nil and pending.hunger_before ~= nil) and (now - pending.hunger_before) or nil
+        local ok = (delta ~= nil and delta > 0.005) or (now ~= nil and now > pending.hunger_before + 0.02)
         diag("eat", {
-            "result=" .. ((delta ~= nil and delta > 0.005) and "succeeded" or "unconfirmed"),
+            "result=" .. (ok and "succeeded" or "unconfirmed"),
             "hunger_delta=" .. (delta ~= nil and string.format("%.1f", delta) or "?"),
         })
+        if ok then
+            -- 进食恢复后进入冷却防抖，确保同一饥饿事件不反复抢占
+            mark_fail("eat", 15)
+            clear_need("food")
+        end
     elseif pending.kind == "heal" then
         local now = health_percent(p)
         local delta = (now ~= nil and pending.hp_before ~= nil) and (now - pending.hp_before) or nil
         diag("heal", { "result=" .. ((delta ~= nil and delta > 0.001) and "succeeded" or "unconfirmed") })
+    elseif pending.kind == "flee" then
+        local threat = nil
+        if pending.threat_guid ~= nil then
+            threat = U.find_nearest(p, 16, nil, nil, function(e)
+                return e ~= nil and e.GUID == pending.threat_guid
+            end)
+        end
+        local dist_now = threat ~= nil and U.dist(p, threat) or 999
+        local ok = (dist_now >= pending.dist_before + 1.5 * U.TILE) or (threat == nil)
+        diag("flee_result", {
+            "result=" .. (ok and "succeeded" or "failed"),
+            "dist=" .. string.format("%.1f", dist_now),
+            "threat_escaped=" .. bool_str(ok),
+        })
+        if ok then
+            mark("flee")
+        else
+            if pending.target_key ~= nil then
+                failed_flee_targets[pending.target_key] = U.now() + 15
+            end
+            mark_fail("flee", 2)
+        end
+    elseif pending.kind == "equip_light" then
+        local rules = Whale ~= nil and Whale.equiprules or nil
+        local hand = rules ~= nil and rules.HandItem(p) or nil
+        local ok = (hand ~= nil and tostring(hand.prefab) == pending.target_prefab)
+        diag("equip_light_result", {
+            "result=" .. (ok and "succeeded" or "failed"),
+            "in_hand=" .. bool_str(ok),
+        })
+        if not ok then
+            mark_fail("light", 4)
+        end
+    elseif pending.kind == "stow_light" then
+        local rules = Whale ~= nil and Whale.equiprules or nil
+        local hand = rules ~= nil and rules.HandItem(p) or nil
+        local ok = (hand == nil)
+        diag("stow_light_result", {
+            "result=" .. (ok and "succeeded" or "failed"),
+            "hand_empty=" .. bool_str(ok),
+        })
     end
     pending = nil
 end
@@ -1230,8 +1433,15 @@ local function reset_state(reason)
     pending = nil
     last = {}
     fail_until = {}
-    last_log = {}
     diag("reset", { "reason=" .. tostring(reason) })
+end
+
+--- 区分真正紧急饥饿与普通饥饿（普通饥饿只通知 Plan，绝不申请紧急抢占）
+local function is_critical_hunger(p, hunger)
+    if hunger == nil then return false end
+    -- 70/200 = 35% 属于普通饥饿，绝不触发紧急抢占
+    if hunger > 0.30 then return false end
+    return true
 end
 
 --- 给 get_state / 诊断用：当前最高优先级需求（只判规则，不执行）
@@ -1252,7 +1462,7 @@ function R.Priority(p)
         if rep.can_craft then return P1, "light_preparation" end
         return P2, "light_materials"
     end
-    if hunger ~= nil and hunger < EAT_EMERGENCY then return P1, "hunger_emergency" end
+    if is_critical_hunger(p, hunger) then return P1, "hunger_emergency" end
     if hp ~= nil and hp < HEAL_EMERGENCY then return P1, "health_low" end
 
     local temp = temperature_need(p)
@@ -1304,11 +1514,20 @@ local function run(p)
     if phase ~= "night" and (not rep.portable) and rep.can_craft then
         if try_action(p, "craft_light", P1, "light_preparation", function() return craft_torch(p) end) then return end
     end
-    -- ★ 抢占前先判"能不能真的帮上忙"：背包里没食物时 reflex_eat 必然失败，
-    --   若仍抢占，就会把模型正在做的采集/移动反复打断（真机第 13 天：饥饿 13%、
-    --   `hunger_emergency` 抢占却什么都没吃到，模型和反射互相锁死）。
-    --   和 0.36.0 光照动作的 light_action_available 是同一条规则。
-    if hunger ~= nil and hunger < EAT_EMERGENCY then
+    -- ── 普通饥饿通知（30% ~ 50%，如 70/200）：只上报需求给 Plan，绝不申请紧急抢占
+    if hunger ~= nil and hunger < EAT_NOTIFY and not is_critical_hunger(p, hunger) then
+        local cur_hunger = p.components ~= nil and p.components.hunger ~= nil and p.components.hunger.current or nil
+        local max_hunger = p.components ~= nil and p.components.hunger ~= nil and p.components.hunger.max or nil
+        report_need("food", "hunger_low", {
+            hunger = hunger,
+            current = cur_hunger,
+            max = max_hunger,
+            reason = "normal_hunger_notify_plan",
+        })
+    end
+
+    -- ── P1：真正紧急进食（<= 30% 且背包有食物）
+    if is_critical_hunger(p, hunger) then
         if not food_available(p) then
             -- 饿到极限但背包没吃的 → 不抢占（抢了也吃不到），但要让模型知道。
             -- TARGET-REFRESH：需求里写清"要什么、附近有没有"，交给 Plan 做搜索与路线规划；
@@ -1360,7 +1579,10 @@ function R.Tick()
 
     local p = U.player()
     if p == nil then
-        reset_state("no_player")
+        if not is_dead then
+            is_dead = true
+            reset_state("no_player")
+        end
         return
     end
     local hp_comp = p.components ~= nil and p.components.health or nil
@@ -1370,8 +1592,16 @@ function R.Tick()
     pcall(function() ghost = p:HasTag("playerghost") end)
     pcall(function() valid = p:IsValid() end)
     if dead or ghost or not valid then
-        reset_state(dead and "dead" or (ghost and "ghost" or "invalid_actor"))
+        if not is_dead then
+            is_dead = true
+            reset_state(dead and "dead" or (ghost and "ghost" or "invalid_actor"))
+        end
         return
+    else
+        if is_dead then
+            is_dead = false
+            reset_state("revived")
+        end
     end
 
     sync_inflight()
