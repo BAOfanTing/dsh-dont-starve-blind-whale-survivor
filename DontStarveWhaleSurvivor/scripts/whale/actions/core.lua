@@ -159,6 +159,19 @@ local function best_weapon(p)
 end
 A.best_weapon = best_weapon
 
+--- 模拟"按住动作键"（官方连砍机制：引擎在状态机里自己重推同一个动作）。
+---
+--- ★ 真机 bug（2026-11-17，用户："砍树/砸矿都是走到附近，然后停几秒再开始"）：
+---   这里原来写的是**布尔** `true`，但 `playercontroller.remote_controls` 的值是
+---   **倒计时数字**，引擎自己只用 `0`（按住）和 `nil`（松开）：
+---       playercontroller.lua:872  if self.remote_controls[CTRL] == nil then ... = 0 end
+---       playercontroller.lua:897  self.remote_controls[CTRL] = not isreleased and 0 or nil
+---   而 `PlayerController:CooldownRemoteController(dt)` 会对每个值做算术：
+---       playercontroller.lua:537  self.remote_controls[k] = math.max(v - dt, 0)
+---   它在 playercontroller.lua:3097 被调用时**只要角色空闲或移动中就会传真实 dt** ——
+---   `true - dt` 直接抛 "attempt to perform arithmetic on a boolean value"，
+---   把这个每帧的控制器收尾循环打断，角色就杵在原地（表现就是"停几秒再开始"）。
+---   所以这里必须写数字 `0`，不能写 `true`。
 local function hold_control(p, want)
     local pc = p ~= nil and p.components ~= nil and p.components.playercontroller or nil
     if pc == nil then return false end
@@ -167,9 +180,9 @@ local function hold_control(p, want)
     local ok = pcall(function()
         pc.remote_controls = pc.remote_controls or {}
         if want then
-            pc.remote_controls[control] = true
+            pc.remote_controls[control] = 0      -- 数字！引擎要对它做 math.max(v - dt, 0)
         else
-            pc.remote_controls[control] = nil
+            pc.remote_controls[control] = nil    -- 松开：和 OnRemoteStopControl 一致
         end
     end)
     return ok

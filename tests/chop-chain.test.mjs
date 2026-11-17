@@ -465,6 +465,38 @@ test('CHOP-11（INTEGRATION）：真机形态 —— 一块岩石掉 rocks+flint
   assert.match(String(rep.text), /挖了/, `回执要报挖开，实际 ${rep.text}`)
 })
 
+test('CHOP-12（INTEGRATION）：hold_control 必须写数字 0，不能写布尔（否则真机"停几秒再开始"）', async () => {
+  // 真机 bug（2026-11-17，用户："砍树/砸矿都是走到附近，然后停几秒再开始"）：
+  // `hold_control` 原来往 playercontroller.remote_controls[CONTROL_ACTION] 写布尔 true，
+  // 但引擎把它当**倒计时数字**用：
+  //   playercontroller.lua:537  self.remote_controls[k] = math.max(v - dt, 0)
+  // 而这一句在 3097 行只要角色"空闲或移动中"就会拿到真实 dt →
+  // `true - dt` 抛 "attempt to perform arithmetic on a boolean value"，
+  // 打断每帧的控制器收尾循环，角色就杵在原地几秒。
+  const env = await loadTargets({})
+  env.run(`
+    PLAYER.components.playercontroller = { remote_controls = {} }
+    Whale.actions.hold_control(PLAYER, true)
+    local rc = PLAYER.components.playercontroller.remote_controls
+    local v = rc[GLOBAL.CONTROL_ACTION]
+    TYPE = type(v)
+    VAL = tostring(v)
+    -- 复现引擎的 CooldownRemoteController(dt)：布尔在这一步会直接抛错
+    local dt = 0.03
+    for k, vv in pairs(rc) do rc[k] = math.max(vv - dt, 0) end
+    AFTER = tostring(rc[GLOBAL.CONTROL_ACTION])
+    Whale.actions.hold_control(PLAYER, false)
+    RELEASED = tostring(PLAYER.components.playercontroller.remote_controls[GLOBAL.CONTROL_ACTION])
+    OUT = TYPE .. "|" .. VAL .. "|" .. AFTER .. "|" .. RELEASED
+  `)
+  const [t, val, after, released] = env.get('OUT').split('|')
+  assert.equal(t, 'number',
+    `hold_control 必须写数字，实际 ${t}（写布尔会让引擎抛 arithmetic on a boolean）`)
+  assert.equal(val, '0', '引擎自己的约定：0 表示按住')
+  assert.equal(after, '0', '过一遍引擎倒计时后仍应是 0（说明算术没抛错）')
+  assert.equal(released, 'nil', '松开必须是 nil（和 OnRemoteStopControl 一致）')
+})
+
 test('CHOP-5（INTEGRATION）：挖矿走同一条链，连挖到碎（不能挖一下就停）', async () => {
   const env = await loadTargets({ preload: hitPreload('ROCK', 'PUSHES') })
   env.run(`
