@@ -174,8 +174,10 @@ test('CHOP-4：源码层面确认连砍机制在（hold_control + 复用 Buffere
   assert.match(workFn, /not busy\(p\)/, '兜底：不忙时自己重推')
   assert.match(workFn, /j\.data\.hits/, '要数砍了几下（防止无限空砍）')
   // 顺序：先判"目标倒没倒"，再判忙不忙（引擎连砍时人物一直 busy）
-  const doneIdx = workFn.indexOf('work_done(target, def.action)')
-  const busyIdx = workFn.indexOf('not busy(p)')
+  // 判顺序前先剥掉注释行 —— 否则注释里提到 `not busy(p)` 会把 indexOf 骗到前面去
+  const workCode = workFn.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
+  const doneIdx = workCode.indexOf('work_done(target, def.action)')
+  const busyIdx = workCode.indexOf('not busy(p)')
   assert.ok(doneIdx > 0 && busyIdx > doneIdx, '必须先判目标倒没倒，再判忙不忙')
 })
 
@@ -495,6 +497,115 @@ test('CHOP-12（INTEGRATION）：hold_control 必须写数字 0，不能写布�
   assert.equal(val, '0', '引擎自己的约定：0 表示按住')
   assert.equal(after, '0', '过一遍引擎倒计时后仍应是 0（说明算术没抛错）')
   assert.equal(released, 'nil', '松开必须是 nil（和 OnRemoteStopControl 一致）')
+})
+
+test('CHOP-13（INTEGRATION）：忙的时候**不许重推**（重推会 Clear 掉走路/挥砍）', async () => {
+  // 真机 bug（2026-11-17）：那段"每 0.4 秒兜底重推"原来是**无条件**的，
+  // 而 `loco:PushAction` 第一件事是 `self:Clear()` —— 每 0.4 秒就把正在走的寻路、
+  // 正在演的挥砍取消一次，人杵在原地、砍得极慢（实测一棵桦栗树砍了 14 秒）。
+  //
+  // 唯一正确的门是 `not busy(p)`：走路时 sg 带 `moving` 标签且 `GetBufferedAction()` 非 nil，
+  // busy 就是 true，所以"走路中不重推"已经由它保证。
+  // （曾经额外加过 `tiles <= 2.0` 的距离门，但 start 允许到 2.5 格 →
+  //   2.0~2.5 格成死区，推一次后没人驱动。真机实测踩到。）
+  const env = await loadTargets({ preload: `
+    PUSHES = 0
+    local real_pa = PLAYER.components.locomotor.PushAction
+    PLAYER.components.locomotor.PushAction = function(self, ba, run)
+      PUSHES = PUSHES + 1
+      return real_pa(self, ba, run)
+    end
+  ` })
+  env.run(`
+    TREE = (function()
+      local e = mkent({ prefab = "evergreen", guid = 601, x = 4, z = 0, work = "CHOP" })
+      local w = { action = { id = "CHOP" }, workleft = 99 }
+      e.components.workable = w
+      return e
+    end)()
+    WORLD = { TREE }
+    ${axeLua}
+  `)
+  env.buildNearby()
+  env.run(`
+    Whale.actions.Start("chop", { target_kind = "tree" }, "c-busy", { target = TREE })
+    Whale.actions.Tick()          -- start：这一次 push 是合法的首次下发
+    -- ① 模拟"正在走路/正在演动画"：有 buffered_action → busy = true
+    PLAYER.buffered_action = { action = { id = "WALKTO" } }
+    local before = PUSHES
+    for i = 1, 6 do
+      NOW = NOW + 0.6
+      Whale.actions.Tick()
+      if Whale.actions.Current() == nil then break end
+    end
+    BUSY_PUSHES = PUSHES - before
+    HELD_WHILE_BUSY = tostring(PLAYER.components.playercontroller.remote_controls[GLOBAL.CONTROL_ACTION] ~= nil)
+  `)
+  assert.equal(env.get('BUSY_PUSHES'), '0',
+    '忙的时候（走路/挥砍中）绝对不该重推 —— 每推一次都会 Clear 掉当前动作')
+  assert.equal(env.get('HELD_WHILE_BUSY'), 'false', '忙的时候也不该去开"按住动作键"')
+
+  // ② 手空下来（这一下演完了）→ 这时才允许重推 + 打开按住
+  env.run(`
+    PLAYER.buffered_action = nil
+    local before = PUSHES
+    for i = 1, 6 do
+      NOW = NOW + 0.6
+      Whale.actions.Tick()
+      if Whale.actions.Current() == nil then break end
+    end
+    IDLE_PUSHES = PUSHES - before
+    HELD_IDLE = tostring(PLAYER.components.playercontroller.remote_controls[GLOBAL.CONTROL_ACTION] ~= nil)
+  `)
+  assert.ok(Number(env.get('IDLE_PUSHES')) >= 1, '手空下来后应该继续重推（连砍兜底）')
+  assert.equal(env.get('HELD_IDLE'), 'true', '手空下来后才打开"按住动作键"，让引擎自己连砍')
+})
+
+test('CHOP-14（INTEGRATION）：起手阶段（引擎还没跑起来）**不许重推** —— 这就是"停几秒"的根因', async () => {
+  // 用户实测原话："走到第一颗树前停了几秒，砍一下后会顿一下，后边呢是连砍"。
+  // 从我们 `push` 到引擎真的把动作跑起来之间，`busy(p)` 仍然是 false，
+  // 若无条件重推，就会每 0.4 秒用 `loco:PushAction` 里的 `self:Clear()`
+  // 把刚排上队的动作取消重排 → 起手停滞。所以必须"见过引擎忙"之后才允许重推。
+  const env = await loadTargets({ preload: hitPreload('TREE', 'PUSHES') })
+  env.run(`
+    TREE = (function()
+      local e = mkent({ prefab = "evergreen", guid = 601, x = 4, z = 0, work = "CHOP" })
+      e.components.workable = { action = { id = "CHOP" }, workleft = 99 }
+      return e
+    end)()
+    WORLD = { TREE }
+    ${axeLua}
+  `)
+  env.buildNearby()
+  env.run(`
+    Whale.actions.Start("chop", { target_kind = "tree" }, "c-fresh", { target = TREE })
+    Whale.actions.Tick()               -- start：这一次 push 是合法的首次下发
+    local before = PUSHES
+    -- 引擎还没跑起来（busy 一直 false），时间只走 1.8 秒，小于 2.5 秒兜底宽限
+    for i = 1, 3 do
+      NOW = NOW + 0.6
+      Whale.actions.Tick()
+      if Whale.actions.Current() == nil then break end
+    end
+    GRACE_PUSHES = PUSHES - before
+    HELD_IN_GRACE = tostring(PLAYER.components.playercontroller.remote_controls[GLOBAL.CONTROL_ACTION] ~= nil)
+  `)
+  assert.equal(env.get('GRACE_PUSHES'), '0',
+    '起手阶段不该重推（每推一次都会把排队中的动作取消重排 → 就是那个"停几秒"）')
+  assert.equal(env.get('HELD_IN_GRACE'), 'false', '起手阶段也不该打开"按住动作键"')
+
+  // 但宽限不能变成死锁：超过 2.5 秒还起不来，要能自己救一次
+  env.run(`
+    local before = PUSHES
+    for i = 1, 4 do
+      NOW = NOW + 0.6
+      Whale.actions.Tick()
+      if Whale.actions.Current() == nil then break end
+    end
+    AFTER_GRACE_PUSHES = PUSHES - before
+  `)
+  assert.ok(Number(env.get('AFTER_GRACE_PUSHES')) >= 1,
+    '超过宽限还起不来时应该兜底重推一次（否则第一次 push 被静默丢掉就永远不动了）')
 })
 
 test('CHOP-5（INTEGRATION）：挖矿走同一条链，连挖到碎（不能挖一下就停）', async () => {

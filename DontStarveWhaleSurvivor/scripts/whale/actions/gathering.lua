@@ -853,6 +853,11 @@ end
 ---   这里唯一的等待来自引擎本身：一次只能演一个 PICKUP（`loco:PushAction` 会清掉上一个），
 ---   所以每 tick 推一个、捡到没有为止。
 local function work_loot_step(j, p, def)
+    -- 兜底：进 loot 前一定要松开"按住动作键"，否则人一直 busy，一件都捡不动。
+    if j.data.hold_on then
+        hold_control(p, false)
+        j.data.hold_on = false
+    end
     local rules = Whale ~= nil and Whale.pickuprules or nil
     local picked_now = false
     if rules ~= nil then
@@ -906,6 +911,13 @@ local function work_by_ref(j, p, target, kind)
     if target == nil or not target:IsValid() then
         -- 已经动过手、目标却没了 = 被我们干掉了（岩石挖碎会消失，树倒变树桩）
         if j.data ~= nil and j.data.pushed ~= nil then
+            -- ★ 一定要松手：这条路径以前**没有** hold_control(p, false)，
+            --   于是"按住动作键"会一直留着（岩石挖碎就是走这里），
+            --   loot 阶段因为人一直 busy 而捡不动东西。
+            if j.data.hold_on then
+                hold_control(p, false)
+                j.data.hold_on = false
+            end
             -- 也别直接 done：先进 loot 把脚边掉的东西捡了（上面已处理 loot 步骤）
             if j.data.loot_until == nil then
                 j.data.loot_until = U.now() + 3.5   -- 只是兜底上限（背包满/够不着时别拖住一轮动作）
@@ -968,11 +980,21 @@ local function work_by_ref(j, p, target, kind)
         j.data.hits = 1
         j.data.pushed = U.now()
         j.data.last_push = j.data.pushed
+        j.data.hold_on = false
+        -- ★ 引擎有没有**真的把动作跑起来过**。见 acting 段：起手阶段绝不能重推。
+        j.data.ever_busy = false
+        -- 【计时探针】引擎时间戳，用来区分"我们推得慢"还是"引擎起手慢"（verbose 才输出）
+        j.data.t_push = U.now()
+        j.data.wl0 = U.try(function() return target.components.workable.workleft end)
+        j.data.log_busy = false
+        j.data.log_hit = false
         -- ★ TARGET-REFRESH：这里原来只 push **一次**就干等 —— 树要 4~5 下才倒、石头要挖好几下，
-        --   于是永远等不到 work_done，最后 120 秒超时（真机 `chop_nearest` 就是这么失败的）。
-        --   现在照 `job_work` 的老办法：把"按住动作键"置上，让引擎自己在状态机里重推同一个动作
-        --   （官方"按住空格/F"连砍就是这条机制，实测 push 1 次能连砍到倒）。
-        hold_control(p, true)
+        --   于是永远等不到 work_done，最后 120 秒超时。
+        --
+        -- ★★ 真机 bug（2026-11-17，用户："砍树/砸矿都是走到附近，然后停几秒再开始"）：
+        --   "按住动作键"（hold_control）**不能在这里就开**。此刻人还在往目标走，
+        --   一开引擎的"按住"逻辑就会和我们的动作抢，反而拖慢起手。
+        --   改成"手空下来之后再开"（见 acting 段的 not busy(p) 判断）。
         j.step = "acting"
         return "run"
     end
@@ -986,6 +1008,7 @@ local function work_by_ref(j, p, target, kind)
         if done_now then
             -- 目标倒了：立刻松手，别一路砍到下一棵
             hold_control(p, false)
+            j.data.hold_on = false
             j.data.done_at = j.data.done_at or U.now()
             -- ★ TARGET-REFRESH：砍倒 ≠ 木头到手。原生会把 log/松果/石头**掉在脚下**，
             --   真机踩到：树砍倒了、木头就在 0.3 格外，但回执只说"砍了常青树"，
@@ -1038,12 +1061,50 @@ local function work_by_ref(j, p, target, kind)
                     hands ~= nil and U.describe_item(hands) or "空手")
             end
         end
-        -- ★ TARGET-REFRESH：连砍兜底（照 `job_work` 的节奏，它真机验证过）。
-        --   真机踩到：`hold_control` 在这个构建里不足以让引擎自己连推，
-        --   于是"推一次 → 站着不动 → 8 秒后报推不动"。job_work 的做法是**主动重推**。
-        --   这里每 0.4 秒重推一次（复用同一个 ba，重建会打断 sg 状态机）。
+        -- ★★ 真机 bug（2026-11-17）：这段原来是**无条件**每 0.4 秒重推一次。
+        --   而 `loco:PushAction` 第一件事是 `self:Clear()` —— 于是每次重推都会
+        --   **把正在走的寻路、正在演的挥砍取消掉**，人杵在原地、砍得极慢
+        --   （实测：装备好到第一次挥砍停了 ~2 秒，一棵桦栗树砍了 14 秒）。
+        --   `job_work` 的重推是在"不忙"分支里的，搬过来时漏了这个门。
+        --   为什么**只**需要 `not busy(p)` 这一道门（不需要再判距离）：
+        --   · 走路时 sg 带 `moving` 标签、`GetBufferedAction()` 也非 nil → busy = true，
+        --     所以"走路中绝不重推"已经由它保证，不会取消寻路；
+        --   · 曾经额外加过 `tiles <= 2.0` 的门，但 start 允许到 2.5 格，
+        --     2.0~2.5 格就成了**死区**：推一次之后再没人驱动（真机实测踩到）。
+        --   "按住动作键"同样只在"手空下来"之后才开，避免它和寻路抢。
+        -- ★★ 真机 bug（2026-11-17，用户："走到第一棵树前停了几秒，砍一下后会顿一下，
+        --   后边才是连砍"）：起手阶段**绝不能重推**。
+        --   从我们 `push` 到引擎真的把动作跑起来之间，`busy(p)` 仍然是 false，
+        --   于是 0.4 秒后我们就重推一次 → `loco:PushAction` 的 `self:Clear()`
+        --   把刚排上队的动作取消重排，反复几次才终于起来。这就是"起手停几秒"。
+        --   一旦引擎跑起来（busy=true）重推就只在动作间隙补位，所以之后连砍是正常的。
+        --
+        --   所以：只有**见过引擎忙**（说明动作真的跑起来过）之后才允许重推；
+        --   另留一个 2.5 秒兜底，万一第一次 push 被静默丢掉还能救一次。
+        if busy(p) then
+            j.data.ever_busy = true
+            if not j.data.log_busy and j.data.t_push ~= nil then
+                j.data.log_busy = true
+                U.log(string.format("[timing] %s：push→引擎开始演 %.2fs", tostring(kind), U.now() - j.data.t_push))
+            end
+        end
+        -- 第一次 workleft 下降 = 真的砍中了（不是"动画开始"，是"伤害落地"）
+        if not j.data.log_hit and j.data.wl0 ~= nil and j.data.t_push ~= nil then
+            local left_now = U.try(function() return target.components.workable.workleft end)
+            if type(left_now) == "number" and left_now < j.data.wl0 then
+                j.data.log_hit = true
+                U.log(string.format("[timing] %s：push→第一次砍中(workleft %s→%s) %.2fs",
+                    tostring(kind), tostring(j.data.wl0), tostring(left_now), U.now() - j.data.t_push))
+            end
+        end
         local now = U.now()
-        if (now - (j.data.last_push or 0) > 0.4) then
+        local may_repush = j.data.ever_busy
+            or (now - (j.data.pushed or now) > 2.5)
+        if may_repush and not j.data.hold_on and not busy(p) then
+            hold_control(p, true)
+            j.data.hold_on = true
+        end
+        if may_repush and not busy(p) and (now - (j.data.last_push or 0) > 0.4) then
             local ba = j.data.ba
             if ba ~= nil then
                 -- 复用同一个动作：清掉上一次的收尾状态，允许重放
