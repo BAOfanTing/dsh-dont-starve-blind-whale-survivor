@@ -45,10 +45,13 @@ function parseLuaRecipes(text) {
 
 const THE_FIVE = ['rope', 'boards', 'backpack', 'spear', 'armorwood']
 const THE_FOUR = ['axe', 'pickaxe', 'torch', 'flowerhat']
+/** TENT（2026-11-17）：炼金引擎的材料，也是第一阶段科技 */
+const THE_TWO = ['cutstone', 'transistor']
+const SCIENCE_ONE = [...THE_FIVE, ...THE_TWO]
 
-test('RP-1：第一阶段科技五个配方在 Node 与 Lua **两边同时**开放', () => {
+test('RP-1：第一阶段科技配方在 Node 与 Lua **两边同时**开放', () => {
   const lua = parseLuaRecipes(craftrules)
-  for (const name of THE_FIVE) {
+  for (const name of SCIENCE_ONE) {
     assert.ok(RECIPE_WHITELIST[name], `Node 白名单缺少 ${name}`)
     assert.ok(lua[name], `Lua 白名单缺少 ${name}`)
   }
@@ -57,8 +60,8 @@ test('RP-1：第一阶段科技五个配方在 Node 与 Lua **两边同时**开�
     assert.ok(lua[name], `Lua 白名单缺少 ${name}`)
   }
   // 不能"顺手"多开别的配方
-  assert.deepEqual(Object.keys(RECIPE_WHITELIST).sort(), [...THE_FOUR, ...THE_FIVE].sort())
-  assert.deepEqual(Object.keys(lua).sort(), [...THE_FOUR, ...THE_FIVE].sort())
+  assert.deepEqual(Object.keys(RECIPE_WHITELIST).sort(), [...THE_FOUR, ...SCIENCE_ONE].sort())
+  assert.deepEqual(Object.keys(lua).sort(), [...THE_FOUR, ...SCIENCE_ONE].sort())
 })
 
 test('RP-2：配方名/中文名/科技阶段/兜底材料逐条一致（两边不能各抄一套数字）', () => {
@@ -71,7 +74,7 @@ test('RP-2：配方名/中文名/科技阶段/兜底材料逐条一致（两边�
     assert.deepEqual(other.ingredients, def.ingredients, `${name} 的兜底材料两边不一致`)
   }
   // 科技阶段必须和原版 recipes.lua 对得上（SCIENCE_ONE vs NONE）
-  for (const name of THE_FIVE) assert.equal(RECIPE_WHITELIST[name].tech, 'SCIENCE_ONE', `${name} 需要科学机器`)
+  for (const name of SCIENCE_ONE) assert.equal(RECIPE_WHITELIST[name].tech, 'SCIENCE_ONE', `${name} 需要科学机器`)
   for (const name of THE_FOUR) assert.equal(RECIPE_WHITELIST[name].tech, 'NONE', `${name} 不需要科技`)
 })
 

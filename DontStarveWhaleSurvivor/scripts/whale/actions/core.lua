@@ -349,6 +349,10 @@ local RECIPE_ALIASES = {
     treasurechest = "treasurechest",
     sciencemachine = "researchlab",
     researchlab = "researchlab",
+    -- TENT（2026-11-17）：炼金引擎（原生名 researchlab2）+ 帐篷
+    alchemyengine = "researchlab2",
+    researchlab2 = "researchlab2",
+    tent = "tent",
 }
 A.RECIPE_ALIASES = RECIPE_ALIASES
 

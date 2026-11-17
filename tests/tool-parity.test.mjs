@@ -53,14 +53,15 @@ test('模型可见的动作 === dispatcher 白名单（不多不少）', () => {
     '工具表暴露的动作必须和 dispatcher 放行的白名单完全一致')
   // SURVIVAL-01：新增 gather / eat / craft / equip
   // TARGET-REFRESH：新增 pickup_nearest / pickup_food / harvest_nearest / chop_nearest / mine_nearest
-  assert.deepEqual([...EXPOSED].sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
+  assert.deepEqual([...EXPOSED].sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'sleep', 'stop', 'unequip', 'use', 'wait'])
 })
 
 test('未开放的动作一律不在工具表里（模型看不到，也就不会去点）', () => {
   // SURVIVAL-01：gather / eat / craft / equip 已开放，从"未开放"名单里移除
   // SURVIVAL-06：build/recipes/lookup/probe 已开放
+  // TENT：sleep 已开放（JOBS.sleep 早就有，只是没接上工具表）
   const forbidden = ['pick', 'make_fire', 'add_fuel', 'heal',
-    'sleep', 'act', 'list_actions', 'list_recipes', 'store', 'take', 'go_to',
+    'act', 'list_actions', 'list_recipes', 'store', 'take', 'go_to',
     'chop_until', 'cook_meal', 'night_watch']
   const leaked = forbidden.filter((n) => EXPOSED.has(n))
   assert.deepEqual(leaked, [], `这些动作还没开放，却仍然暴露给模型：${leaked.join('、')}`)

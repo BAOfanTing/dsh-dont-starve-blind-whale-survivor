@@ -91,13 +91,13 @@ test('tools/list 只暴露 3 个本地工具 + 8 个白名单动作，且名字�
   for (const want of ['get_state', 'get_guide', 'update_notes', 'move_to', 'stop', 'pickup', 'harvest',
     'gather', 'eat', 'craft', 'equip', 'gather_area', 'seek',
     'chop', 'mine', 'dig', 'hammer', 'attack', 'kill', 'wait', 'drop',
-    'unequip', 'say', 'fuel', 'use', 'inspect',
+    'unequip', 'say', 'fuel', 'use', 'inspect', 'sleep',
     'container_take', 'container_put', 'give', 'cook',
     'build', 'recipes', 'lookup', 'probe']) {
     assert.ok(names.includes(want), `缺少工具 ${want}`)
   }
   assert.equal(names.length, toolList().length)
-  assert.equal(names.length, 39, '模型可见工具应该是 39 个（3 本地 + 36 动作；TARGET-REFRESH 加了 5 个实时目标选择）')
+  assert.equal(names.length, 40, '模型可见工具应该是 40 个（3 本地 + 37 动作；TARGET-REFRESH 加了 5 个实时目标选择，TENT 加了 sleep）')
   assert.equal(new Set(names).size, names.length, '工具名不能重复（M2.2.1 修过 pickup/harvest 重复注册）')
   // 未开放的动作不再出现在工具表里（模型只看见 dispatcher 白名单里的动作）
   for (const gone of ['pick', 'act', 'heal', 'night_watch', 'store']) {

@@ -1114,28 +1114,30 @@ end
 local function reflex_forage(p)
     local hp = health_percent(p)
     local hunger = hunger_percent(p)
-    local need_food = (hunger ~= nil and hunger < FORAGE_AHEAD) or (hp ~= nil and hp < 0.5)
+    local is_wolfgang = (p ~= nil and p.prefab == "wolfgang")
+    local forage_limit = is_wolfgang and 0.55 or FORAGE_AHEAD
+    local need_food = (hunger ~= nil and hunger < forage_limit) or (hp ~= nil and hp < 0.5)
     if not need_food then return false end
     local rules = Whale ~= nil and Whale.eatrules or nil
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
     if rules ~= nil and inv ~= nil and rules.PickBest(inv) ~= nil then return false end
     if not cooldown_ok("forage") then return false end
 
-    local plant = ready_food_plant(p, 12)
+    local plant = ready_food_plant(p, 16)
     if plant ~= nil and push_harvest(p, plant) then
         mark("forage")
         local lbl = U.pretty(plant) or "食物"
         say(p, "forage", "没吃的了，先采最近的" .. lbl)
         return true
     end
-    local food = ready_ground_food(p, 8)
+    local food = ready_ground_food(p, 14)
     if food ~= nil and push_pickup(p, food) then
         mark("forage")
         say(p, "forage", "先把地上的吃的捡起来")
         return true
     end
     -- 附近没有可采/可捡的食物：同样上报，而不是一直空转
-    report_need("food", "no_food_nearby", { radius = 12 })
+    report_need("food", "no_food_nearby", { radius = 16 })
     mark_fail("forage", 4)
     return false
 end
@@ -1174,7 +1176,7 @@ local function reflex_sanity(p)
     if phase == "dusk" and active_threat(p, 12) ~= nil then
         return false
     end
-    local flower = exact_ready(p, "flower", 10)
+    local flower = exact_ready(p, "flower", 16)
     if flower ~= nil and push_pick(p, flower) then
         mark("sanity")
         say(p, "sanity", "理智太低了，先补一点")
@@ -1439,8 +1441,10 @@ end
 --- 区分真正紧急饥饿与普通饥饿（普通饥饿只通知 Plan，绝不申请紧急抢占）
 local function is_critical_hunger(p, hunger)
     if hunger == nil then return false end
-    -- 70/200 = 35% 属于普通饥饿，绝不触发紧急抢占
-    if hunger > 0.30 then return false end
+    -- 70/200 = 35% 属于普通饥饿，绝不触发紧急抢占；
+    -- 沃尔夫冈（wolfgang）饱食流失快 1.5~3 倍，40% 就属于临界紧急
+    local limit = (p ~= nil and p.prefab == "wolfgang") and 0.40 or 0.30
+    if hunger > limit then return false end
     return true
 end
 

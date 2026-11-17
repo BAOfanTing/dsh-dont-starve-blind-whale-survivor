@@ -185,8 +185,9 @@ const dispatch = (h, tool = 'stop', args = {}, owner = 'f8_agent') =>
 test('dispatcher-1 未开放的动作：拒绝，且不写任何命令', async () => {
   const h = makeHarness()
   try {
-    // SURVIVAL-06：build/recipes/lookup/probe 也开放了；剩下这些**从来不存在**的动作名
-    for (const name of ['pick', 'act', 'heal', 'night_watch', 'sleep', 'store']) {
+    // SURVIVAL-06：build/recipes/lookup/probe 也开放了；TENT：sleep 也开放了；
+    // 剩下这些**从来不存在**的动作名
+    for (const name of ['pick', 'act', 'heal', 'night_watch', 'store']) {
       const r = await dispatch(h, name)
       assert.equal(r.status, 'rejected')
       assert.equal(r.reason, 'action_not_allowed')
@@ -321,7 +322,7 @@ test('dispatcher-10 F8 持有租约时，MCP 的请求被拒', async () => {
 
 test('dispatcher-11 白名单：move_to/stop 是 R1，pickup/harvest 是 R2；规格里有 riskLevel', () => {
   // SURVIVAL-01：新增 gather / eat / craft / equip
-  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'stop', 'unequip', 'use', 'wait'])
+  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'sleep', 'stop', 'unequip', 'use', 'wait'])
   assert.equal(ACTION_SPECS.move_to.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.stop.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.pickup.riskLevel, 'R2')

@@ -223,7 +223,7 @@ G.ACTIONS = {
             food = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32 },
         },
     },
-    -- craft：只做白名单里的 3 个工具。recipe 必填且必须是白名单里的名字
+    -- craft：只做白名单里的工具/材料。recipe 必填且必须是白名单里的名字
     craft = {
         risk = "R2",
         required_components = { "builder", "inventory" },
@@ -237,6 +237,17 @@ G.ACTIONS = {
         required_components = { "inventory" },
         args = {
             item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
+        },
+    },
+    -- ═══════════ TENT（2026-11-17）：睡觉 ═══════════
+    -- sleep：在帐篷 / 睡袋里睡一觉（回血回理智，掉饥饿）。
+    -- Lua 侧 JOBS.sleep 早就有实现（找附近的 sleepingbag 实体或背包里的睡袋 → 推 SLEEPIN），
+    -- 这里把它开放给模型。不需要 #N 引用：服务端自己在 radius 内找最近的帐篷。
+    sleep = {
+        risk = "R2",
+        required_components = { "locomotor", "health", "hunger", "inventory" },
+        args = {
+            radius = { type = "number", min = 2, max = 40 },
         },
     },
     -- ═══════════ SURVIVAL-02 ═══════════
@@ -1068,12 +1079,8 @@ function G.validate(cmd)
             -- 兜底：`CanBuild` 可能因为临时科技还没刷新而误报 false，而人其实就站在机器旁边。
             -- 身边确实有 prototyper 就不拦 —— 交给 `MakeRecipe` 定（它才是权威）。
             if not cr.HasNearbyPrototyper(actor, 8) then
-                local hint
-                if cr.NeedsScience(recipe) then
-                    hint = recipe .. " 是第一阶段科技配方：先 build sciencemachine，站到它旁边再做"
-                else
-                    hint = recipe .. " 还没解锁"
-                end
+                -- 提示语按科技阶段走 craftrules.TechHint（SCIENCE_ONE → 科学机器，SCIENCE_TWO → 炼金引擎）
+                local hint = cr.TechHint ~= nil and cr.TechHint(recipe) or (recipe .. " 还没解锁")
                 return false, "recipe_locked", { hint = hint }
             end
         end
@@ -1104,6 +1111,10 @@ function G.validate(cmd)
             cookpot = true,
             sciencemachine = true,
             researchlab = true,
+            -- TENT（2026-11-17）：炼金引擎 + 帐篷
+            alchemyengine = true,
+            researchlab2 = true,
+            tent = true,
         }
         local want = cmd.args.recipe
         if want == nil or BUILD_OK[tostring(want)] ~= true then

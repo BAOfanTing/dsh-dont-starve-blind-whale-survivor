@@ -468,7 +468,7 @@ JOBS.sleep = function(j, p)
             end)
         end
         if bag == nil and target == nil then
-            return "fail", "附近没有帐篷/睡袋（饥荒里没有“睡到天亮”这种通用办法：要有帐篷、睡袋或者床）"
+            return "fail", "no_sleepingbag: 附近没有帐篷/睡袋（饥荒里没有\"睡到天亮\"这种通用办法：要有帐篷、睡袋或者床）"
         end
         if busy(p) then
             if U.now() - j.t0 > 30 then return "fail", "忙着，没睡成" end

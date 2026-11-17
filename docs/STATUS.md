@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：TARGET-REFRESH (Mod 0.39.0 / 插件 0.10.0)｜修复目标引用过期（23 次 stale_snapshot）与食物获取阻塞｜新增实时目标选择 + 稳定句柄 + 熔断 + 第一阶段科技 + 世界观记忆隔离｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：TENT (Mod 0.41.0 / 插件 0.11.0)｜开放帐篷链（科学机器 → 炼金引擎 → 帐篷）与 `sleep`｜三处白名单（工具 enum / 插件校验 / 游戏内 Lua Guard）同步放开，测试 `recipe-parity`/`science-chain`/`tool-parity` 盯一致性｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -8,8 +8,8 @@
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.40.2** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
-| `package.json` | **0.10.0** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.41.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
+| `package.json` | **0.11.0** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号描述两个交付物：模组装进游戏 `mods/`，插件装进 DSH。给 AI 报告的状态以模组版本为准。
 
@@ -96,11 +96,45 @@ probe researchlab            ✅ 20 格内有 1 个 researchlab：(47,-40) 0格 
 
 测试从 799 → **824**（新增 `chop-chain` 11 例、`science-chain` 14 例等）。
 
+### 1.9 帐篷链 + sleep（0.41.0）
+
+用户要求"造出帐篷睡觉"。真机一查，卡点**不在游戏里，在三处白名单**：
+
+| 层 | 文件 | 原来的上限 |
+|---|---|---|
+| 工具 enum | `lib/tools.js` | `build` 只有 7 个（campfire…researchlab），`craft` 只有 9 个 |
+| 插件校验 | `lib/actions/specs/crafting.js` | `BUILDABLE_RECIPES` / `RECIPE_WHITELIST` 同上 |
+| 游戏内 Lua | `guard.lua` 的 `BUILD_OK`、`actions/crafting.lua` 的 `BUILD_ALLOWED`、`craftrules.lua` 的 `C.RECIPES` | 同上 |
+
+于是 `build tent` 在 Node 侧就被 `bad_value:recipe` 拒掉 —— 材料攒得再多也走不到游戏里。
+另外 `sleep` 一直没接上工具表（`JOBS.sleep` 在 `survival.lua` 里早就写好了：找附近
+`components.sleepingbag` 的实体/背包睡袋 → `ACTIONS.SLEEPIN`），所以"造好帐篷也睡不进去"。
+
+本轮开放（三层同时改，测试 `recipe-parity` / `science-chain` / `tool-parity` 盯一致性）：
+
+```
+build  sciencemachine          4 log + 4 rocks + 1 goldnugget
+craft  boards ×4 cutstone ×2 transistor ×2     ← 要站在科学机器旁边
+build  researchlab2（炼金引擎）  boards 4 + cutstone 2 + transistor 2
+craft  rope ×3 twigs ×4                        ← 要站在炼金引擎旁边
+build  tent（帐篷）             silk 6 + twigs 4 + rope 3
+sleep                          在帐篷/睡袋里睡一觉（回血回理智）
+```
+
+- 别名：`alchemyengine` → `researchlab2`（`core.lua` / `crafting.lua` 的 `RECIPE_ALIASES` 同步）。
+- 科技提示按阶段分流：新增 `craftrules.TechHint`，`SCIENCE_TWO` 会提示"先造炼金引擎"，
+  不再是笼统的"还没解锁"。
+- `sleep` 的核对**不看 Lua 回执**：要么血/理智真的涨了，要么时间真的往前走了（跨时段/跨天）。
+- `silk` 只能打蜘蛛掉；`seek spiderden` 找巢。
+- 生存优先与角色特异性优化：沃尔夫冈饥饿阈值前移（55%提前进食、70%断粮强制存粮）；断粮且饥饿下降时强行拦截砍树敲矿，转为寻食；foodSource 较远目标给出 `move_to` 坐标提示；Reflex 寻粮与采花检索半径扩大至 16 格。
+
+**未做**：`pick` / `heal` / `make_fire` 仍未开放；帐篷的多人/耐久语义没有额外处理（原生 `sleepingbag` 自己管）。
+
 ---
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（39 个 = 3 本地 + 36 动作）
+### 2.1 模型可见的工具（40 个 = 3 本地 + 37 动作）
 
 > 权威清单：`lib/actions/specs/*.js` 的 `ACTION_SPECS`。`OPEN_ACTIONS`、`TOOLS`、`RULES` 均从它派生，有 `tool-parity` / `prompt-parity` 测试保障。
 
@@ -120,16 +154,17 @@ probe researchlab            ✅ 20 格内有 1 个 researchlab：(47,-40) 0格 
 | `harvest` | 动作 R2 | 采摘成熟食物植物（`#N`+快照，或稳定句柄） |
 | `gather` | 动作 R2 | 采草丛 `grass`、树苗 `sapling`、花 `flower` |
 | `eat` | 动作 R1 | 吃背包里**此刻真实存在**的白名单食物（不填 = 服务端挑最该吃的） |
-| `craft` | 动作 R2 | `torch`/`axe`/`pickaxe`/`flowerhat` + **第一阶段科技** `rope`/`boards`/`backpack`/`spear`/`armorwood` |
+| `craft` | 动作 R2 | `torch`/`axe`/`pickaxe`/`flowerhat` + **第一阶段科技** `rope`/`boards`/`backpack`/`spear`/`armorwood`/`cutstone`/`transistor` |
 | `equip` | 动作 R1 | 把 `torch` / `axe` / `pickaxe` 等拿在手里 |
 | `gather_area` | 动作 R2 | 一次采完附近能采的草/树苗/浆果/胡萝卜 |
 | `seek` | 动作 R2 | 8 方向 × 多环走出去找东西，只报位置、不自动动手 |
 | `chop` / `mine` / `dig` / `hammer` | 动作 R2 | 砍树 / 挖矿 / 铲草皮树桩 / 拆建筑（需要对应工具） |
 | `attack` / `kill` | 动作 R2 | 打几下 / 打到死 |
 | `wait` / `drop` | 动作 R1 | 等一会儿 / 丢背包里的东西 |
+| `sleep` | 动作 R2 | 在帐篷/睡袋里睡觉（**不用引用**，服务端在 radius 内找最近的帐篷；核对以血/理智上涨或时间真的前进为准） |
 | `unequip` / `fuel` / `use` / `inspect` / `say` | 动作 R1/R2 | 脱装备 / 添柴 / 通用交互 / 查目标详情 / 聊天 |
 | `container_take` / `container_put` / `give` / `cook` | 动作 R2 | 容器取放 / 给予 / 锅料理 |
-| `build` / `recipes` / `lookup` / `probe` | 动作 R2/R1 | 摆建筑（白名单 5 种，**必须看到建筑实体才算成功**）/ 查配方 / 查资料 / 探附近 |
+| `build` / `recipes` / `lookup` / `probe` | 动作 R2/R1 | 摆建筑（白名单 10 种：营火/火坑/箱子/锅/科学机器/炼金引擎/帐篷等，**必须看到建筑实体才算成功**）/ 查配方 / 查资料 / 探附近 |
 
 ### 2.2 非模型能力（系统底座）
 

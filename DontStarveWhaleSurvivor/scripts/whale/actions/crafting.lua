@@ -33,6 +33,10 @@ local RECIPE_ALIASES = {
     treasurechest = "treasurechest",
     sciencemachine = "researchlab",
     researchlab = "researchlab",
+    -- TENT（2026-11-17）：炼金引擎 / 帐篷
+    alchemyengine = "researchlab2",
+    researchlab2 = "researchlab2",
+    tent = "tent",
 }
 
 --- 这块地能不能放下这个东西
@@ -76,7 +80,8 @@ local function job_build(j, p)
         if knows0 == false
             and not (craftrules ~= nil and craftrules.HasNearbyPrototyper ~= nil
                 and craftrules.HasNearbyPrototyper(p, 8)) then
-            return "fail", string.format("%s 还不会做（要先解锁）", key)
+            return "fail", string.format("%s 还不会做（要先解锁）",
+                craftrules ~= nil and craftrules.TechHint ~= nil and craftrules.TechHint(key) or key)
         end
         local missing = missing_ingredients(p, recipe)
         if missing ~= nil then
@@ -139,6 +144,14 @@ local BUILD_ALLOWED = {
     sciencemachine = true,-- 科学机器：**log 4** + rocks 4 + goldnugget 1，TECH.NONE（原生配方名 researchlab）
                           -- 注意是原木 log，不是木板 boards（boards 要 TECH.SCIENCE_ONE，得先有机器）
     researchlab = true,
+    -- ── TENT（2026-11-17）：帐篷链 ──
+    -- 炼金引擎（原生配方名 researchlab2）：boards 4 + cutstone 2 + transistor 2，TECH.SCIENCE_ONE
+    --   boards/cutstone/transistor 都要站在科学机器旁边做（craft 白名单里有）
+    alchemyengine = true,
+    researchlab2 = true,
+    -- 帐篷（原生配方名 tent）：silk 6 + twigs 4 + rope 3，TECH.SCIENCE_TWO
+    --   要站在炼金引擎旁边才能摆；摆好后用 sleep 睡觉
+    tent = true,
 }
 
 --- 放在地上：选点 → MakeRecipe → 用"附近同 prefab 数量变多"确认
@@ -147,7 +160,7 @@ local function build_by_ctx(j, p)
     local name = tostring(ctx.build_recipe or "")
     if name == "" then return "fail", "build 需要 recipe" end
     if BUILD_ALLOWED[name] ~= true then
-        return "fail", "recipe_not_allowed: 只能建 " .. "campfire/firepit/chest/cookpot/sciencemachine"
+        return "fail", "recipe_not_allowed: 只能建 " .. "campfire/firepit/chest/cookpot/sciencemachine/researchlab2/tent"
     end
     local builder = p.components ~= nil and p.components.builder or nil
     if builder == nil then return "fail", "no_builder: 这个角色不能制作" end
@@ -289,7 +302,8 @@ JOBS.craft = function(j, p)
             if knows == false then
                 -- 身边真有 prototyper 就不拦，交给下面 MakeRecipe 定（它才是权威）
                 if rules.HasNearbyPrototyper == nil or not rules.HasNearbyPrototyper(p, 8) then
-                    return "fail", "recipe_locked: 还不会做 " .. name .. "（需要先解锁；第一阶段的要先 build sciencemachine 并站在它旁边）"
+                    return "fail", "recipe_locked: 还不会做 " .. name .. "（"
+                        .. (rules.TechHint ~= nil and rules.TechHint(name) or "需要先解锁") .. "）"
                 end
             end
             local missing = rules.MissingIngredients(p, name)

@@ -360,6 +360,42 @@ test('PLAN-28：低耐久火把未补足前保护材料，白天手持时先收�
   assert.match(craft.next, /craft torch.*unequip/)
 })
 
+test('PLAN-29：沃尔夫冈饥饿流失快 —— 50%即提前进食，65%且断粮即触发存粮', () => {
+  const wolfgangEating = derivePlan(makeSnapshot({
+    actor: { prefab: 'wolfgang', name: '沃尔夫冈' },
+    hunger: 50,
+    items: ITEMS(['berries', 2]),
+  }))
+  assert.equal(wolfgangEating.goalId, 'eat', '沃尔夫冈 50% 饥饿应提前吃东西')
+
+  const wilsonEating = derivePlan(makeSnapshot({
+    actor: { prefab: 'wilson', name: '威尔逊' },
+    hunger: 50,
+    items: ITEMS(['berries', 2]),
+  }))
+  assert.notEqual(wilsonEating.goalId, 'eat', '威尔逊 50% 饥饿属于正常区间，不进食')
+
+  const wolfgangStock = derivePlan(makeSnapshot({
+    actor: { prefab: 'wolfgang', name: '沃尔夫冈' },
+    hunger: 65,
+    items: ITEMS(['torch', 1]),
+    buckets: {},
+  }))
+  assert.equal(wolfgangStock.goalId, 'stock_food', '沃尔夫冈断粮且饥饿 < 70% 必须触发存粮寻食')
+  assert.match(wolfgangStock.next, /seek/, '无现成食物时提示 seek 找食物')
+})
+
+test('PLAN-30：较远食物给出 move_to 坐标指引（避免直接盲调 nearest 导致 out_of_range）', () => {
+  const farBush = { ref: '#1', prefab: 'berrybush', label: '浆果丛', distance: 15, x: 80, z: -60, harvest_ready: true }
+  const plan = derivePlan(makeSnapshot({
+    hunger: 60,
+    buckets: { harvestables: [farBush] },
+  }))
+  assert.equal(plan.goalId, 'stock_food')
+  assert.match(plan.next, /move_to x=80 z=-60/, '应包含走过去的坐标提示')
+  assert.match(plan.next, /harvest_nearest/, '走近后再采摘')
+})
+
 test('PLAN-10：compact 只给一行，完整版带原因和下一步', () => {
   const plan = derivePlan(makeSnapshot({ phase: 'night', items: ITEMS(['cutgrass', 2], ['twigs', 2]) }))
   const compact = renderPlan(plan, { compact: true })

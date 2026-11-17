@@ -1,6 +1,6 @@
 {
   "name": "dsh-dont-starve-blind-whale-survivor",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "大肥鱼饿不死（Blind Whale Survivor）：让 DeepSeek 不靠画面玩《饥荒联机版》的 DSH 插件。自带饥荒 Lua 模组（自动装进 mods）、本机 MCP 服务器和文件桥；在插件页里调端口、游戏目录、额外要求、攻略，可选创建一个只让选中会话加载游戏工具的会话预设，或在所有会话里提供一个精简的 dst 入口工具。",
   "license": "MIT",
   "author": "大肥鱼",

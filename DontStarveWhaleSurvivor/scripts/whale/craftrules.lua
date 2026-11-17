@@ -28,13 +28,18 @@ local C = {}
 ---   backpack   cutgrass×4 + twigs×4                                TECH.SCIENCE_ONE
 ---   spear      twigs×2 + rope×1 + flint×1                          TECH.SCIENCE_ONE
 ---   armorwood  log×8 + rope×2                                     TECH.SCIENCE_ONE
+---   cutstone   rocks×3                                             TECH.SCIENCE_ONE（帐篷链：炼金引擎的材料）
+---   transistor goldnugget×2 + cutstone×1                           TECH.SCIENCE_ONE（同上）
 ---   axe        twigs×1 + flint×1                                   TECH.NONE
 ---   pickaxe    twigs×2 + flint×2                                   TECH.NONE
 ---   torch      cutgrass×2 + twigs×2                                TECH.NONE
 ---   flowerhat  petals×12                                          TECH.NONE
---- 注意：SCIENCE_ONE 那五个**不是**"不需要科技"，而是要站在科学机器旁边才能做 ——
+--- 注意：SCIENCE_ONE 那七个**不是**"不需要科技"，而是要站在科学机器旁边才能做 ——
 --- 这正是"第一阶段科技"的完整含义。科技条件由游戏自己判（builder:KnowsRecipe 会把
 --- 附近的 prototyper 折算成临时科技加成），我们**不复制一套 TECH 表**去猜，免得和游戏更新漂移。
+--- ★ TENT（2026-11-17）：cutstone / transistor 是**炼金引擎**（build researchlab2）的材料，
+---   炼金引擎又是**帐篷**（build tent）的前置。两个建筑本身在 BUILD_ALLOWED 里，
+---   帐篷的科技是 SCIENCE_TWO（要站在炼金引擎旁边），提示语由 C.TechHint 给。
 C.RECIPES = {
     axe = { ingredients = { twigs = 1, flint = 1 }, label = "斧头", tech = "NONE" },
     pickaxe = { ingredients = { twigs = 2, flint = 2 }, label = "镐", tech = "NONE" },
@@ -46,6 +51,8 @@ C.RECIPES = {
     backpack = { ingredients = { cutgrass = 4, twigs = 4 }, label = "背包", tech = "SCIENCE_ONE" },
     spear = { ingredients = { twigs = 2, rope = 1, flint = 1 }, label = "长矛", tech = "SCIENCE_ONE" },
     armorwood = { ingredients = { log = 8, rope = 2 }, label = "木甲", tech = "SCIENCE_ONE" },
+    cutstone = { ingredients = { rocks = 3 }, label = "石砖", tech = "SCIENCE_ONE" },
+    transistor = { ingredients = { goldnugget = 2, cutstone = 1 }, label = "电子元件", tech = "SCIENCE_ONE" },
 }
 
 --- 配方名 → 科技阶段（只有白名单里的名字有值；Node 侧有同一张表）
@@ -54,9 +61,24 @@ function C.TechOf(name)
     return def ~= nil and def.tech or nil
 end
 
---- 是不是"需要科学机器"的第一阶段配方
+--- 是不是"要站在科学机器/炼金引擎旁边"的配方（第一阶段及更高）
 function C.NeedsScience(name)
-    return C.TechOf(name) == "SCIENCE_ONE"
+    local tech = C.TechOf(name)
+    return tech == "SCIENCE_ONE" or tech == "SCIENCE_TWO"
+end
+
+--- "还不会做 X" 时给模型的一句可执行提示（按科技阶段分）
+function C.TechHint(name)
+    local key = tostring(name)
+    local tech = C.TechOf(key)
+    if tech == "SCIENCE_TWO" then
+        return key .. " 要站在**炼金引擎**旁边才能做：先 craft boards/cutstone/transistor，"
+            .. "再 build researchlab2（炼金引擎），站到它旁边"
+    end
+    if tech == "SCIENCE_ONE" then
+        return key .. " 是第一阶段科技配方：先 build sciencemachine，站到它旁边再做"
+    end
+    return key .. " 还没解锁"
 end
 
 --- 角色现在**条件上**能不能造这个配方（科技/prototyper 层面，**不看材料**）。
