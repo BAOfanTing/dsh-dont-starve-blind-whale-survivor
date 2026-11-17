@@ -115,6 +115,10 @@ local function walk_to(p, tx, tz, run)
     return true
 end
 A.walk_to = walk_to
+A.safe_atan2 = U.safe_atan2
+A.is_passable = U.is_passable
+A.line_passable = U.line_passable
+A.find_coastline_detour = U.find_coastline_detour
 
 local function equip_if_needed(p, item)
     local inv = p.components.inventory

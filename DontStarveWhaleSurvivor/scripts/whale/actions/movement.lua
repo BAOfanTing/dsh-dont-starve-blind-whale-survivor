@@ -27,23 +27,120 @@ JOBS.move_to = function(j, p)
         tz = math.floor(tz / U.TILE)
         j.args.x, j.args.z = tx, tz
     end
+
+    local dest_wx, dest_wz = U.tile_center(tx, tz)
+    if not U.is_passable(dest_wx, dest_wz) then
+        return "fail", string.format("走不到 (%d,%d)：目标位置在海里或不可达地面", tx, tz)
+    end
+
     if j.step == "start" then
-        walk_to(p, tx, tz)
-        j.step = "walk"
+        local px, _, pz = U.pos(p)
+        j.data.final_tx = tx
+        j.data.final_tz = tz
+        j.data.final_wx = dest_wx
+        j.data.final_wz = dest_wz
         j.data.lastcheck = U.now()
         j.data.retry = 0
-        local px, _, pz = U.pos(p)
         j.data.last_px = px
         j.data.last_pz = pz
+
+        -- 直线探水：若前方有水，试探海边切线拐点
+        if px ~= nil and not U.line_passable(px, pz, dest_wx, dest_wz) then
+            local detour = U.find_coastline_detour(px, pz, dest_wx, dest_wz)
+            if detour ~= nil then
+                j.data.waypoint = detour
+                walk_to(p, detour.tx, detour.tz)
+                j.step = "walk_waypoint"
+                return "run"
+            end
+        end
+
+        walk_to(p, tx, tz)
+        j.step = "walk"
+        return "run"
     end
+
+    local timeout = tonumber(j.args.timeout) or 60
+    if U.now() - j.t0 > timeout then
+        local away = tile_away(p, tx, tz)
+        return "fail", string.format("走不到 (%d,%d)：卡在 %.1f 格外（可能有东西挡着）", tx, tz, away)
+    end
+
+    if j.step == "walk_waypoint" then
+        local wp = j.data.waypoint
+        local wp_away = (wp ~= nil) and tile_away(p, wp.tx, wp.tz) or 0
+        local px, _, pz = U.pos(p)
+
+        -- 拐点已达（1.5 格内）：检查是否能直奔终点
+        if wp_away <= 1.5 then
+            if px ~= nil and U.line_passable(px, pz, j.data.final_wx, j.data.final_wz) then
+                j.data.waypoint = nil
+                walk_to(p, j.data.final_tx, j.data.final_tz)
+                j.step = "walk"
+                return "run"
+            else
+                local next_detour = (px ~= nil) and U.find_coastline_detour(px, pz, j.data.final_wx, j.data.final_wz) or nil
+                if next_detour ~= nil then
+                    j.data.waypoint = next_detour
+                    walk_to(p, next_detour.tx, next_detour.tz)
+                    return "run"
+                else
+                    j.data.waypoint = nil
+                    walk_to(p, j.data.final_tx, j.data.final_tz)
+                    j.step = "walk"
+                    return "run"
+                end
+            end
+        end
+
+        if U.now() - j.data.lastcheck > 2 then
+            j.data.lastcheck = U.now()
+            local moved = 0
+            if px ~= nil and j.data.last_px ~= nil then
+                local dx = px - j.data.last_px
+                local dz = pz - j.data.last_pz
+                moved = math.sqrt(dx * dx + dz * dz) / U.TILE
+            end
+            j.data.last_px = px
+            j.data.last_pz = pz
+
+            local loco = p.components.locomotor
+            local moving = false
+            if loco ~= nil then
+                local ok_m, mv = pcall(function() return loco:WantsToMoveForward() end)
+                if ok_m then moving = mv == true end
+            end
+
+            -- 途中如果发现到终点的直线已经畅通，提前切往终点
+            if px ~= nil and U.line_passable(px, pz, j.data.final_wx, j.data.final_wz) then
+                j.data.waypoint = nil
+                walk_to(p, j.data.final_tx, j.data.final_tz)
+                j.step = "walk"
+                return "run"
+            end
+
+            if (loco == nil or not moving) or (moved < 0.15) then
+                j.data.retry = (j.data.retry or 0) + 1
+                local max_retry = (timeout <= 10) and 2 or 6
+                if j.data.retry >= max_retry then
+                    local away = tile_away(p, tx, tz)
+                    return "fail", string.format("走不到 (%d,%d)：绕行中卡在 %.1f 格外", tx, tz, away)
+                end
+                if wp ~= nil then
+                    walk_to(p, wp.tx, wp.tz)
+                end
+            else
+                j.data.retry = 0
+            end
+        end
+        return "run"
+    end
+
     local away = tile_away(p, tx, tz)
     if away <= 1.2 then
         return "done", string.format("走到了 (%d,%d) 附近（还差 %.1f 格）", tx, tz, away)
     end
-    local timeout = tonumber(j.args.timeout) or 60
-    if U.now() - j.t0 > timeout then
-        return "fail", string.format("走不到 (%d,%d)：卡在 %.1f 格外（可能有东西挡着）", tx, tz, away)
-    end
+
     if U.now() - j.data.lastcheck > 2 then
         j.data.lastcheck = U.now()
         local px, _, pz = U.pos(p)
@@ -63,7 +160,19 @@ JOBS.move_to = function(j, p)
             if ok_m then moving = mv == true end
         end
         if (loco == nil or not moving) or (moved < 0.15) then
-            j.data.retry = j.data.retry + 1
+            -- 被水挡住或卡步时，试探切线拐点脱困
+            if px ~= nil and not U.line_passable(px, pz, dest_wx, dest_wz) then
+                local detour = U.find_coastline_detour(px, pz, dest_wx, dest_wz)
+                if detour ~= nil then
+                    j.data.waypoint = detour
+                    walk_to(p, detour.tx, detour.tz)
+                    j.step = "walk_waypoint"
+                    j.data.retry = 0
+                    return "run"
+                end
+            end
+
+            j.data.retry = (j.data.retry or 0) + 1
             local max_retry = (timeout <= 10) and 2 or 6
             if j.data.retry >= max_retry then
                 return "fail", string.format("走不到 (%d,%d)：卡在 %.1f 格外（可能有东西挡着）", tx, tz, away)
@@ -89,12 +198,39 @@ JOBS.go_to = function(j, p)
         end
         local ent = list[1].ent
         local x, _, z = U.pos(ent)
+        if not U.is_passable(x, z) then
+            return "fail", string.format("走不到 %s：目标在水里或不可达位置", U.pretty(ent))
+        end
         local tx, tz = U.tile_of(x, z)
         j.data.name = U.pretty(ent)
         j.data.tx, j.data.tz = tx, tz
+        j.data.final_wx, j.data.final_wz = x, z
+        local px, _, pz = U.pos(p)
+        if px ~= nil and not U.line_passable(px, pz, x, z) then
+            local detour = U.find_coastline_detour(px, pz, x, z)
+            if detour ~= nil then
+                j.data.waypoint = detour
+                walk_to(p, detour.tx, detour.tz)
+                j.step = "walk_waypoint"
+                j.data.lastcheck = U.now()
+                return "run"
+            end
+        end
         walk_to(p, tx, tz)
         j.step = "walk"
         j.data.lastcheck = U.now()
+        return "run"
+    end
+    if j.step == "walk_waypoint" then
+        local wp = j.data.waypoint
+        local wp_away = (wp ~= nil) and tile_away(p, wp.tx, wp.tz) or 0
+        local px, _, pz = U.pos(p)
+        if wp_away <= 1.5 or (px ~= nil and U.line_passable(px, pz, j.data.final_wx, j.data.final_wz)) then
+            j.data.waypoint = nil
+            walk_to(p, j.data.tx, j.data.tz)
+            j.step = "walk"
+            return "run"
+        end
     end
     local away = tile_away(p, j.data.tx, j.data.tz)
     if away <= 1.5 then
@@ -105,6 +241,7 @@ JOBS.go_to = function(j, p)
     end
     if U.now() - j.data.lastcheck > 2 then
         j.data.lastcheck = U.now()
+        local px, _, pz = U.pos(p)
         local loco = p.components.locomotor
         local moving = false
         if loco ~= nil then
@@ -112,6 +249,15 @@ JOBS.go_to = function(j, p)
             if ok_m then moving = mv == true end
         end
         if loco == nil or not moving then
+            if px ~= nil and not U.line_passable(px, pz, j.data.final_wx, j.data.final_wz) then
+                local detour = U.find_coastline_detour(px, pz, j.data.final_wx, j.data.final_wz)
+                if detour ~= nil then
+                    j.data.waypoint = detour
+                    walk_to(p, detour.tx, detour.tz)
+                    j.step = "walk_waypoint"
+                    return "run"
+                end
+            end
             walk_to(p, j.data.tx, j.data.tz)
         end
     end
