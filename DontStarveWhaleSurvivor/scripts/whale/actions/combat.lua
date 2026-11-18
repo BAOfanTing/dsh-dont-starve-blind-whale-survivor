@@ -247,4 +247,12 @@ JOBS.kill = function(j, p)
     return legacy_attack(j, p)
 end
 
+JOBS.fight_spider = function(j, p)
+    local B = Whale ~= nil and Whale.battle or nil
+    if B ~= nil and B.StepJob ~= nil then
+        return B.StepJob(j, p)
+    end
+    return "fail", "battle_subsystem_unavailable"
+end
+
 return A

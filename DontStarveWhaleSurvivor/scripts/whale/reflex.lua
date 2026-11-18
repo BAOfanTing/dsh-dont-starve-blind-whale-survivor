@@ -1109,6 +1109,15 @@ local function run(p)
     -- ── P0：立即保命（可抢占任何任务）
     -- 1. 受到敌对攻击规避
     local attacker = find_attacker(p, 4) or nearest_hostile(p, 3)
+    
+    -- 检查是否正在进行自主战斗
+    local B = Whale ~= nil and Whale.battle or nil
+    local in_battle = (B ~= nil and B.InCombat())
+    local suppress_flee = false
+    if in_battle and attacker ~= nil then
+        suppress_flee = B.ShouldSuppressReflex(p, attacker)
+    end
+
     local in_combat_job = Whale ~= nil and Whale.job ~= nil
         and (Whale.job.name == "attack" or Whale.job.name == "kill")
         and Whale.job.cmd_id ~= REFLEX_ID
@@ -1124,7 +1133,7 @@ local function run(p)
     local hp_safe = hp ~= nil and hp >= 0.50
 
     if attacker ~= nil and combat_targeting(attacker, p) then
-        if not (fighting_back and hp_safe) then
+        if not suppress_flee and not (fighting_back and hp_safe) then
             if try_action(p, "flee", P0, "under_attack", function() return reflex_flee(p) end) then return end
         end
     end

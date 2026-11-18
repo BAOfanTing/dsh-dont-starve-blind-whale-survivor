@@ -123,7 +123,7 @@ test('LUA-4：每个动作的 JOB 都真的注册了（工具表里有的，Lua 
     readFileSync(join(MOD_DIR, 'actions.lua'), 'utf8'),
     ...actionSub.map((s) => readFileSync(join(MOD_DIR, 'actions', s), 'utf8')),
   ].join('\n'))
-  const jobs = new Set([...acts.matchAll(/^JOBS\.([a-z_]+)\s*=/gm)].map((m) => m[1]))
+  const jobs = new Set([...acts.matchAll(/(?:A\.)?JOBS\.([a-z_]+)\s*=/gm)].map((m) => m[1]))
   const missing = OPEN_ACTIONS.filter((a) => !jobs.has(a))
   assert.deepEqual(missing, [], `白名单里有但 Lua 没实现的：${missing.join(', ')}`)
 })

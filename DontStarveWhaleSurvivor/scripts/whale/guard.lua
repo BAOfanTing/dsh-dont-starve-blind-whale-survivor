@@ -348,6 +348,18 @@ G.ACTIONS = {
             target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
+    fight_spider = {
+        risk = "R2",
+        required_components = { "locomotor", "health" },
+        args = {
+            -- TARGET-REFRESH：两种引用方式二选一。
+            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
+            target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
+            snapshot_id = { type = "string", max_len = 64, required = true },
+            target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
+        },
+    },
     -- wait / drop
     wait = {
         risk = "R1",
@@ -1198,7 +1210,7 @@ function G.validate(cmd)
         target = ent
     end
 
-    if action == "attack" or action == "kill" then
+    if action == "attack" or action == "kill" or action == "fight_spider" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
         local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end

@@ -100,6 +100,8 @@ modimport("scripts/whale/observe.lua")
 -- 必须在 actions 与 reflex 之前：它们都靠这一层，别各自再造一遍。
 modimport("scripts/whale/native.lua")
 modimport("scripts/whale/actions.lua")
+-- 独立战斗子系统（战术风筝、打二撤一、保命协同）
+modimport("scripts/whale/battle.lua")
 -- 宏（任务级接口）：采集到够数 / 砍到够木头 / 锅做饭 / 守夜（依赖动作模块，放它之后）
 modimport("scripts/whale/macros.lua")
 -- 家务宏（Chores：日常生存、备料、添柴、搜食、采花，完全由 Plan 调度，绝不在 Reflex 帧循环自作主张）
