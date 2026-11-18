@@ -41,7 +41,7 @@ local PERMANENT_LIGHTS = {
 local EAT_CRITICAL = 0.30     -- 真正紧急饥饿（<= 30%）：背包有安全食物时允许 P1 紧急进食
 local EAT_NOTIFY = 0.50       -- 普通饥饿（< 50%）：只通知 Plan，绝不申请紧急抢占
 local HEAL_EMERGENCY = 0.35    -- 生命 < 35%：P1 回血
-local SANITY_LOW = 0.35        -- 理智 < 35%：通知 Plan 预警暗影怪
+local SANITY_LOW = 0.55        -- 理智 < 55%：通知 Plan 预警暗影怪（提前采花/做花环缓冲）
 
 local last = {}          -- 上一次执行时间（防抖）
 local recent = {}        -- 最近做过的事
