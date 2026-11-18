@@ -239,6 +239,17 @@ F8 开/停 · F7 显示/隐藏小窗
 
 ---
 
+## 参考与致谢
+
+在设计与实现「大肥鱼饿不死」的过程中，参考和借鉴了以下优秀项目与架构探索：
+
+- **[DontStarveAI](https://github.com/)**：结合规则系统、目标驱动与 LLM 辅助规划的饥荒决策智能体，本项目在范围采集（`harvest_area`）及部分目标筛选逻辑上借鉴了其设计。
+- **[DST-AICompanion](https://github.com/)**：基于 FAtiMA 框架的饥荒联机版互动 AI 伴侣模组，探索了自主行动、资源采集、协同战斗与个性化交互机制。
+- **[DST-Hierarchical-Agent](https://github.com/)**：面向饥荒联机版的分层规划智能体（涵盖玩家自主代理 Player Agent 与召唤伴侣 Buddy Agent），提供了分层任务执行架构参考。
+- **[Sei](https://sei.gg)** (`sei-feat-stardew-dst-gaps`)：面向多游戏（星露谷、饥荒等）的桌面级 AI 伴侣平台，在跨游戏感知桥接、AI 协同与伴侣体验设计上提供了重要参考。
+
+---
+
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。

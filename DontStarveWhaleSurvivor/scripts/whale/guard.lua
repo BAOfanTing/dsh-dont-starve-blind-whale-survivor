@@ -512,6 +512,16 @@ G.PICKUP_PREFABS = (Whale ~= nil and Whale.pickuprules ~= nil) and Whale.pickupr
 --- 所以必须由我们限制，避免模型隔空捡 16 格外的物品。
 G.PICKUP_MAX_TILES = 2.5
 
+--- attack / kill 的距离上限（格）。
+---
+--- ★ 真机 bug（session 8fab0944）：这里原来是硬编码的 6 格，而附近扫描半径是 16 格。
+---   蜘蛛是会移动的：模型读到"hem 距 1.8 格"时下达 kill，30 秒后指令到达，
+---   它已经游荡到 8 格外 —— 直接被拒成 out_of_range，模型只能反复 move_to 追。
+---   ACTIONS.ATTACK 的 BufferedAction 本来就带寻路（SGwilson 的 attack 状态会先走过去），
+---   所以这里只该拦"根本不在这片区域"的目标，不该拦"稍远但走得到"的目标。
+---   取 32 格 = 附近扫描半径的 2 倍：仍能挡住隔半个地图的误指，又不会误伤正常追击。
+G.ATTACK_MAX_TILES = 32
+
 function G.is_action_allowed(name)
     return type(name) == "string" and G.ACTIONS[name] ~= nil
 end
@@ -1195,8 +1205,13 @@ function G.validate(cmd)
         if ent.components == nil or ent.components.health == nil then
             return false, "target_not_attackable", nil
         end
+        -- ★ 距离上限按**附近扫描半径**给，不再用 6 格。
+        --   真机（session 8fab0944）：模型读快照时蜘蛛 hem 在 1.8 格，30 秒后 kill 到达时它已游荡到 8 格外，
+        --   被 6 格窗口直接拒成 out_of_range —— 可 ACTIONS.ATTACK 的 BufferedAction 本来就会寻路过去。
+        --   现在只拦"根本不在这片区域"的目标（超过附近扫描半径的 2 倍 = 32 格），
+        --   真正的可达性交给引擎的寻路。
         local d = U.dist(actor, ent)
-        if d ~= nil and d > 6 * 4 then return false, "out_of_range", nil end
+        if d ~= nil and d > G.ATTACK_MAX_TILES * U.TILE then return false, "out_of_range", nil end
         target = ent
     end
 

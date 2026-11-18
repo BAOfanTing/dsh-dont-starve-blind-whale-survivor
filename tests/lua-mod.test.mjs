@@ -783,6 +783,8 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         "scripts/whale/nearby.lua",
         -- M2.0：动作安全底座（Lua 侧最终授权者）
         "scripts/whale/guard.lua",
+        -- 生活家务宏（受控执行，剥离自 reflex）
+        "scripts/whale/chores.lua",
     }) do
         assert(idx(name) ~= nil, "少了 modimport：" .. name)
     end
@@ -792,7 +794,7 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
         assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
     end
-    assert(#MODIMPORTS == 20, "只该 modimport 20 个 B 栈模块（TARGET-REFRESH 起多了 targetrules），实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 21, "只该 modimport 21 个 B 栈模块，实际 " .. #MODIMPORTS)
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
 assert(idx("scripts/whale/util.lua") < idx("scripts/whale/pickuprules.lua"), "pickuprules 要在 util 之后")
 assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/nearby.lua"), "pickuprules 必须在 nearby 之前（观察侧要用）")

@@ -263,3 +263,55 @@ test('TH-10（INTEGRATION）：gather 类目标（草丛/树苗/花）也要发�
   assert.equal(out2.split('|')[1], 'not_ready', `实际原因 ${out2}`)
 })
 
+test('TH-11（INTEGRATION）：威胁实体（蜘蛛）分配稳定句柄，且 kill 使用 target_handle 成功放行', async () => {
+  const env = await loadTargets({
+    entities: [
+      `mkent({ prefab = "spider", guid = 51, x = 3, z = 0, health = 100, tags = { hostile = true, monster = true, spider = true } })`,
+    ],
+  })
+  env.buildNearby()
+  const handle = env.handleOf('spider')
+  assert.notEqual(handle, 'nil', '蜘蛛应该拿到稳定句柄（以支持无需快照的 kill/attack）')
+  assert.match(handle, /^h[0-9a-z]+$/, '句柄格式必须是 h + base36')
+
+  // 用句柄下发 kill 指令（不需要 snapshot_id / target_ref）
+  env.setCmd(env.cmd({ action: 'kill', args: { target_handle: handle }, snapshot_id: null, target_ref: null }))
+  const out = env.validate()
+  assert.equal(out.split('|')[0], 'true', `kill 用 target_handle 应该放行，实际 ${out}`)
+  assert.equal(out.split('|')[4], 'spider', '解析到的目标必须是蜘蛛')
+  assert.equal(out.split('|')[5], '51', '解析到的必须是 GUID 51')
+})
+
+// ─────────── 真机回归（session 8fab0944）：会移动的怪不该被 6 格窗口拒掉 ───────────
+//
+// 现象：模型读快照时蜘蛛 hem 在 1.8 格，30 秒后 kill 指令到达时它已游荡到 8 格，
+//       直接被 guard 的 6 格上限拒成 out_of_range —— 可 ACTIONS.ATTACK 本身就会寻路过去。
+
+test('TH-12（INTEGRATION）：怪游荡到 8 格外，kill 仍应放行（攻击动作自己会走过去）', async () => {
+  // 8 格 = 32 世界单位
+  const env = await loadTargets({
+    entities: [
+      `mkent({ prefab = "spider", guid = 61, x = 32, z = 0, health = 100, tags = { hostile = true, monster = true, spider = true } })`,
+    ],
+  })
+  env.buildNearby()
+  const h = env.handleOf('spider')
+  assert.notEqual(h, 'nil', '8 格外的蜘蛛仍在扫描半径内，应该有句柄')
+  env.setCmd(env.cmd({ action: 'kill', args: { target_handle: h }, snapshot_id: null, target_ref: null }))
+  const out = env.validate()
+  assert.equal(out.split('|')[0], 'true', `8 格外的蜘蛛不该被拒（旧上限是 6 格），实际 ${out}`)
+})
+
+test('TH-13（INTEGRATION）：离谱远的目标（超过 32 格）仍然被拒，不能隔半张地图砍', async () => {
+  const env = await loadTargets({
+    entities: [
+      `mkent({ prefab = "spider", guid = 62, x = 200, z = 0, health = 100, tags = { hostile = true, monster = true, spider = true } })`,
+    ],
+  })
+  env.buildNearby()
+  // 200 世界单位 = 50 格，远超扫描半径，nearby 里不会有它 → 句柄拿不到
+  const h = env.handleOf('spider')
+  assert.equal(h, 'nil', '50 格外的蜘蛛不在附近，不该有句柄')
+})
+
+

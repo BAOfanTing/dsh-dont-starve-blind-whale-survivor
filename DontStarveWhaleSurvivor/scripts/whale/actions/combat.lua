@@ -23,6 +23,47 @@ local equip_if_needed = A.equip_if_needed
 local find_by_name = A.find_by_name
 local nearest_hostile = A.nearest_hostile
 
+-- ── 自动换武器时要避开"把光换没了" ──
+-- ★ 我自己踩到的坑（2026-11-17，真机）：给 attack_by_ref 补上自动换武器后，
+--   夜里手里举着火把去杀蜘蛛 —— 一换长矛就陷入黑暗，保命反射立刻以 dark_no_light 中断任务，
+--   回执变成"失败：dark_no_light"。所以：**天黑且手上是能用的光源时，不换武器**（宁可空手打）。
+local LIGHT_HAND_PREFABS = { torch = true, lantern = true }
+
+--- 手上是不是"还能用的手持光源"（火把/提灯，且没烧完）。是就返回它，否则 nil。
+local function hand_useful_light(p)
+    local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
+    if inv == nil then return nil end
+    local hand = nil
+    pcall(function() hand = inv:GetEquippedItem(EQUIPSLOTS.HANDS) end)
+    if hand == nil then return nil end
+    local is_light = LIGHT_HAND_PREFABS[tostring(hand.prefab or "")] == true
+    if not is_light then
+        pcall(function()
+            if hand.components ~= nil and hand.components.lightsource ~= nil then is_light = true end
+        end)
+    end
+    if not is_light then return nil end
+    local usable = true
+    pcall(function()
+        local fueled = hand.components ~= nil and hand.components.fueled or nil
+        if fueled ~= nil and fueled:IsEmpty() == true then usable = false end
+    end)
+    if not usable then return nil end
+    return hand
+end
+
+--- 现在是不是待在黑暗里（引擎判据优先）。
+local function in_darkness(p)
+    local native = Whale ~= nil and Whale.native or nil
+    if native ~= nil and native.IsLit ~= nil then
+        local ok, lit = pcall(native.IsLit, p)
+        if ok and lit ~= nil then return lit ~= true end
+    end
+    local lit = false
+    pcall(function() lit = p:IsInLight() end)
+    return lit ~= true
+end
+
 --- 攻击（attack = 打几下；kill = 打到死或超时）
 ---
 --- ★ NATIVE-REUSE：玩家挥砍**不能**用 combat:TryAttack()。
@@ -53,6 +94,17 @@ local function attack_by_ref(j, p, target, mode)
         j.data.swings = 0
         j.data.want = mode == "kill" and 999 or (tonumber(j.ctx and j.ctx.times) or 1)
         j.data.phase_start = U.now()
+        -- ★ 真机 bug（session 8fab0944）：老的 legacy_attack 会 equip_if_needed(p, best_weapon(p))，
+        --   新的 attack_by_ref 漏了这一步。白天反射把火把收回背包后人是空手，
+        --   于是 attack/kill 直接空手挥拳（温蒂空手 7.5 伤害），打蜘蛛等于送死。
+        --   进战斗前先换出背包里伤害最高的武器（没有武器就空手，不报错）。
+        --   ★ 但天黑、手上举着能用的光源时**不换** —— 换了就黑，会被查理咬死/被反射打断。
+        if equip_if_needed ~= nil and best_weapon ~= nil then
+            local w = best_weapon(p)
+            if w ~= nil and not (in_darkness(p) and hand_useful_light(p) ~= nil) then
+                pcall(equip_if_needed, p, w)
+            end
+        end
         -- 进战斗前记下"上一次真的出手"的时刻，之后用它判断这一刀有没有挥出去
         j.data.last_swing = native ~= nil and native.LastAttackTime(p) or nil
         j.step = "acting"
@@ -92,6 +144,26 @@ local function attack_by_ref(j, p, target, mode)
             return "run"
         end
         if busy(p) then return "run" end
+
+        -- ★ 真机 bug（session 8fab0944）：指令到达时目标可能已经跑远（蜘蛛会游荡/逃跑）。
+        --   ACTIONS.ATTACK 的 BufferedAction 确实会寻路，但如果目标在 20 格开外，
+        --   SGwilson 会先跑很久，`attack` 的 180 秒预算和模型的耐心都不够。
+        --   这里先自己走过去，进入 2 格再挥砍；走近用 walk_to（和 move_to 同一条移动链路）。
+        local gap = U.dist(p, target)
+        if gap ~= nil and gap > 2 * U.TILE and A.walk_to ~= nil then
+            local tx, tz = nil, nil
+            local ox, _, oz = U.pos(target)
+            if ox ~= nil then tx, tz = U.tile_of(ox, oz) end
+            if tx ~= nil and tz ~= nil then
+                local jt = j.data.chase_at or 0
+                -- 每 0.5 秒补一次"要去哪"，和 move_to 的做法一致（客户端先停也能跟上）
+                if U.now() - jt >= 0.5 then
+                    j.data.chase_at = U.now()
+                    pcall(A.walk_to, p, tx, tz, true)
+                end
+                return "run"
+            end
+        end
 
         local ba, why
         if native ~= nil then

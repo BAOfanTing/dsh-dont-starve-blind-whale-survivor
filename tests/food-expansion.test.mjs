@@ -74,7 +74,7 @@ function createLuaEnv() {
   `)
 
   // 加载模块
-  for (const mod of ['util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'native', 'actions', 'reflex']) {
+  for (const mod of ['util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'native', 'actions', 'chores', 'reflex']) {
     if (mod === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
         const subSrc = readFileSync(join(MOD, `scripts/whale/actions/${sub}.lua`), 'utf8')
@@ -88,13 +88,13 @@ function createLuaEnv() {
   return { run, get }
 }
 
-test('FE-1 reflex 源码静态检查：push_harvest 必须下发 GLOBAL.ACTIONS.PICK', () => {
-  const reflexSrc = readFileSync(join(MOD, 'scripts/whale/reflex.lua'), 'utf8')
-  const start = reflexSrc.indexOf('local function push_harvest(p, ent)')
+test('FE-1 chores 源码静态检查：push_harvest 必须下发 GLOBAL.ACTIONS.PICK', () => {
+  const choreSrc = readFileSync(join(MOD, 'scripts/whale/chores.lua'), 'utf8')
+  const start = choreSrc.indexOf('local function push_harvest(p, ent)')
   assert.ok(start > 0, '必须定义 push_harvest')
-  const end = reflexSrc.indexOf('local function push_pickup', start)
+  const end = choreSrc.indexOf('local function push_pickup', start)
   assert.ok(end > start, '必须定义 push_pickup')
-  const fnBody = reflexSrc.slice(start, end)
+  const fnBody = choreSrc.slice(start, end)
   assert.match(fnBody, /GLOBAL\.ACTIONS\.PICK\b/, 'push_harvest 必须使用 ACTIONS.PICK')
   assert.doesNotMatch(fnBody, /GLOBAL\.ACTIONS\.HARVEST\b/, 'push_harvest 绝不能使用 ACTIONS.HARVEST')
 })
@@ -155,7 +155,7 @@ test('FE-3 pickuprules 必须放行所有基础与熟食食物（肉/蛙腿/鱼/
   }
 })
 
-test('FE-4 reflex 在周围只有成熟 carrot_planted 时，forage 能正确采集', () => {
+test('FE-4 chores 搜食宏在周围只有成熟 carrot_planted 时，forage 能正确采集', () => {
   const env = createLuaEnv()
   env.run(`
     Whale.reflex_on = true
@@ -222,6 +222,11 @@ test('FE-4 reflex 在周围只有成熟 carrot_planted 时，forage 能正确采
       components = {
         hunger = { GetPercent = function() return 0.4 end },
         health = { GetPercent = function() return 1 end, IsDead = function() return false end },
+        locomotor = {
+          PushAction = function(self, ba)
+            LAST_PUSHED = ba
+          end
+        },
         inventory = {
           GetEquippedItem = function(self, slot) return nil end,
           ForEachItem = function(self, fn)
@@ -235,10 +240,8 @@ test('FE-4 reflex 在周围只有成熟 carrot_planted 时，forage 能正确采
     GLOBAL.AllPlayers = { [1] = player }
     GLOBAL.ThePlayer = player
 
-    -- 触发反射 Tick（跑 5 次驱动一个 tick 循环）
-    for i = 1, 5 do
-      Whale.reflex.Tick()
-    end
+    -- 调度 chores forage
+    Whale.chores.forage_food(player)
 
     ACT_ID = (LAST_PUSHED and LAST_PUSHED.action and LAST_PUSHED.action.id) or "none"
     TGT_PREFAB = (LAST_PUSHED and LAST_PUSHED.target and LAST_PUSHED.target.prefab) or "none"

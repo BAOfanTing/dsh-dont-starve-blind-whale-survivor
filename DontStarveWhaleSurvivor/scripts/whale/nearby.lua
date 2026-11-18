@@ -626,7 +626,7 @@ local last_snapshot_id = nil
 -- （8 次动作 6 次 stale_snapshot）。这些桶本来也不是"按 #N 去采/捡"的目标；
 -- 真正要操作的桶（可拾取/可采/资源/食物/容器/建筑）仍然把位置算进去，
 -- 所以"东西挪了 → 换新编号"这条安全边界没有放宽。
-local MOBILE_CATEGORIES = { creatures = true, other = true }
+local MOBILE_CATEGORIES = { creatures = true, threats = true, other = true }
 
 local function fingerprint_of(list)
     local parts = {}

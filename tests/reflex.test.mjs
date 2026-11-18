@@ -303,9 +303,9 @@ function loadReflex(fengari, variant) {
     REPORTS = {}
   `, '文件桥桩')
   const mods = variant === 'noActions'
-    ? ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules', 'equiprules', 'config', 'native', 'reflex']
+    ? ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules', 'equiprules', 'config', 'native', 'chores', 'reflex']
     : ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules',
-       'equiprules', 'config', 'native', 'actions', 'reflex']
+       'equiprules', 'config', 'native', 'actions', 'chores', 'reflex']
   for (const name of mods) {
     if (name === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
@@ -757,7 +757,7 @@ test('RF-15（要求18）：变成鬼魂（playerghost 标签）也重置', asyn
   assert.equal(global('JOB'), 'nil')
 })
 
-test('RF-17（真机 bug）：附近只有树苗没有草时，反射应该采能采到的那一种，而不是卡在 cutgrass 空转', async () => {
+test('RF-17（职责收窄）：Reflex 帧循环不擅自采料，家务由 chores 显式调度采树苗', async () => {
   const fengari = await import('fengari')
   const { run, runFile, global } = loadReflex(fengari)
   run(`
@@ -770,10 +770,17 @@ test('RF-17（真机 bug）：附近只有树苗没有草时，反射应该采�
     Whale.reflex_on = true
     Whale.reflex_force_off = false
     ${eachTick(5)}
+    REFLEX_PUSHED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
+
+    -- 采备料由 chores 显式调度
+    local ok, reason = Whale.chores.stock_light_materials(PLAYER)
+    CHORE_OK = tostring(ok)
     PUSH_PREFAB = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
     ACTION = PUSHED ~= nil and PUSHED.action ~= nil and PUSHED.action.id or "nil"
   `)
-  assert.equal(global('PUSH_PREFAB'), 'sapling', '附近没有草就去采树枝，别一直空转')
+  assert.equal(global('REFLEX_PUSHED'), 'nil', 'Reflex 帧循环不擅自抢占采材料')
+  assert.equal(global('CHORE_OK'), 'true')
+  assert.equal(global('PUSH_PREFAB'), 'sapling', '附近没有草时 chores 采树苗')
   assert.equal(global('ACTION'), 'PICK')
 })
 
@@ -1059,7 +1066,7 @@ test('RF-25（破局）：天黑没光、没草但有 log+rocks —— 反射走
   assert.equal(global('CMD'), 'reflex')
 })
 
-test('RF-26（破局）：16 格内没草、20 格内有 —— 反射有界地走过去（move_to）', async () => {
+test('RF-26（职责收窄）：Reflex 帧循环绝不漫游寻路，远距离寻料由 chores 有界走过去', async () => {
   const fengari = await import('fengari')
   const { run, runFile, global } = loadReflex(fengari)
   run(`
@@ -1075,11 +1082,16 @@ test('RF-26（破局）：16 格内没草、20 格内有 —— 反射有界地�
     Whale.reflex_force_off = false
     ${eachTick(5)}
     ${eachTick(5)}
-    JOB = Whale.job ~= nil and Whale.job.name or "nil"
+    REFLEX_JOB = Whale.job ~= nil and Whale.job.name or "nil"
     PUSHED_NEAR = PUSHED ~= nil and "yes" or "no"
+
+    -- 由 chores 执行有界靠近
+    local ok, reason = Whale.chores.stock_light_materials(PLAYER)
+    CHORE_JOB = Whale.job ~= nil and Whale.job.name or "nil"
   `)
   assert.equal(global('PUSHED_NEAR'), 'no', '16 格内没目标时不该硬推采集')
-  assert.equal(global('JOB'), 'move_to', '备料不足且有远处目标时，应有界地走过去')
+  assert.equal(global('REFLEX_JOB'), 'nil', 'Reflex 帧循环绝不在白天擅自 move_to 漫游寻路')
+  assert.equal(global('CHORE_JOB'), 'move_to', '备料由 chores 有界靠近远处目标')
 })
 
 test('RF-27（边界）：夜里 / 有敌人 / 目标太远 —— 都不许主动走远', async () => {
@@ -1113,14 +1125,10 @@ test('RF-27（边界）：夜里 / 有敌人 / 目标太远 —— 都不许主�
   }
 })
 
-test('RF-28：SEEK_RADIUS / SEEK_MAX_TILES 有明确上限，不是无目的乱走', () => {
-  const src = readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8')
-  assert.match(src, /SEEK_RADIUS\s*=\s*28/, '搜索半径有上限')
+test('RF-28：家务宏 SEEK_MAX_TILES 有明确上限，不是无目的乱走', () => {
+  const src = readFileSync(join(MOD, 'scripts', 'whale', 'chores.lua'), 'utf8')
   assert.match(src, /SEEK_MAX_TILES\s*=\s*22/, '单步移动距离有上限')
-  assert.match(src, /tiles\s*>\s*16\s*and\s*tiles\s*<=\s*SEEK_MAX_TILES/, '必须同时满足"16格外 + 不超过上限"')
-  assert.match(src, /active_threat\(p,\s*6\)\s*~=\s*nil\s*then\s*return\s*false/, '有敌人不走')
-  assert.match(src, /e:HasTag\("structure"\)\s*or\s*e:HasTag\("INLIMBO"\)/, '固定巢穴不算"会追人的敌人"')
-  assert.match(src, /rep\.phase\s*==\s*"night"\s*then\s*return\s*false/, '黑透的夜里不走；黄昏是最后备料窗口')
+  assert.match(src, /tiles\s*>\s*16\s*and\s*tiles\s*<=\s*limit_tiles/, '必须同时满足"16格外 + 不超过上限"')
 })
 
 test('RF-29（真机 bug：蜘蛛巢把火把卡在手上）：固定巢穴不该阻止白天收火把', async () => {
@@ -1152,7 +1160,7 @@ test('RF-29（真机 bug：蜘蛛巢把火把卡在手上）：固定巢穴不�
   assert.equal(global('HAND'), 'nil', '火把必须收进背包，不能举着烧光')
 })
 
-test('RF-30（真机 bug：地上现成的草不捡）：缺草时优先捡地上的 cutgrass', async () => {
+test('RF-30（职责收窄）：Reflex 不在后台自动捡草，由 chores 优先捡地上现成的 cutgrass', async () => {
   const fengari = await import('fengari')
   const { run, runFile, global } = loadReflex(fengari)
   run(`
@@ -1167,10 +1175,17 @@ test('RF-30（真机 bug：地上现成的草不捡）：缺草时优先捡地�
     Whale.reflex_on = true
     Whale.reflex_force_off = false
     ${eachTick(5)}
+    REFLEX_PICKED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
+
+    -- 由 chores 执行捡拾
+    local ok, reason = Whale.chores.stock_light_materials(PLAYER)
+    CHORE_OK = tostring(ok)
     PICKED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
     ACTION = PUSHED ~= nil and PUSHED.action ~= nil and PUSHED.action.id or "nil"
   `)
-  assert.equal(global('PICKED'), 'cutgrass', '地上的现成材料必须被捡')
+  assert.equal(global('REFLEX_PICKED'), 'nil', 'Reflex 帧循环不擅自捡草')
+  assert.equal(global('CHORE_OK'), 'true')
+  assert.equal(global('PICKED'), 'cutgrass', '地上的现成材料由 chores 优先捡')
   assert.equal(global('ACTION'), 'PICKUP')
 })
 
@@ -1956,3 +1971,162 @@ test('FIX-02-12：spear 装备能够通过正确的组件和白名单检查', as
     assert(Whale.equiprules.SlotFor("spear") == GLOBAL.EQUIPSLOTS.HANDS, "spear 槽位判定为 hands")
   `)
 })
+
+test('FIX-02-13：主动战斗任务（kill/attack）在血量>=50%时不被 under_attack 逃跑打断，残血时恢复逃跑', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.health.currenthealth = 120
+    PLAYER.components.health.maxhealth = 150 -- 80% HP
+
+    -- 创建一只攻击玩家的蜘蛛
+    local spider = newent("spider", 2, 0, { "hostile", "monster", "spider" }, {
+        health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+        combat = { target = PLAYER },
+    })
+    NEARBY = { spider }
+
+    -- 模拟模型发起的 kill 任务
+    Whale.actions.Start("kill", {}, "model_cmd_kill_1")
+
+    -- 跑反射 5 ticks（≈1 秒节流）
+    NOW = NOW + 2
+    ${eachTick(5)}
+
+    -- 验证：战斗任务未被中断，没有触发逃跑
+    assert(Whale.job ~= nil and Whale.job.name == "kill", "血量充足时主动战斗任务不应被打断")
+
+    -- 现在玩家掉血到 40% (< 50%)
+    PLAYER.components.health.currenthealth = 60
+    NOW = NOW + 2
+    ${eachTick(5)}
+
+    -- 验证：血量不足 50% 时触发逃跑，战斗任务被抢占中断
+    assert(Whale.job == nil or Whale.job.cmd_id == "reflex", "血量低于 50% 时应触发紧急避险")
+  `)
+})
+
+// ─────── 真机回归（session 8fab0944 第 3 天）：打建筑被围殴不能算"正在战斗" ───────
+//
+// 现象：温蒂被指令去打蜘蛛巢（hi0，250 血），攻击惊动了 3 只守卫蜘蛛。
+//       血量从 150 被打到 33（22%）—— 全程反射都没让她撤，
+//       因为旧逻辑只看 job.name 是 attack/kill + 血 >= 50%，完全不看打的是谁。
+
+test('FIX-02-14：攻击的是建筑、却被守卫怪围殴 —— 必须立刻撤退（不能算主动交战）', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.health.currenthealth = 140   -- 93%：血量充足，旧逻辑一定不撤
+    PLAYER.components.health.maxhealth = 150
+
+    -- 被攻击的目标：蜘蛛巢（结构，不追人）
+    local den = newent("spiderden", 0, 0, { "hostile", "structure", "spiderden" }, {
+        health = { currenthealth = 250, maxhealth = 250, IsDead = function() return false end },
+    })
+    -- 3 只正在打玩家的守卫蜘蛛
+    local guards = {}
+    for i = 1, 3 do
+        guards[i] = newent("spider", 2, 0, { "hostile", "monster", "spider" }, {
+            health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+            combat = { target = PLAYER },
+        })
+    end
+    NEARBY = { den, guards[1], guards[2], guards[3] }
+
+    -- 模型正在打那个巢（ctx.target = den），不是打蜘蛛
+    Whale.actions.Start("attack", {}, "model_cmd_den", { target = den, times = 5 })
+
+    NOW = NOW + 2
+    ${eachTick(5)}
+
+    -- 必须中断攻击、转为逃跑
+    assert(Whale.job == nil or Whale.job.cmd_id == "reflex",
+        "打建筑时被守卫怪围殴必须中断，实际 job=" .. tostring(Whale.job and Whale.job.name))
+  `)
+})
+
+test('FIX-02-15：一对一打怪（目标就是攻击者）时，血量充足仍保持主动交战', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.health.currenthealth = 120   -- 80%
+    PLAYER.components.health.maxhealth = 150
+
+    local spider = newent("spider", 2, 0, { "hostile", "monster", "spider" }, {
+        health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+        combat = { target = PLAYER },
+    })
+    NEARBY = { spider }
+
+    -- 目标就是这只蜘蛛：这是真正的"主动交战"
+    Whale.actions.Start("kill", {}, "model_cmd_spider", { target = spider })
+
+    NOW = NOW + 2
+    ${eachTick(5)}
+
+    assert(Whale.job ~= nil and Whale.job.name == "kill",
+        "一对一主动交战不该被撤退打断，实际 job=" .. tostring(Whale.job and Whale.job.name))
+  `)
+})
+
+test('FIX-02-16：目标本身正在攻击我（哪怕旁边还有别的蜘蛛）→ 仍算主动交战，不打断', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.health.currenthealth = 120   -- 80%
+    PLAYER.components.health.maxhealth = 150
+
+    local a = newent("spider", 2, 0, { "hostile", "monster", "spider" }, {
+        health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+        combat = { target = PLAYER },
+    })
+    local b = newent("spider", -2, 0, { "hostile", "monster", "spider" }, {
+        health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+        combat = { target = PLAYER },
+    })
+    NEARBY = { a, b }
+
+    -- 打的就是正在咬我的 a：这是正常战斗，不该被打断
+    Whale.actions.Start("kill", {}, "model_cmd_a", { target = a })
+
+    NOW = NOW + 2
+    ${eachTick(5)}
+
+    assert(Whale.job ~= nil and Whale.job.name == "kill",
+        "打的是正在攻击我的蜘蛛时不该撤退，实际 job=" .. tostring(Whale.job and Whale.job.name))
+  `)
+})
+
+test('FIX-02-17：目标是个不会打人的活物（比如打中立建筑/巢）→ 被真怪攻击时必须撤', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    GLOBAL.TheWorld.state.phase = "day"
+    PLAYER.components.health.currenthealth = 140   -- 93%：血量充足
+    PLAYER.components.health.maxhealth = 150
+
+    -- 打的是一棵树（有 health 但不会攻击玩家）
+    local tree = newent("evergreen", 1, 0, { "tree" }, {
+        health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+    })
+    -- 一只正在咬我的蜘蛛
+    local spider = newent("spider", -2, 0, { "hostile", "monster", "spider" }, {
+        health = { currenthealth = 100, maxhealth = 100, IsDead = function() return false end },
+        combat = { target = PLAYER },
+    })
+    NEARBY = { tree, spider }
+
+    Whale.actions.Start("attack", {}, "model_cmd_tree", { target = tree, times = 3 })
+
+    NOW = NOW + 2
+    ${eachTick(5)}
+
+    assert(Whale.job == nil or Whale.job.cmd_id == "reflex",
+        "打不会还手的目标时被怪咬，必须优先逃跑，实际 job=" .. tostring(Whale.job and Whale.job.name))
+  `)
+})
+

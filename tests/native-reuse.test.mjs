@@ -615,6 +615,74 @@ test('NR-27：装配后 attack 动作走 native.AttackAction（真造出 ATTACK 
   assert.equal(global('TGT'), 'frog')
 })
 
+// ─────── 真机回归（session 8fab0944）：attack/kill 忘了自动换武器 ───────
+//
+// 现象：白天反射把火把收回背包后人是空手，模型下达 attack 就直接空手挥拳
+//       （温蒂空手 7.5 伤害），打蜘蛛等于送死。
+// 根因：legacy_attack 有 equip_if_needed(p, best_weapon(p))，新的 attack_by_ref 漏了。
+
+test('NR-29：attack 开始时自动换上背包里伤害最高的武器（不能空手挥拳）', async () => {
+  const { run, global } = loadChain(await import('fengari'))
+  run(`
+    local foe = newent("spider", 1, 0, { "hostile" }, {
+        health = { IsDead = function() return false end } })
+    local spear = { prefab = "spear", components = { weapon = { damage = 34 } } }
+    local axe   = { prefab = "axe",   components = { weapon = { damage = 27 } } }
+    spear.IsValid = function() return true end
+    axe.IsValid = function() return true end
+
+    EQUIPPED = nil
+    PUSHED = nil
+    PLAYER.components.inventory = {
+        GetEquippedItem = function() return EQUIPPED end,
+        Equip = function(self, item) EQUIPPED = item end,
+        ForEachItem = function(self, fn) fn(spear); fn(axe) end,
+        CanAcceptCount = function() return 99 end,
+        GetNumFreeSlot = function() return 15 end,
+        GetItemInSlot = function() return nil end,
+    }
+    PLAYER.components.locomotor = {
+        Stop = function() end, Clear = function() end, GoToPoint = function() end,
+        PushAction = function(self, ba) PUSHED = ba end,
+    }
+    PLAYER.components.health.GetPercent = function() return 1 end
+    PLAYER.GetBufferedAction = function() return nil end
+
+    Whale.actions.Start("attack", {}, "model-atk2", { target = foe, times = 1 })
+    Whale.actions.Tick()
+    HAND = EQUIPPED ~= nil and tostring(EQUIPPED.prefab) or "none"
+  `, 'attack 自动换武器')
+  assert.equal(global('HAND'), 'spear', '必须换上伤害最高的长矛（34 > 27），而不是空手或斧头')
+})
+
+test('NR-30：背包里没有武器时 attack 不报错（空手也能打）', async () => {
+  const { run, global } = loadChain(await import('fengari'))
+  run(`
+    local foe = newent("spider", 1, 0, { "hostile" }, {
+        health = { IsDead = function() return false end } })
+    PUSHED = nil
+    PLAYER.components.inventory = {
+        GetEquippedItem = function() return nil end,
+        Equip = function() end,
+        ForEachItem = function() end,
+        CanAcceptCount = function() return 99 end,
+        GetNumFreeSlot = function() return 15 end,
+        GetItemInSlot = function() return nil end,
+    }
+    PLAYER.components.locomotor = {
+        Stop = function() end, Clear = function() end, GoToPoint = function() end,
+        PushAction = function(self, ba) PUSHED = ba end,
+    }
+    PLAYER.components.health.GetPercent = function() return 1 end
+    PLAYER.GetBufferedAction = function() return nil end
+
+    Whale.actions.Start("attack", {}, "model-atk3", { target = foe, times = 1 })
+    Whale.actions.Tick()
+    OK = PUSHED ~= nil and tostring(PUSHED.action.id) or "none"
+  `, 'attack 空手')
+  assert.equal(global('OK'), 'ATTACK', '没有武器时仍应正常推出 ATTACK（空手）')
+})
+
 test('NR-28：装配后逃跑落点不是"直线后退"（原版几何生效）', async () => {
   const vanilla = vanillaScript('behaviours/runaway.lua')
   if (!vanilla) return

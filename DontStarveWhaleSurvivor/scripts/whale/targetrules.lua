@@ -428,6 +428,9 @@ end
 
 local function entity_key(ent)
     if ent == nil then return nil end
+    if ent.GUID ~= nil then
+        return tostring(ent.GUID)
+    end
     local prefab = ent.prefab
     if prefab == nil then return nil end
     local x, _, z = U.pos(ent)
@@ -547,11 +550,39 @@ function T.IsGatherable(ent, actor)
     return ok == true
 end
 
---- 这个实体值不值得发句柄（= 任何一类目标 + gather 类目标）
+--- 检查是否是战斗或威胁目标（敌对生物、正在攻击玩家的生物、蜘蛛/蜘蛛巢、猎犬等）
+local function is_threat_or_combat_target(ent, actor)
+    local h = comp(ent, "health")
+    if h == nil then return false end
+    local ok_dead, dead = pcall(function() return h:IsDead() end)
+    if ok_dead and dead then return false end
+
+    if safe_call(function()
+        return ent:HasTag("hostile")
+            or ent:HasTag("monster")
+            or ent:HasTag("spider")
+            or ent:HasTag("spiderden")
+            or ent:HasTag("hound")
+    end, false) then
+        return true
+    end
+
+    local c = comp(ent, "combat")
+    if c ~= nil then
+        local tgt = safe_call(function() return c.target end, nil)
+        if tgt ~= nil and (tgt == actor or safe_call(function() return tgt:HasTag("player") end, false)) then
+            return true
+        end
+    end
+    return false
+end
+
+--- 这个实体值不值得发句柄（= 任何一类目标 + gather 类目标 + 威胁/战斗目标）
 function T.WorthHandle(ent, actor)
     if ent == nil then return false end
     if T.MatchesAny(ent, actor) then return true end
-    return T.IsGatherable(ent, actor)
+    if T.IsGatherable(ent, actor) then return true end
+    return is_threat_or_combat_target(ent, actor)
 end
 
 --- 每帧扫描后调用：给这一帧看到的可操作实体续期/分配句柄，并清掉这帧没看到的。
