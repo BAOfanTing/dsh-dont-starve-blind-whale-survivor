@@ -170,9 +170,13 @@ test('Lua: TheSim:QueryServer 握手与全双工 exchange 回调', async () => {
   assert.equal(bodyJson.token, 'sec_tok_888')
   assert.ok(bodyJson.state != null, '发送的数据包必须包含 state 观察快照')
 
-  // 模拟 Node 端响应，捎带一条带有效租约的 wait 动作
+  // 模拟 Node 端响应，捎带一条带有效租约的 wait 动作，以及 settings 设置对象（验证 apply_settings 不再为 nil）
   const cmdObj = harness.cmd({ id: 'cmd_999', action: 'wait', args: { seconds: 1 }, protocol_version: 1 })
-  const responseJson = JSON.stringify({ ok: true, commands: [cmdObj] })
+  const responseJson = JSON.stringify({
+    ok: true,
+    commands: [cmdObj],
+    settings: { pause: false, interval: 2, verbose: true },
+  })
   harness.run(`
     local response_json = [==[${responseJson}]==]
     QUERY_CB(response_json, true, 200)
@@ -185,4 +189,177 @@ test('Lua: TheSim:QueryServer 握手与全双工 exchange 回调', async () => {
     print("DEBUG: ACKED_JOB =", ACKED_JOB)
   `)
   assert.equal(harness.get('ACKED_JOB'), 'wait')
+})
+
+test('GameBridge: 双分片（Master 与 Caves）状态优先级竞争与指令防截胡', async () => {
+  const dir = tempDir('whale-dualshard-bridge-')
+  const bridge = new GameBridge({ bridgeDir: dir, lockDir: true, enableHttp: true })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+
+  const postExchange = (data) => new Promise((resolve) => {
+    const req = http.request(`http://127.0.0.1:${bridge.httpPort}/v1/exchange?t=${bridge.httpToken}`, { method: 'POST' }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))))
+    })
+    req.end(JSON.stringify(data))
+  })
+
+  const masterState = {
+    ready: true,
+    text: '威尔逊正在地面（地上主分片）',
+    data: {
+      players: 1,
+      identity: { shard_id: '1', session_id: 'sess_master' },
+    },
+  }
+
+  const cavesInactiveState = {
+    ready: false,
+    text: '洞穴分片（暂无玩家进入）',
+    data: {
+      players: 0,
+      identity: { shard_id: '886797363', session_id: 'sess_caves' },
+    },
+  }
+
+  // 1. 地上 Master 分片先上报状态
+  const repMaster1 = await postExchange({ state: masterState })
+  assert.equal(repMaster1.ok, true)
+  assert.equal(bridge.readState()?.json.text, '威尔逊正在地面（地上主分片）')
+
+  // 2. 洞穴 Caves 分片（0 玩家）随后也向同一个 HTTP 端口上报
+  const repCaves1 = await postExchange({ state: cavesInactiveState })
+  assert.equal(repCaves1.ok, true)
+
+  // 关键断言：空闲的洞穴分片不得覆盖 Master 的活跃状态！
+  assert.equal(bridge.readState()?.json.text, '威尔逊正在地面（地上主分片）')
+
+  // 3. 此时外部下发一个动作
+  let callDone = false
+  const callPromise = bridge.call('chop_nearest', { target_kind: 'tree' }, { timeoutMs: 3000 }).then((res) => {
+    callDone = true
+    return res
+  })
+
+  // 4. 洞穴分片空闲轮询，尝试交换
+  const repCaves2 = await postExchange({ state: cavesInactiveState })
+  // 关键断言：空闲洞穴分片绝对不能截胡地上分片的指令！
+  assert.equal(repCaves2.commands.length, 0, '0 玩家的洞穴分片不能领走指令')
+
+  // 5. 地上 Master 分片心跳拉取指令
+  const repMaster2 = await postExchange({ state: masterState })
+  assert.equal(repMaster2.commands.length, 1, '活跃的地上分片成功认领指令')
+  const cmd = repMaster2.commands[0]
+  assert.equal(cmd.action, 'chop_nearest')
+
+  // 6. Master 分片执行完成并上报结果
+  await postExchange({
+    state: masterState,
+    result: { id: cmd.id, ok: true, text: '砍伐成功' },
+  })
+  const res = await callPromise
+  assert.equal(callDone, true)
+  assert.equal(res.ok, true)
+  assert.equal(res.text, '砍伐成功')
+
+  // 7. 模拟分片切换：玩家进入洞穴（下洞）
+  // Master 玩家离开，变为 0 人
+  const masterLeavingState = {
+    ready: false,
+    text: '地上分片（玩家已离开）',
+    data: {
+      players: 0,
+      identity: { shard_id: '1', session_id: 'sess_master' },
+    },
+  }
+  await postExchange({ state: masterLeavingState })
+
+  // 洞穴分片加载完成，玩家在洞穴中活跃！
+  const cavesActiveState = {
+    ready: true,
+    text: '威尔逊正在地下洞穴',
+    data: {
+      players: 1,
+      identity: { shard_id: '886797363', session_id: 'sess_caves' },
+    },
+  }
+
+  // 外部下发洞穴中的动作
+  let cavesCallDone = false
+  const cavesCallPromise = bridge.call('mine_nearest', { target_kind: 'rock' }, { timeoutMs: 3000 }).then((res) => {
+    cavesCallDone = true
+    return res
+  })
+
+  // 洞穴分片上报活跃状态
+  const repCaves3 = await postExchange({ state: cavesActiveState })
+  // 状态应无缝切换为洞穴
+  assert.equal(bridge.readState()?.json.text, '威尔逊正在地下洞穴')
+  // 洞穴分片认领指令
+  assert.equal(repCaves3.commands.length, 1)
+  assert.equal(repCaves3.commands[0].action, 'mine_nearest')
+
+  // 此时地上分片（0人）即便轮询，也不会干扰洞穴
+  const repMaster3 = await postExchange({ state: masterLeavingState })
+  assert.equal(repMaster3.commands.length, 0)
+  assert.equal(bridge.readState()?.json.text, '威尔逊正在地下洞穴')
+
+  // 洞穴分片完成指令
+  await postExchange({
+    state: cavesActiveState,
+    result: { id: repCaves3.commands[0].id, ok: true, text: '采矿成功' },
+  })
+  const cavesRes = await cavesCallPromise
+  assert.equal(cavesCallDone, true)
+  assert.equal(cavesRes.ok, true)
+
+  bridge.close()
+})
+
+test('Lua: 无玩家时降低 HTTP 轮询频率（防洞穴空闲分片频繁轮询）', async () => {
+  const harness = await loadTargets({
+    preload: `
+      GLOBAL.TheWorld.ismastersim = true
+      GLOBAL.TheWorld.DoPeriodicTask = function(self, interval, fn)
+        SERVER_TICK = fn
+        return { Cancel = function() end }
+      end
+      QUERY_SERVER_CALLS = {}
+      GLOBAL.TheSim.QueryServer = function(self, url, cb, method, body)
+        QUERY_SERVER_CALLS[#QUERY_SERVER_CALLS + 1] = {
+          url = url,
+          method = method,
+          body = body,
+        }
+        -- 模拟立即完成回调
+        cb('{"ok":true,"commands":[]}', true, 200)
+      end
+    `,
+  })
+
+  harness.run(luaIoFiles({
+    'whale_io_http.json': { port: 18788, token: 'sec_tok_888' },
+    'whale_io_lease.json': testAuthority(),
+  }))
+
+  // 启动服务
+  harness.run(`
+    Whale.bridge.boot()
+  `)
+
+  // 模拟洞穴分片：0 玩家
+  harness.run(`
+    GLOBAL.AllPlayers = {}
+    QUERY_SERVER_CALLS = {}
+    -- 连续跑 5 次 server_tick
+    for i = 1, 5 do
+      SERVER_TICK()
+    end
+    CALLS_COUNT = #QUERY_SERVER_CALLS
+  `)
+
+  // 5 次 tick 中，无玩家时只能触发 1 次握手，其余 4 次被 5 秒限频阻断
+  const callsCount = Number(harness.get('CALLS_COUNT'))
+  assert.equal(callsCount, 1, '无玩家时不得每次 server_tick 都发起 HTTP 轮询')
 })

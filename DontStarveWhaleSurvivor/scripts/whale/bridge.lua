@@ -56,6 +56,7 @@ local client_set_paused = nil
 local dispatch_command = nil
 local send_http_exchange = nil
 local check_http_config = nil
+local apply_settings = nil
 
 local function log(msg)
     if Whale.verbose then print("[大肥鱼] " .. tostring(msg)) end
@@ -425,15 +426,69 @@ check_http_config = function()
     return http_cfg.enabled
 end
 
+-- ─────────────────── 设置 ───────────────────
+
+apply_settings = function(input)
+    local data = nil
+    if type(input) == "table" then
+        data = input
+    elseif type(input) == "string" then
+        local ok, parsed = pcall(Whale.json.decode, U.strip_header(input))
+        if ok and type(parsed) == "table" then data = parsed end
+    end
+    if data == nil then return end
+    if data.pause ~= nil then settings.pause = data.pause and true or false end
+    if data.verbose ~= nil then Whale.verbose = data.verbose and true or false end
+    if data.interval ~= nil then
+        local interval = tonumber(data.interval)
+        if interval ~= nil then WRITE_STATE = math.max(0.2, interval) end
+    end
+end
+
+local function poll_settings()
+    local now = U.now()
+    if now < next_settings_at then return end
+    next_settings_at = now + 2
+    local text = io_read(FILES.io_settings)
+    if text ~= nil and text ~= "" then
+        apply_settings(text)
+        return
+    end
+    ps_read(FILES.settings, function(data)
+        if data ~= nil and data ~= "" then apply_settings(data) end
+    end)
+end
+
+-- ─────────────────── HTTP 交换 ───────────────────
+
+local HTTP_IDLE_POLL_INTERVAL = 5.0
+
 send_http_exchange = function(immediate_state)
     if not http_cfg.enabled or http_cfg.url == nil then return false end
     if GLOBAL.TheSim == nil or GLOBAL.TheSim.QueryServer == nil then return false end
     if http_inflight then return false end
 
+    local now = U.now()
+    local players = U.count_players()
+    local has_player = (players > 0)
+
+    -- 无玩家时降低轮询频率至 5 秒一次，避免空闲分片（如洞穴）频繁刷 HTTP 甚至截胡指令
+    if not has_player and pending_result_data == nil and last_ack_data == nil and immediate_state == nil then
+        if now < http_next_exchange_at then
+            return false
+        end
+    end
+    if not has_player then
+        http_next_exchange_at = now + HTTP_IDLE_POLL_INTERVAL
+    end
+
     http_inflight = true
+    local st = immediate_state or build_state()
+    local shard_id = (st.data ~= nil and st.data.identity ~= nil and st.data.identity.shard_id) or nil
     local payload = {
         token = http_cfg.token,
-        state = immediate_state or build_state(),
+        shard_id = shard_id,
+        state = st,
         result = pending_result_data,
         ack = last_ack_data,
         t = os.time(),
@@ -466,45 +521,13 @@ send_http_exchange = function(immediate_state)
                 end
             end
             -- 全双工自驱动：如果刚收到了指令或状态有重大变化，主动链式调度下一次轮询，极速收敛指令执行流
-            if not http_inflight and (pending_result_data ~= nil or (type(data) == "table" and type(data.commands) == "table" and #data.commands > 0)) then
+            -- 但若没有活跃玩家，不进行链式自驱动
+            if not http_inflight and (pending_result_data ~= nil or (has_player and type(data) == "table" and type(data.commands) == "table" and #data.commands > 0)) then
                 send_http_exchange()
             end
         end
     end, "POST", body)
     return true
-end
-
--- ─────────────────── 设置 ───────────────────
-
-local function apply_settings(input)
-    local data = nil
-    if type(input) == "table" then
-        data = input
-    elseif type(input) == "string" then
-        local ok, parsed = pcall(Whale.json.decode, U.strip_header(input))
-        if ok and type(parsed) == "table" then data = parsed end
-    end
-    if data == nil then return end
-    if data.pause ~= nil then settings.pause = data.pause and true or false end
-    if data.verbose ~= nil then Whale.verbose = data.verbose and true or false end
-    if data.interval ~= nil then
-        local interval = tonumber(data.interval)
-        if interval ~= nil then WRITE_STATE = math.max(0.2, interval) end
-    end
-end
-
-local function poll_settings()
-    local now = U.now()
-    if now < next_settings_at then return end
-    next_settings_at = now + 2
-    local text = io_read(FILES.io_settings)
-    if text ~= nil and text ~= "" then
-        apply_settings(text)
-        return
-    end
-    ps_read(FILES.settings, function(data)
-        if data ~= nil and data ~= "" then apply_settings(data) end
-    end)
 end
 
 -- ─────────────────── 服务端主循环 ───────────────────
@@ -543,7 +566,13 @@ local function server_tick()
     tick_count = tick_count + 1
     server_last_tick_at = bridge_now()
     step("HTTP交换", function()
-        if check_http_config() then send_http_exchange() end
+        if check_http_config() then
+            local now = U.now()
+            local players = U.count_players()
+            if players > 0 or pending_result_data ~= nil or last_ack_data ~= nil or now >= http_next_exchange_at then
+                send_http_exchange()
+            end
+        end
     end)
     step("读设置", poll_settings)
     step("读权威租约", poll_authority)
