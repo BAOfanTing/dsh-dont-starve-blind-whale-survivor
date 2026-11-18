@@ -36,6 +36,8 @@ Whale = {
         io_lease_ack = "whale_io_lease_ack.json",
         pause = "whale_pause.json",            -- 外面 -> 客户端：要不要暂停世界
         io_pause = "whale_io_pause.json",
+        http = "whale_http.json",              -- 外面 -> 模组：Localhost HTTP 通道配置
+        io_http = "whale_io_http.json",
     },
 }
 

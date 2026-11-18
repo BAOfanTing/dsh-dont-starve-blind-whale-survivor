@@ -18,6 +18,7 @@ local U = Whale.util
 local B = {}
 
 local FILES = Whale ~= nil and Whale.files or {}
+local last_cmd_id = nil
 
 local TICK = 0.2      -- 动作推进
 local READ_CMD = 0.3  -- 读指令（保留：io 通道优先，读不到再走持久化字符串）
@@ -43,8 +44,18 @@ local next_settings_at = 0
 local next_state_at = 0
 local settings = { pause = false }
 local pending_result = nil
+local pending_result_data = nil
+local last_ack_data = nil
+local http_cfg = { enabled = false, port = nil, token = nil, url = nil }
+local http_last_ok = 0
+local http_inflight = false
+local http_next_exchange_at = 0
 local booted = false
 local pc_ok = nil
+local client_set_paused = nil
+local dispatch_command = nil
+local send_http_exchange = nil
+local check_http_config = nil
 
 local function log(msg)
     if Whale.verbose then print("[大肥鱼] " .. tostring(msg)) end
@@ -157,8 +168,13 @@ end
 
 function B.WriteState(force)
     local now = U.now()
+    local interval = WRITE_STATE
+    -- 如果启用了 HTTP 且最近 2 秒有心跳响应，非强制时拉长写盘间隔（每 5 秒兜底一次），大幅减轻磁盘 I/O
+    if not force and http_cfg.enabled and (now - http_last_ok < 2.0) then
+        interval = math.max(WRITE_STATE, 5.0)
+    end
     if not force and now < next_state_at then return end
-    next_state_at = now + WRITE_STATE
+    next_state_at = now + interval
     local ok, payload = pcall(function()
         local state = build_state()
         last_state_text = state.text
@@ -173,22 +189,24 @@ end
 
 function B.Report(ok, text, cmd_id, reason)
     local id = cmd_id or last_cmd_id
-    -- M1.0：A 栈（scripts/main）已归档，这里原来有两个转发钩子
-    -- （动作执行器的 onActionReport、任务链的 OnActionResult，都挂在 A 栈的全局表上）。
-    -- 现在结果只写一份给外面的 Node，不再有第二条链路需要它。
-    pending_result = Whale.json.encode({
+    pending_result_data = {
         v = 1,
         id = id,
         ok = ok and true or false,
         reason = reason,
         text = tostring(text or ""),
         t = os.time(),
-    })
+    }
+    pending_result = Whale.json.encode(pending_result_data)
     if FILES.result ~= nil then
         write_both(FILES.result, FILES.io_result, pending_result)
     end
     -- 动作一完成就立刻刷新状态，AI 下一步看到的是最新情况
     B.WriteState(true)
+    -- HTTP 优先通道：立即触发一次 exchange，2ms 内将执行结果送达 Node 运行时
+    if http_cfg.enabled and send_http_exchange ~= nil then
+        pcall(function() send_http_exchange(build_state()) end)
+    end
     log("结果 " .. tostring(id) .. " " .. tostring(ok) .. "：" .. tostring(text))
 end
 
@@ -217,9 +235,13 @@ function B.WriteLeaseAck(authority)
         acked_at = os.time() * 1000.0,
         job_cleared = (Whale == nil or Whale.job == nil),
     }
+    last_ack_data = ack
     local ok, text = pcall(Whale.json.encode, ack)
     if not ok then return false end
     last_ack_key = ack_key
+    if http_cfg.enabled and send_http_exchange ~= nil then
+        pcall(function() send_http_exchange() end)
+    end
     return write_both(FILES.lease_ack or "whale_lease_ack.json",
                       FILES.io_lease_ack or "whale_io_lease_ack.json", text)
 end
@@ -249,17 +271,13 @@ local function poll_lease()
     end
 end
 
--- ─────────────────── 指令 ───────────────────
+-- ─────────────────── 指令分发 ───────────────────
 
-local function handle_command(json_text)
-    local ok, cmd = pcall(Whale.json.decode, U.strip_header(json_text))
-    if not ok or type(cmd) ~= "table" then
-        log("收到看不懂的指令")
-        return
-    end
+dispatch_command = function(cmd)
+    if type(cmd) ~= "table" then return end
     local id = cmd.id ~= nil and tostring(cmd.id) or nil
     if id == nil then return end
-    -- poll_command 每 0.3s 重读同一个命令文件（Lua 不删它）；同一 id 只处理一次
+    -- 同一 id 只处理一次
     if id == last_cmd_id then return end
     last_cmd_id = id
     local action = tostring(cmd.action or "")
@@ -338,11 +356,21 @@ local function handle_command(json_text)
             lookup_query = cmd.args ~= nil and cmd.args.q or nil,
             probe_prefab = cmd.args ~= nil and cmd.args.prefab or nil,
             probe_radius = cmd.args ~= nil and cmd.args.radius or nil,
+            kiting = detail ~= nil and detail.kiting or nil,
         }
     )
     if not started then
         B.Report(false, err or "动作没能开始", id, "action_start_failed")
     end
+end
+
+local function handle_command(json_text)
+    local ok, cmd = pcall(Whale.json.decode, U.strip_header(json_text))
+    if not ok or type(cmd) ~= "table" then
+        log("收到看不懂的指令")
+        return
+    end
+    dispatch_command(cmd)
 end
 
 local function poll_command()
@@ -367,11 +395,96 @@ local function poll_command()
     end)
 end
 
+-- ─────────────────── Localhost HTTP 通道（TheSim:QueryServer） ───────────────────
+
+check_http_config = function()
+    if http_cfg.enabled then return true end
+    local file_name = FILES.io_http or "whale_io_http.json"
+    local text = io_read(file_name)
+    if text ~= nil and text ~= "" then
+        local ok, parsed = pcall(Whale.json.decode, U.strip_header(text))
+        if ok and type(parsed) == "table" and parsed.port ~= nil then
+            http_cfg.port = parsed.port
+            http_cfg.token = parsed.token
+            http_cfg.url = "http://127.0.0.1:" .. tostring(parsed.port) .. "/v1/exchange?t=" .. tostring(parsed.token or "")
+            http_cfg.enabled = true
+            return true
+        end
+    end
+    ps_read(FILES.http or "whale_http.json", function(data)
+        if data ~= nil and data ~= "" then
+            local ok, parsed = pcall(Whale.json.decode, U.strip_header(data))
+            if ok and type(parsed) == "table" and parsed.port ~= nil then
+                http_cfg.port = parsed.port
+                http_cfg.token = parsed.token
+                http_cfg.url = "http://127.0.0.1:" .. tostring(parsed.port) .. "/v1/exchange?t=" .. tostring(parsed.token or "")
+                http_cfg.enabled = true
+            end
+        end
+    end)
+    return http_cfg.enabled
+end
+
+send_http_exchange = function(immediate_state)
+    if not http_cfg.enabled or http_cfg.url == nil then return false end
+    if GLOBAL.TheSim == nil or GLOBAL.TheSim.QueryServer == nil then return false end
+    if http_inflight then return false end
+
+    http_inflight = true
+    local payload = {
+        token = http_cfg.token,
+        state = immediate_state or build_state(),
+        result = pending_result_data,
+        ack = last_ack_data,
+        t = os.time(),
+    }
+    local ok_enc, body = pcall(Whale.json.encode, payload)
+    if not ok_enc or body == nil then
+        http_inflight = false
+        return false
+    end
+
+    GLOBAL.TheSim:QueryServer(http_cfg.url, function(result, ok, code)
+        http_inflight = false
+        if ok and code == 200 and result ~= nil and result ~= "" then
+            http_last_ok = U.now()
+            local fine, data = pcall(Whale.json.decode, result)
+            if fine and type(data) == "table" then
+                if data.result_acked and pending_result_data ~= nil then
+                    pending_result_data = nil
+                end
+                if type(data.commands) == "table" and #data.commands > 0 then
+                    for _, cmd in ipairs(data.commands) do
+                        dispatch_command(cmd)
+                    end
+                end
+                if type(data.settings) == "table" then
+                    apply_settings(data.settings)
+                end
+                if data.pause ~= nil and client_set_paused ~= nil then
+                    client_set_paused(data.pause == true)
+                end
+            end
+            -- 全双工自驱动：如果刚收到了指令或状态有重大变化，主动链式调度下一次轮询，极速收敛指令执行流
+            if not http_inflight and (pending_result_data ~= nil or (type(data) == "table" and type(data.commands) == "table" and #data.commands > 0)) then
+                send_http_exchange()
+            end
+        end
+    end, "POST", body)
+    return true
+end
+
 -- ─────────────────── 设置 ───────────────────
 
-local function apply_settings(text)
-    local ok, data = pcall(Whale.json.decode, U.strip_header(text))
-    if not ok or type(data) ~= "table" then return end
+local function apply_settings(input)
+    local data = nil
+    if type(input) == "table" then
+        data = input
+    elseif type(input) == "string" then
+        local ok, parsed = pcall(Whale.json.decode, U.strip_header(input))
+        if ok and type(parsed) == "table" then data = parsed end
+    end
+    if data == nil then return end
     if data.pause ~= nil then settings.pause = data.pause and true or false end
     if data.verbose ~= nil then Whale.verbose = data.verbose and true or false end
     if data.interval ~= nil then
@@ -429,6 +542,9 @@ end
 local function server_tick()
     tick_count = tick_count + 1
     server_last_tick_at = bridge_now()
+    step("HTTP交换", function()
+        if check_http_config() then send_http_exchange() end
+    end)
     step("读设置", poll_settings)
     step("读权威租约", poll_authority)
     step("看权威租约", poll_lease)
@@ -479,7 +595,7 @@ end
 
 local paused_by_us = false
 
-local function client_set_paused(want)
+client_set_paused = function(want)
     if GLOBAL.SetServerPaused == nil then
         if pc_ok == nil then
             pc_ok = false
