@@ -137,11 +137,11 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 
 ---
 
-## 7. 工具表面（39 个）与共用链路
+## 7. 工具表面（41 个）与共用链路
 
 ```
 TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写笔记
-      + ACTION_SPECS 的 36 个动作                   ← 必须过 dispatcher
+      + ACTION_SPECS 的 38 个动作                   ← 必须过 dispatcher
 ```
 
 动作按领域放在 `lib/actions/specs/`：
@@ -151,9 +151,9 @@ TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写
 | `movement.js` | move_to / stop / seek | 3 |
 | gathering.js | pickup_nearest / pickup_food / harvest_nearest / chop_nearest / mine_nearest / pickup / harvest / gather / gather_area / chop / mine / dig / hammer | 13 |
 | `crafting.js` | craft / build / cook | 3 |
-| `survival.js` | eat / equip / unequip / drop / fuel / wait | 6 |
+| `survival.js` | eat / equip / unequip / drop / fuel / wait / sleep | 7 |
 | `interaction.js` | use / container_take / container_put / give | 4 |
-| `combat.js` | attack / kill | 2 |
+| `combat.js` | attack / kill / fight_spider | 3 |
 | `info.js` | recipes / lookup / probe / inspect | 4 |
 | `social.js` | say | 1 |
 
@@ -315,6 +315,8 @@ TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然�
 - **省 token 的注入方式**：`get_state` 文本末尾输出完整计划，JSON 模式放在 `plan` 字段；
   F8 每轮只注入一行紧凑计划，只有目标切换时才展开完整版。
 - F8 与 MCP 通过 `lib/index.js` 的 `sharedPlan` 共用同一份计划，换入口不会重新规划。
+- **注意（0.12.0）**：`plan.js` 已删除旧的 `build_science_machine` 目标（"材料齐 + 附近没机器 → 就地 build"）。
+  科技/基地建造改由下节「层级规划层」驱动，并由 `executeTool('build')` 的家园门槛拒绝在营地/家范围外建造。
 
 ---
 
@@ -328,4 +330,33 @@ TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然�
   `world_key` 缺失时退回旧的单文件 `notes.md` 并**明确标成"未绑定世界"**（不保证坐标属于当前世界）。
 - 旧世界的笔记**不删**：换回去还能看见；当前世界看不到，也不会被当成当前坐标。
   `get_state` 在世界切换时显式提示「旧世界的基地坐标和未完成目标已归档」。
+
+---
+
+## 16. 层级规划层（Planner，0.12.0）
+
+在 `plan.js`（短期生存优先级）之上，新增一层"长期 → 中期 → 短期"的规划，解决"没有长期目标 / 任务互相打断 / 失败重试 / 家园缺失"。
+
+```
+长期：lib/planner/development-stages.js   阶段 0..6，完成条件只看快照+记忆（完成才推进、锁存）
+中期：lib/planner/task-board.js           任务看板：依赖 DAG / 进度证据 / attempts+cooldown / 合并保活
+      lib/skills/establish-home.js        把"建家"展开成 勘察选址→前往→补料→建核心→设家
+      lib/skills/gather-resources.js      把"某配方缺料"翻译成原子采集动作
+      lib/planner/survival-priority.js    P0..P4；P0/P1 时普通任务让位但不丢长期目标
+      lib/planner/base-site-planner.js    多指标营地候选评分（只用已观察数据）
+短期：lib/plan.js 的 GOALS                 复活/脱战/光照/进食/补理智/备光/工具/存粮 → 原子动作
+记忆：lib/planner/world-memory.js          按 world_key 落盘：营地/家/阶段/看板/里程碑/已知建筑/危险区
+编排：lib/planner/planner-core.js          plan()=读记忆→定阶段→刷看板→评审→给下一步；guardBuild()=家园建造门槛
+```
+
+**接线（不改执行通道）**：
+- `get_state`（`tools.js`）在装配了 `ctx.planner` 时，末尾追加「发展阶段 / 营地候选 / 任务看板 / 下一步」；JSON 模式放进 `development` 字段（仍是纯 JSON）。没装配 planner（单元测试的假 ctx）时行为与以前完全一致。
+- `executeTool('build')` 在装配 planner 时先走 `guardBuild()`：开局生存阶段 / 未选址 / 没到营地 / 没家 / 超出家范围 一律拒绝 —— 因此"材料够就地在脚下建科学机器"在这条链上不可能发生。`camp_site` 只在进入建立家园阶段（Stage≥1）后落定，且选址对"脚下 1.5 格内"加惩罚，避免把营地定在出生点原地。
+- `index.js` 创建唯一 `planner` 并通过 `runTool` 的 `ctx` 交给 F8 与 MCP（**同一个**规划器、**同一条** dispatcher 链）。
+- planner 只**读快照 + 写记忆**，不下发动作；技能只组合已有原子动作，仍过 dispatcher / Control Lease / Lua Guard。
+
+**camp_site ≠ home**：`camp_site` 是选址坐标；`home` 是建造后从观测到的建筑坐标生成的稳定锚点 `building:<prefab>@x,z`（不暴露 GUID）。后续基地结构必须落在 `home_anchor.radius` 内。
+
+**局限（诚实标注）**：本项目 Lua 不导出地图栅格、不暴露 GUID，所以选址是"基于 16 格 nearby + danger_zones 的局部评分"（`connectivity_mode=observed_nearby_only`），信息不足会要求继续探索，**不假装做了全图最佳选址**。真正的图选址/`query_map`/`query_places` 留待后续 Lua 工作。
+
 

@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：TENT (Mod 0.41.0 / 插件 0.11.0)｜开放帐篷链（科学机器 → 炼金引擎 → 帐篷）与 `sleep`｜三处白名单（工具 enum / 插件校验 / 游戏内 Lua Guard）同步放开，测试 `recipe-parity`/`science-chain`/`tool-parity` 盯一致性｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：LEVEL-PLANNING (插件 0.12.0)｜新增**层级规划层**（`lib/planner/*`：发展阶段 / 任务看板 / 家园选址 / 世界记忆）｜堵死"材料够就地建科学机器"（build 家园门槛）｜阶段、任务看板按 `world_key` 隔离并落盘｜测试 871 → **892** 全绿｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -9,7 +9,7 @@
 | 位置 | 版本 | 含义 |
 |---|---|---|
 | `DontStarveWhaleSurvivor/modinfo.lua` | **0.41.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
-| `package.json` | **0.11.0** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
+| `package.json` | **0.12.0** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号描述两个交付物：模组装进游戏 `mods/`，插件装进 DSH。给 AI 报告的状态以模组版本为准。
 
@@ -130,11 +130,34 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 
 **未做**：`pick` / `heal` / `make_fire` 仍未开放；帐篷的多人/耐久语义没有额外处理（原生 `sleepingbag` 自己管）。
 
+### 1.10 层级规划 + 家园系统（插件 0.12.0）
+
+把"每轮临时决定下一步"升级为「长期阶段 → 中期任务看板 → 短期原子动作」三层；最优先解决"材料齐全就地建科学机器"与"没有明确家园"。
+
+| 模块 | 职责 | 关键点 |
+|---|---|---|
+| `lib/planner/world-memory.js` | 按 `world_key` 落盘记忆（营地/家/阶段/看板/里程碑/已知建筑/危险区/近期失败） | 复用 `sanitizeWorldKey`；换世界不继承旧 home |
+| `lib/planner/task-board.js` | 任务状态机（pending/ready/in_progress/done/blocked/failed/cancelled）、依赖 DAG、attempts+冷却、合并保活 | 完成必须有**证据**（快照核对），失败不无限重试 |
+| `lib/planner/base-site-planner.js` | 多指标候选营地评分（安全/资源/食物/空间/交通/连通近似/危险惩罚） | 只用已观察数据；信息不足→要求探索；危险区不选 |
+| `lib/planner/development-stages.js` | 阶段 0..6 完成条件（快照+记忆） | 完成才推进；已完成不重开 |
+| `lib/planner/survival-priority.js` | P0..P4 生存级别；P0/P1 时普通任务让位 | 长期目标保留，不丢 |
+| `lib/skills/establish-home.js` · `gather-resources.js` | 把"建家/缺料"展开成任务 | 只产出任务，不直接下动作 |
+| `lib/planner/planner-core.js` | 编排：读记忆→定阶段→刷看板→评审→给下一步；`guardBuild()` 家园门槛 | `get_state` 追加「发展阶段/任务看板」 |
+
+**家园规则**：`camp_site`（选址坐标）≠ `home`（真实建筑锚点 `building:<prefab>@x,z`）。
+流程：勘察选址 → 前往 → 建第一座科学机器 → 用观测到的建筑坐标设家 → 后续基地建筑必须在锚点半径内。
+`executeTool('build')` 在有 planner 时前置 `guardBuild`：开局生存阶段（`not_ready_stage`）/ 未选址（`no_camp_site`）/
+没到营地（`not_at_camp`）/ 没家（`no_home`）/ 超出家范围（`out_of_home_range`）一律拒绝 —— **不再可能"材料够就地在脚下建机器"**。
+营地（camp_site）**只在进入建立家园阶段（Stage≥1）后才落定**，且选址对"脚下 1.5 格内"的候选加惩罚，避免把营地定在出生点原地。
+
+**边界**：不改 Lua、不新增执行通道，所有动作仍过 dispatcher/guard；`plan.js` 删除了 `build_science_machine` 目标（就地在脚下建）。
+**Phase F（真机验收）待做**：全新世界活过首夜→选址→建家→科技→第 3/5/10 天，需在游戏内实际跑，不用模拟冒充。
+
 ---
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（40 个 = 3 本地 + 37 动作）
+### 2.1 模型可见的工具（41 个 = 3 本地 + 38 动作）
 
 > 权威清单：`lib/actions/specs/*.js` 的 `ACTION_SPECS`。`OPEN_ACTIONS`、`TOOLS`、`RULES` 均从它派生，有 `tool-parity` / `prompt-parity` 测试保障。
 
@@ -174,6 +197,7 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
   - **紧急需求上报**：反射自己解决不了的危险（如天黑无料做光、饿极无粮可采）上报为结构化需求 `Needs()`，在 `get_state` 明确提示。
   - **安全抢占与单槽保护**：仅 P0/P1 可中断普通任务，中断走唯一取消路径 `A.Abort`，确认清理干净后才启动新动作。
 - **计划层（Plan）**：从快照推导当前唯一目标并保持稳定，模型按建议行动，减少每轮从头规划开销。
+- **层级规划层（Planner）**：长期阶段（0..6）+ 中期任务看板（依赖/证据/重试冷却）+ 家园选址与建造约束；`get_state` 末尾输出「发展阶段/任务看板/下一步」，记忆按 `world_key` 隔离并落盘。P0/P1 生存事件让普通任务暂停但不丢长期目标。
 - **Control Lease（控制租约）**：跨进程与 F8 互斥，换手严格等待旧持有者交回 `job_cleared` ACK。
 - **Lua Guard**：Node 端校验过的每一条约束，游戏内部重新做一次防御校验，杜绝非法注入。
 
