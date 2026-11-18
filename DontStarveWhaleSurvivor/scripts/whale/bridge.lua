@@ -252,6 +252,17 @@ end
 local function poll_authority()
     local guard = Whale ~= nil and Whale.guard or nil
     if guard == nil or guard.parse_authority == nil then return end
+    
+    -- IO 通道优先（快，适合全双工）
+    local text = io_read(FILES.io_lease or "whale_io_lease.json")
+    if text ~= nil and text ~= "" then
+        local a = guard.parse_authority(text)
+        if a ~= nil then
+            Whale.authority_cache = { data = a, at = os.time() }
+            return
+        end
+    end
+
     ps_read(FILES.lease or "whale_lease.json", function(text)
         if text == nil or text == "" then return end
         local a = guard.parse_authority(text)
@@ -507,6 +518,12 @@ send_http_exchange = function(immediate_state)
             if fine and type(data) == "table" then
                 if data.result_acked and pending_result_data ~= nil then
                     pending_result_data = nil
+                end
+                if type(data.authority) == "table" and Whale.guard ~= nil and Whale.guard.parse_authority ~= nil then
+                    local a = Whale.guard.parse_authority(data.authority)
+                    if a ~= nil then
+                        Whale.authority_cache = { data = a, at = os.time() }
+                    end
                 end
                 if type(data.commands) == "table" and #data.commands > 0 then
                     for _, cmd in ipairs(data.commands) do

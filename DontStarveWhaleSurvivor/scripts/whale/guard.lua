@@ -33,11 +33,18 @@ local function io_read(name)
     return content
 end
 
---- 解析一份权威租约文本；任何结构缺失都判不可用（fail-closed）
-local function parse_authority(text)
-    if type(text) ~= "string" or text == "" then return nil, "authority_unavailable" end
-    local ok, data = pcall(Whale.json.decode, U.strip_header(text))
-    if not ok or type(data) ~= "table" then return nil, "authority_corrupt" end
+--- 解析一份权威租约文本或数据对象；任何结构缺失都判不可用（fail-closed）
+local function parse_authority(input)
+    local data = nil
+    if type(input) == "table" then
+        data = input
+    elseif type(input) == "string" and input ~= "" then
+        local ok, parsed = pcall(Whale.json.decode, U.strip_header(input))
+        if ok and type(parsed) == "table" then data = parsed end
+    else
+        return nil, "authority_unavailable"
+    end
+    if data == nil then return nil, "authority_corrupt" end
     if data.schema ~= G.LEASE_SCHEMA then return nil, "authority_schema_mismatch" end
     if type(data.authority_epoch) ~= "string" or data.authority_epoch == "" then return nil, "authority_corrupt" end
     if type(data.generation) ~= "number" or data.generation < 0 or data.generation ~= math.floor(data.generation) then
