@@ -805,6 +805,10 @@ function G.validate(cmd)
     if seen_id(id) then return false, "duplicate_command", nil end
 
     local action = cmd.action
+    -- 防止 wait 打断正在执行的动作
+    if action == "wait" and Whale.job ~= nil then
+        return false, "actor_busy", nil
+    end
     local spec = type(action) == "string" and G.ACTIONS[action] or nil
     if spec == nil then return false, "action_not_allowed", nil end
 
