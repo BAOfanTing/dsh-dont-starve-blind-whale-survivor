@@ -314,6 +314,16 @@ local function nearby_light(p)
         local prefab = tostring(e.prefab or "")
         local permanent = PERMANENT_LIGHTS[prefab] == true
         if not is_fire and not permanent then return false end
+
+        -- 增加有效发光半径判定，防止把远处的南瓜灯/火堆误判为身边有光
+        local r = 0
+        if e.Light ~= nil then
+            local ok, radius = pcall(function() return e.Light:GetCalculatedRadius() end)
+            if ok and type(radius) == "number" then r = radius end
+        end
+        if r <= 0 then return false end
+        if U.dist(p, e) > r * r then return false end
+
         if is_fire then
             local fueled = e.components ~= nil and e.components.fueled or nil
             if fueled ~= nil then
