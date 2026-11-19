@@ -36,6 +36,7 @@ const LABELS = {
   autoInstallMod: ['install', '自动安装和更新饥荒模组'],
   sessionLogEnabled: ['session', '自动写会话日志（覆盖写）'],
   sessionLogDir: ['install', '日志目录（留空用插件目录下 latestLogs）'],
+  executionMode: ['play', '执行模式（Autopilot/Assisted/Manual）'],
 }
 
 const GROUPS = [

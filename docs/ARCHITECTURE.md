@@ -464,7 +464,14 @@ flowchart TD
 ### 17.4 模块化扩展规范
 新增技能只需在 `lib/skills/` 下实现一个 `{id,name,preconditions,steps[{id,title,isDone,nextAction}],completion,retry_policy,timeout_policy}` 并在 `index.js` 注册一行；不修改 Planner。`fight_spider` 继续用 Lua Battle Director，不在 Node 重写蜘蛛战斗。
 
+### 17.3.2 自主执行运行时集成（Phase R.7 重构）
+引入 `WorldRuntimeManager` 作为统一的世界级执行上下文管理器，接通 MCP 调度链路。
+
+- **WorldRuntimeManager**：实现世界级并发互斥锁（Mutex），保证单角色同一时间仅推进一个任务，隔离不同世界的实例记忆。
+- **advance_task**：打通 `LLM → advance_task → Orchestrator.tick() → SkillExecutor → Dispatcher` 的完整自主执行链路。
+- **执行模式控制**：通过 `executionMode` 实现 `Autopilot`（全自动推进）、`Assisted`（辅助执行）、`Manual`（手动干预）三种运行模式的权限隔离。
+
 ### 17.4 与执行通道的关系（安全边界不变）
-技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。Phase G 只新增「编排层」，未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。
+技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。Phase G-R7 只新增「编排层」，未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。
 
 

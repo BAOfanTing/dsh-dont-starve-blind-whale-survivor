@@ -45,7 +45,7 @@ test('工具名唯一：不允许重复注册同名工具（曾经 pickup / harv
   const names = TOOLS.map((t) => t.name)
   const dup = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))]
   assert.deepEqual(dup, [], `这些工具被重复注册：${dup.join('、')}`)
-  assert.equal(names.length, toolList().length, 'toolList 不能漏工具')
+  assert.equal(names.length, toolList('assisted').length, 'toolList(assisted) 不能漏工具')
 })
 
 test('模型可见的动作 === dispatcher 白名单（不多不少）', () => {
@@ -87,8 +87,8 @@ test('reflex / macros 用到的模组动作不能被精简带走（它们在后�
 })
 
 test('本地工具走本地分支：不进 dispatcher，也不需要能用的 bridge（update_notes 是写工具）', async () => {
-  // Phase G5：新增 run_skill（复合技能执行器入口）—— 也是本地工具，内部再走 dispatcher 下发原子动作。
-  assert.deepEqual([...LOCAL_NAMES].sort(), ['get_guide', 'get_state', 'run_skill', 'update_notes'])
+  // Phase G5 / R.7：新增 run_skill 与 advance_task —— 也是本地工具，内部再走 dispatcher 下发原子动作。
+  assert.deepEqual([...LOCAL_NAMES].sort(), ['advance_task', 'get_guide', 'get_state', 'run_skill', 'update_notes'])
   const boom = { call: async () => { throw new Error('本地工具不该走到 dispatcher/bridge') } }
   const guide = await executeTool('get_guide', {}, { bridge: boom, guides: {} })
   assert.equal(typeof guide, 'string')

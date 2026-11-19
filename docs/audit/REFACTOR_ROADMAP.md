@@ -18,6 +18,8 @@
 | **ISSUE-06** | **配方表 6 处硬编码维护**：材料数量分散在多个脚本 | `lib/plan.js`, `lib/planner/planner-core.js`, `lib/skills/*`, `lib/actions/specs/crafting.js` | **P2 (数据漂移风险)** | 提取统一只读配方模块 `lib/actions/recipes.js`，配方一致性测试统一盯防 | 低 |
 | **ISSUE-07** | **文档严重滞后与数据冲突**：README 漏写工具数与 run_skill，ARCHITECTURE.md 缺少层级规划与技能层 | `README.md`, `docs/ARCHITECTURE.md`, `docs/STATUS.md` | **P1 (治理可信度)** | 更新所有文档，使工具数统一为 42、测试对齐最新状态、更新架构说明 | **已解决 (Phase R.5)** |
 | **ISSUE-08** | **任务与技能实例身份混淆与重试失效**：不同 Task 共享 `memory.skill_instances[skill_id]`，失败实例未真实重试下发动作，并发无互斥保障 | `lib/skills/skill-executor.js`, `lib/planner/world-memory.js`, `lib/planner/task-board.js`, `lib/planner/task-skill-orchestrator.js`, `lib/tools.js` | **P0 (生命周期与身份缺陷)** | Task ID 与 Skill Instance ID 彻底分离，冷却期满重建全新 instance_id 并真实下发动作，单角色单实例互斥 | **已解决 (Phase R.6)** |
+| **ISSUE-09** | **自主执行接入缺失与运行隔离不足**：正式 MCP 入口未接通调度器，缺乏跨请求共享且互斥的世界运行时，缺乏自动/手动模式控制 | `lib/planner/world-runtime-manager.js`, `lib/tools.js`, `tests/autopilot-runtime.test.mjs` | **P0 (自主执行能力缺失)** | 新增 `WorldRuntimeManager` 集中世界上下文与互斥锁，引入 `advance_task` 工具接入 Orchestrator，实现三种执行模式权限隔离 | **已解决 (Phase R.7)** |
+| **ISSUE-10** | **自主生存循环循环不闭环** | (待定) | **P1 (自治闭环)** | 实现长期目标自主生成与持续生存任务自主循环 | **待办 (Phase R.8)** |
 
 ---
 

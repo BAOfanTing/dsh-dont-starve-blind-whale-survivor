@@ -89,7 +89,7 @@ test('tools/list 只暴露 4 个本地工具 + 38 个白名单动作，且名字
   const names = body.result.tools.map((tool) => tool.name)
   // SURVIVAL-01：新增 gather / eat / craft / equip（7 → 11）
   // Phase G5：新增 run_skill（本地复合技能执行入口）
-  for (const want of ['get_state', 'get_guide', 'update_notes', 'run_skill', 'move_to', 'stop', 'pickup', 'harvest',
+  for (const want of ['get_state', 'get_guide', 'update_notes', 'run_skill', 'advance_task', 'move_to', 'stop', 'pickup', 'harvest',
     'gather', 'eat', 'craft', 'equip', 'fight_spider', 'gather_area', 'seek',
     'chop', 'mine', 'dig', 'hammer', 'attack', 'kill', 'wait', 'drop',
     'unequip', 'say', 'fuel', 'use', 'inspect', 'sleep',
@@ -98,7 +98,7 @@ test('tools/list 只暴露 4 个本地工具 + 38 个白名单动作，且名字
     assert.ok(names.includes(want), `缺少工具 ${want}`)
   }
   assert.equal(names.length, toolList().length)
-  assert.equal(names.length, 42, '模型可见工具应该是 42 个（4 本地 + 38 动作；TARGET-REFRESH 加了 5 个实时目标选择，TENT 加了 sleep，COMBAT 加了 fight_spider，Phase G5 加了 run_skill）')
+  assert.equal(names.length, 43, '模型可见工具应该是 43 个（5 本地 + 38 动作；TARGET-REFRESH 加了 5 个实时目标选择，TENT 加了 sleep，COMBAT 加了 fight_spider，Phase G5 加了 run_skill，Phase R.7 加了 advance_task）')
   assert.equal(new Set(names).size, names.length, '工具名不能重复（M2.2.1 修过 pickup/harvest 重复注册）')
   // 未开放的动作不再出现在工具表里（模型只看见 dispatcher 白名单里的动作）
   for (const gone of ['pick', 'act', 'heal', 'night_watch', 'store']) {
