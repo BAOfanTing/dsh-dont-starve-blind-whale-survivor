@@ -10,7 +10,7 @@
 
 ## 现在能做什么
 
-**模型能用的 38 个动作 + 3 个本地工具（共 41 个工具）**（清单由 `ACTION_SPECS` 自动生成，不会和代码脱节）：
+**模型能用的 38 个动作 + 4 个本地工具（共 42 个工具）**（清单由 `ACTION_SPECS` 与本地工具表自动生成，不会和代码脱节）：
 
 | 用途 | 工具 |
 |---|---|
@@ -23,6 +23,7 @@
 | 交互 | `use`、`container_take`、`container_put`、`give` |
 | 战斗 | `attack`、`kill`、`fight_spider`（风筝战术） |
 | 社交 | `say` |
+| **复合技能** | `run_skill`（执行多步复合工作流：`survival_stabilize` 紧急保命、`establish_home` 选址前往建造设家全流程、`gather_resources` 指定配方/物品智能缺口采集，支持 `skill_args` 定制目标） |
 
 **目标引用有三种方式**（前两种不会过期，优先用）：
 

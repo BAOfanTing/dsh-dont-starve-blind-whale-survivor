@@ -23,21 +23,21 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  ① DSH 会话：模型 → MCP 工具（Streamable HTTP + SSE）                                      │
 │  ② 游戏里按 F8：插件内置 AI → 同一套工具定义                                               │
 └───────────────────────────────────────┬─────────────────────────────────────────────────┘
-                                        │  工具 = lib/tools.js 的 TOOLS（39 个 = 3 本地 + 36 动作）
+                                        │  工具 = lib/tools.js 的 TOOLS（42 个 = 4 本地 + 38 动作）
                                         ▼
 ┌──────────────────────────── DSH 插件进程（Node，lib/）────────────────────────────────────┐
 │                                                                                          │
 │  tools.js  executeTool()                                                                 │
-│     ├─ 本地工具 → 读快照/写笔记（get_state / get_guide / update_notes）                       │
+│     ├─ 本地工具 → 读快照/写笔记/复合技能（get_state / get_guide / update_notes / run_skill） │
 │     └─ 动作      → dispatcher.dispatch()  ────────────────┐                               │
 │                                                            │                               │
 │  dispatcher.js  ①参数与快照校验 ②拿控制租约 ③写命令 ④等结果 ⑤核对真实状态  ◄── 唯一允许    │
-│                 （白名单：ACTION_SPECS 的全部 36 个动作）                      下发动作的地方 │
+│                 （白名单：ACTION_SPECS 的全部 38 个动作）                      下发动作的地方 │
 │                                                                                          │
-│  actions/specs/*.js   按领域拆分的动作规格（movement / gathering / crafting / ...）        │
-│                       每个动作声明 riskLevel / 参数白名单 / verify（核对方式）              │
-│  actions/state-query.js  快照查询：背包两种 JSON 形状、装备栏两种形状的统一读取            │
-│                                                            │                               │
+│  planner/       决策系统：planner-core (决策树) / task-board (任务调度) /                  │
+│                 decision-arbiter (统一决策出口) / world-memory (按世界持久化)             │
+│  skills/        复合技能：gather-resources / establish-home / survival-stabilize 等         │
+│  actions/       动作规格与快照查询：按领域拆分的动作规格 / 背包与装备的统一读取             │
 │  control.js     Control Lease（本机文件锁 + 跨进程互斥 + 换手 ACK）                        │
 │  bridge.js      文件桥客户端：找目录、读状态、写命令、读结果、权威性判定                     │
 │  state/snapshot.js  把 whale_state.json 归一化成同一份快照（文本渲染 / 字段校正）           │
@@ -62,6 +62,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  guard.lua      ★ 第二道闸：白名单 + 参数 + 目标 + 租约 + 代际 + 权限，逐条复核             │
 │  native.lua     ★ 原版能力薄封装：真实照明 / 原版 RunAway 几何 / 玩家 ATTACK 动作            │
 │  actions.lua    动作实现：BufferedAction + locomotor:PushAction（和玩家点鼠标同一条路）     │
+│  chores.lua     ★ 内部保命与家务（不直接暴露给模型，Node 侧通过 dispatcher 下发原子动作）      │
 │  macros.lua     宏（仍在，但**不对模型开放**）                                             │
 │  reflex.lua     保命反射：血少/天黑/火灭/贴脸时自己动手；解决不了就上报紧急需求               │
 │  hud.lua        游戏内 HUD；config.lua 配置（夹到安全区间）                                │
