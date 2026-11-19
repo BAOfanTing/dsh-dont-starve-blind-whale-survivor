@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { derivePlan, renderPlan, PLAN_SCHEMA } from '../lib/plan.js'
+import { derivePlan, renderPlan, PLAN_SCHEMA, GOALS } from '../lib/plan.js'
 import { normalizeState } from '../lib/state/snapshot.js'
 import { executeTool } from '../lib/tools.js'
 import { AiRunner } from '../lib/agent.js'
@@ -512,4 +512,51 @@ test('PLAN-13：F8 目标不变时只注入紧凑计划，不再重塞完整状�
   assert.match(lastMessages[1], /当前目标：/)
   assert.ok(!lastMessages[1].includes('## 当前计划'), '目标没变时不该重塞完整计划')
   assert.ok(!lastMessages[1].includes('状态正文'), '目标没变时不该重塞完整状态')
+})
+
+test('PLAN-R4-1：plan.js GOALS 已收敛为纯生存应急规则与开局生存兜底，不含中长期科技与装备制作', () => {
+  const goalIds = GOALS.map((g) => g.id)
+  // 不包含被剥离的发展科技目标
+  assert.equal(goalIds.includes('mine_rock'), false, 'mine_rock 必须移交 TaskBoard')
+  assert.equal(goalIds.includes('chop_wood'), false, 'chop_wood 必须移交 TaskBoard')
+  assert.equal(goalIds.includes('craft_backpack_and_armor'), false, 'craft_backpack_and_armor 必须移交 TaskBoard')
+  assert.equal(goalIds.includes('build_science_machine'), false, 'build_science_machine 必须移交 TaskBoard')
+
+  // 保留的合法生存规则
+  const expectedSurvivalGoals = [
+    'revive', 'retreat', 'light', 'eat', 'sanity', 'heal',
+    'stock_food', 'prep_light', 'tool_axe', 'tool_pickaxe', 'explore',
+  ]
+  assert.deepEqual(goalIds, expectedSurvivalGoals)
+})
+
+test('PLAN-R4-2：Decision Arbiter 与 get_state 单决策输出，消除多头计划干扰', async () => {
+  const { createPlanner } = await import('../lib/planner/planner-core.js')
+  const { createWorldMemoryStore } = await import('../lib/planner/world-memory.js')
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  const dir = mkdtempSync(join(tmpdir(), 'bws-r4-arb-'))
+  try {
+    const memoryStore = createWorldMemoryStore({ dir })
+    const planner = createPlanner({ memoryStore })
+    const ctx = makeCtx({ items: ITEMS(['torch', 1]) })
+    ctx.planner = planner
+
+    const text = await executeTool('get_state', {}, ctx)
+    // 只有一个统一决策段
+    assert.match(text, /## 当前计划（统一决策）/)
+    assert.equal(text.split('## 当前计划').length - 1, 1, '全文本只允许出现一次计划标题')
+    assert.doesNotMatch(text, /### 发展阶段/)
+
+    // JSON 模式中 decision 成为统一数据源
+    const jsonStr = await executeTool('get_state', { format: 'json' }, ctx)
+    const data = JSON.parse(jsonStr)
+    assert.ok(data.decision, '必须有 decision 字段')
+    assert.equal(data.plan.next, data.decision.next_action)
+    assert.equal(data.development.next, data.decision.next_action)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
