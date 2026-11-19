@@ -16,6 +16,8 @@ import { arbitrate } from '../lib/planner/decision-arbiter.js'
 import { getSkill, hasSkill, listSkills, registerSkill, clearSkills } from '../lib/skills/skill-registry.js'
 import { SkillExecutor } from '../lib/skills/skill-executor.js'
 import { survivalStabilize } from '../lib/skills/survival-stabilize.js'
+import { expandGatherTasks, missingMaterials } from '../lib/skills/gather-resources.js'
+import { establishHomeTasks } from '../lib/skills/establish-home.js'
 
 // ─────────────────────────── 合成可变世界 ───────────────────────────
 
@@ -645,4 +647,37 @@ test('GETSTATE-G1-JSON：plan / development 都从同一个 decision 派生', as
     assert.equal(payload.plan.next, payload.decision.next_action)
     assert.equal(payload.development.stage, payload.decision.current_stage.index)
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('UNIFY-SKILL-TASK-1：Task 与 Skill 绑定与 missingMaterials 计入手持/装备', () => {
+  const snap = normalizeState({
+    data: {
+      schema: 'bws.state/1',
+      actor: { prefab: 'wilson', tile_x: 0, tile_z: 0 },
+      player: {
+        equipment: { hands: 'torch', slots: { hands: 'torch', body: 'backpack' } },
+        inventory: { items: [{ prefab: 'axe', count: 1 }] },
+      },
+    },
+  })
+  // 检验 missingMaterials 正确识别手持和装备（torch手持算拥有，不视为空）
+  const missing = missingMaterials(snap, { torch: 1, axe: 1, goldnugget: 1 })
+  assert.equal(missing.torch, undefined, '手持火把应算已拥有')
+  assert.equal(missing.axe, undefined, '背包斧头算已拥有')
+  assert.equal(missing.goldnugget, 1, '未拥有的金块应为缺口 1')
+
+  // expandGatherTasks 生成的任务必须携带统一的 skill_id 与 skill_args
+  const { tasks } = expandGatherTasks(snap, { goldnugget: 2 })
+  assert.equal(tasks.length, 1)
+  assert.equal(tasks[0].skill_id, 'gather_resources')
+  assert.deepEqual(tasks[0].skill_args, { recipe: { goldnugget: 2 }, target_items: { goldnugget: 2 } })
+})
+
+test('UNIFY-SKILL-TASK-2：establishHomeTasks 生成任务均携带 skill_id: establish_home', () => {
+  const tasks = establishHomeTasks({ snapshot: {}, memory: { camp_site: { x: 10, z: 20 } } })
+  assert.ok(tasks.length >= 4)
+  for (const t of tasks) {
+    assert.ok(t.skill_id, `任务 ${t.id} 必须携带 skill_id`)
+    assert.equal(t.skill_id, t.id.startsWith('gather_') ? 'gather_resources' : 'establish_home')
+  }
 })
