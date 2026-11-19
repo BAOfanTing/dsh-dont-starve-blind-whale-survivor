@@ -585,6 +585,23 @@ test('ARB-4：blocked 任务要如实列出阻塞原因（不是模糊"无任务
   assert.match(d.blocked_tasks[0].reason, /dependencies/)
 })
 
+test('ARB-5：阶段1+无看板待办任务时优先对齐阶段目标与下一步指引', () => {
+  const snap = snapOf(makeWorld())
+  const dev = devPlanStub({
+    stageIndex: 1,
+    stage: { index: 1, id: 'establish_home', title: '建立家园', goal: '建立第一座科学机器并设置家' },
+    nextTask: null,
+    next: '先探索补足信息：用 seek 探索',
+  })
+  const d = arbitrate(snap, {
+    devPlan: dev,
+    survivalPlan: { goalId: 'craft_backpack_and_armor', title: '做背包与木甲', why: '材料充足', next: 'craft backpack' },
+  })
+  assert.equal(d.priority, 'P3')
+  assert.equal(d.goal_title, '建立第一座科学机器并设置家')
+  assert.equal(d.next_action, '先探索补足信息：用 seek 探索')
+})
+
 // ─────────────────────────── get_state 单一决策出口（G1 集成） ───────────────────────────
 
 function rawState(over = {}) {
