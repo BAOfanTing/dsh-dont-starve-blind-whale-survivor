@@ -121,16 +121,24 @@
 
 ### 阶段 R.3：统一世界记忆数据规范 (Phase R.3 已完成)
 - **目标**：完善 `world-memory.js` 的持久化字段与 schema 版本自愈升级（`ISSUE-03`）。
-- **行动**：
+- **行动与成果**：
   1. 补齐 `emptyMemory` 中的 `skill_instances`、`explored_regions`、`known_resources` 等全部结构字段声明。
   2. 实现 `SUPPORTED_SCHEMAS`、`validateMemory` 与 `migrateMemory`。
   3. 支持旧版本及无版本数据的平滑升级，修复损坏坐标、越界 stage 与异常结构。
   4. `store.load` 自动检测并落盘自愈。
   5. 补齐 `tests/world-memory.test.mjs`（WM-11, WM-12），全量 941 项测试全绿。
 
-### 阶段 R.4：文档基准完全对齐
+### 阶段 R.4：收敛 Planner 决策仲裁与职责边界 (Phase R.4 已完成)
+- **目标**：彻底理清 Planner Core、Decision Arbiter 与旧 plan.js 的边界冲突（`ISSUE-04`）。
+- **行动与成果**：
+  1. 梳理 Decision Arbiter 优先级梯队：P0（生命危险）/ P1（生存临界）绝对优先抢占；P2 驱动 Task Board 阶段任务；P3/P4 执行探索与日常维护。
+  2. 收敛 `lib/plan.js` 为纯生存应急引擎与开局基本生存兜底，彻底移除旧有的中长期发展与装备制造目标（`mine_rock`, `chop_wood`, `craft_backpack_and_armor`, `build_science_machine`），将中长期发展编排全权交由 Task Board 与 Skill Executor。
+  3. 强化统一决策输出：`get_state` 在装配 planner 时统一输出 `## 当前计划（统一决策）`，彻底消除双份计划对 AI 模型的认知干扰。
+  4. 新增 `PLAN-R4-1`、`PLAN-R4-2` 契约回归测试，全量测试达 943 项全绿。
+
+### 阶段 R.5：文档基准完全对齐
 - **目标**：消除所有文档间的版本、工具数、测试数冲突（`ISSUE-07`）。
 - **行动**：
   1. 更新 `README.md`，写明 42 个工具并加入 `run_skill` 用法。
-  2. 更新 `docs/STATUS.md`，将测试基准校准为 918+，消除内部矛盾。
-  3. 将 `docs/ARCHITECTURE_ANALYSIS.md` 归档。
+  2. 更新 `docs/STATUS.md`，将测试基准校准为 943 全绿，消除内部矛盾。
+  3. 整理文档结构，确保系统只有一份权威架构说明。
