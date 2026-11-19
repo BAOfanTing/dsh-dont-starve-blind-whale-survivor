@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createNotesStore, sanitizeWorldKey } from '../lib/notes-store.js'
+import { createWorldMemoryStore, emptyMemory, normalizeMemory } from '../lib/planner/world-memory.js'
 import { executeTool } from '../lib/tools.js'
 import { derivePlan } from '../lib/plan.js'
 import { MOD, loadTargets } from './target-harness.mjs'
@@ -224,4 +225,39 @@ test('WM-9（INTEGRATION）：cluster_id 读不到时退回 session_id，并**�
   // world_key 必须进 data.identity（Node 侧从那里取）
   assert.match(observe, /world_key = wk/)
   assert.match(observe, /world_key_source = wk_source/)
+})
+
+test('WM-10：世界记忆 schema 完整性与 skill_instances / explored_regions / known_resources 持久化', () => {
+  const dir = tempDir()
+  try {
+    const store = createWorldMemoryStore({ dir })
+    const empty = emptyMemory('cluster:test/shard:1')
+    assert.deepEqual(empty.skill_instances, {})
+    assert.deepEqual(empty.explored_regions, [])
+    assert.deepEqual(empty.known_resources, [])
+
+    // 容错与自愈：脏输入时补齐默认结构
+    const corrupted = {
+      worldKey: 'cluster:test/shard:1',
+      skill_instances: null,
+      explored_regions: 'bad_array',
+      known_resources: null,
+    }
+    const normalized = normalizeMemory(corrupted, 'cluster:test/shard:1')
+    assert.deepEqual(normalized.skill_instances, {})
+    assert.deepEqual(normalized.explored_regions, [])
+    assert.deepEqual(normalized.known_resources, [])
+
+    // 正常持久化与读取
+    store.save({
+      worldKey: 'cluster:test/shard:1',
+      skill_instances: { gather_resources: { step: 'chop', data: { log: 4 } } },
+      explored_regions: ['spawn_meadow', 'forest_edge'],
+      known_resources: [{ prefab: 'goldnugget', x: 12, z: -34 }],
+    })
+    const loaded = store.load('cluster:test/shard:1')
+    assert.deepEqual(loaded.skill_instances, { gather_resources: { step: 'chop', data: { log: 4 } } })
+    assert.deepEqual(loaded.explored_regions, ['spawn_meadow', 'forest_edge'])
+    assert.deepEqual(loaded.known_resources, [{ prefab: 'goldnugget', x: 12, z: -34 }])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
