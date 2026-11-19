@@ -474,6 +474,62 @@ test('GATHER-SKILL-2：缺木板且木头不足 → 先砍树补木头，再做�
   assert.equal(calls.filter((c) => c.tool === 'craft' && c.args.recipe === 'boards').length, 2)
 })
 
+test('GATHER-SKILL-3：skill_args 动态传入 target_items 并持久化，后续恢复不丢参数', async () => {
+  const world = makeWorld({ items: {} })
+  addItem(world, 'flint', 1)
+  const mem = { skill_instances: {} }
+  const calls = []
+  const exec = newExec(world, mem, { calls })
+  // 首次调用传入 target_items，要求 2 个燧石
+  const r1 = await exec.run('gather_resources', { target_items: { flint: 2 } })
+  const inst = mem.skill_instances.gather_resources
+  assert.ok(inst, '实例必须已创建')
+  assert.deepEqual(inst.data.skill_args.target_items, { flint: 2 })
+
+  // 地上添加 1 个燧石
+  addItem(world, 'flint', 1)
+  // 第二次调用不带参数，验证原有 skill_args 依然被保留并驱动判定
+  const r2 = await exec.run('gather_resources')
+  assert.equal(r2.status, 'completed', '燧石补齐至 2 个后技能应判定完成')
+  assert.deepEqual(inst.data.skill_args.target_items, { flint: 2 }, '恢复执行时原有 skill_args 必须保留')
+})
+
+test('GATHER-SKILL-4：skill_args 支持配方名字符串解析（如 researchlab2）', async () => {
+  const world = makeWorld({ items: {} })
+  // 预置满足 researchlab2 的成品材料（4 boards, 2 cutstone, 2 transistor）
+  addItem(world, 'boards', 4)
+  addItem(world, 'cutstone', 2)
+  addItem(world, 'transistor', 2)
+  const mem = { skill_instances: {} }
+  const calls = []
+  const exec = newExec(world, mem, { calls })
+  // 传入配方名称
+  const r = await exec.run('gather_resources', { recipe: 'researchlab2' })
+  assert.equal(r.status, 'completed', '传入 researchlab2 配方名且材料齐全时应直接判定完成')
+  assert.equal(calls.length, 0, '材料齐全时不应下发任何采集动作')
+})
+
+test('GATHER-SKILL-5：run_skill 本地工具端到端透传 skill_args', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bws-skill-args-'))
+  try {
+    const store = createWorldMemoryStore({ dir })
+    const planner = createPlanner({ memoryStore: store })
+    const raw = rawState()
+    // 背包里放 2 树枝，传入目标 target_items 只要 2 树枝
+    const bridge = { readState: () => ({ json: raw, ageMs: 0, path: 'fake.json' }), leaseDirs: () => [], readLeaseAck: () => null }
+    const ctx = { bridge, planner, notes: { read: () => '', write: () => {} }, guides: {}, extraInstructions: '' }
+    const text = await executeTool('run_skill', {
+      skill_id: 'gather_resources',
+      skill_args: { target_items: { sapling: 0 } },
+    }, ctx)
+    assert.match(text, /技能 gather_resources → completed/)
+    const mem = store.load('cluster:A/shard:1')
+    assert.deepEqual(mem.skill_instances.gather_resources.data.skill_args, { target_items: { sapling: 0 } })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ─────────────────────────── 决策仲裁（G1） ───────────────────────────
 
 function devPlanStub(over = {}) {

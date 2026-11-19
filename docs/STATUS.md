@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：LEVEL-PLANNING (插件 0.12.0)｜新增**层级规划层**（`lib/planner/*`：发展阶段 / 任务看板 / 家园选址 / 世界记忆）｜堵死"材料够就地建科学机器"（build 家园门槛）｜阶段、任务看板按 `world_key` 隔离并落盘｜测试 871 → **892** 全绿｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成仓库全量只读审计与 6 份治理报告（`docs/audit/*`）｜打通 `SkillExecutor` 与 `run_skill` 的 `skill_args` 动态参数透传与配方解析｜全量测试 918 → **921** 全绿｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -296,3 +296,25 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 ### 7.5 验收边界（诚实标注）
 - 自动化覆盖：决策唯一性、生存优先于建家、build/采集/gather 的真实证据核对、备用营地切换、已有家不重建、单角色单技能、中断不重放、失败上限、`get_state` 单一出口与 JSON 派生一致 —— 全部在 `tests/skill-executor.test.mjs` 用**合成可变世界**验证。
 - **真机（真实游戏）验收仍未在自动化里冒充**：全新世界从出生→稳定生存→选址→建家→发展这条闭环，需要在游戏内实际跑并看日志确认（Phase F 纪律不变）。
+
+---
+
+## 8. Phase R：架构治理与收敛阶段 (Repository Stabilization & Architecture Governance)
+
+> 目标：停止无序新增功能，完成全仓库架构与代码审计，建立统一架构基线与重构路线图，并完成高价值缺陷的精准修复。
+
+### 8.1 六份权威审计报告交付 (`docs/audit/`)
+1. `docs/audit/CODEBASE_INVENTORY.md`：覆盖 Node 插件、Lua 模组、测试与工具的完整模块清单，明确职责、调用方、被调用方与状态（active/legacy/duplicate/dead/incomplete）。
+2. `docs/audit/CALL_GRAPH.md`：绘制从输入层 (MCP/F8) 到 Dispatcher、Lua Guard、Actions/Battle 的端到端调用图与数据流。
+3. `docs/audit/DUPLICATE_LOGIC.md`：深度剖析 `plan.js` 与 `planner`、`establish-home` 与 `establish-home-skill` 等 7 处核心重复系统。
+4. `docs/audit/ACTION_REGISTRY.md`：建立 38 个原子动作 + 4 个本地工具的权威全量矩阵，完成十大检查项审计。
+5. `docs/audit/DOCUMENT_CONFLICTS.md`：全面梳理 README、ARCHITECTURE、STATUS 之间的版本、工具数、测试数差异。
+6. `docs/audit/REFACTOR_ROADMAP.md`：确立未来收敛阶段路线图，并起草 `ARCHITECTURE.md` 目标架构草案。
+
+### 8.2 Phase R.1 阶段门禁修复：打通技能参数传递 (Skill Args Passing)
+- **问题**：`SkillExecutor` 和 `run_skill` 此前无法接收动态参数，导致 `gather_resources` 技能只能依赖写死的默认 `CORE_RECIPE`，无法为建造炼金引擎、帐篷等高级建筑收集材料。
+- **修复**：
+  - `SkillExecutor.run(skillId, skillArgs)` 支持传入 `skill_args` 并持久化至 `instance.data.skill_args`，恢复执行时保持不丢。
+  - `tools.js#runSkillTool` 完整透传 `input.skill_args`，并在 `run_skill` 的 `inputSchema` 中正式声明 `skill_args` 字段。
+  - `gather-resources-skill.js` 支持直接消费 `target_items` 字典或解析 `recipe` 配方名称（如 `"researchlab2"`）。
+- **验证**：新增 `GATHER-SKILL-3`, `GATHER-SKILL-4`, `GATHER-SKILL-5` 三例针对性测试，全量测试 **921/921 全绿**。
