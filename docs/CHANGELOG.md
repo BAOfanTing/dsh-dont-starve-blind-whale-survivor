@@ -4,6 +4,22 @@
 
 ---
 
+## [Phase R.3] - 2026-11-19
+
+### 记忆规范与自愈：World Memory Schema 统一与版本自愈升级 (World Memory Governance)
+- **Schema 统一与校验**：
+  - `emptyMemory` 显式补齐所有持久化契约字段：`schema` (`bws.world-memory/1`)、`worldKey`、`camp_site`、`backup_site`、`home_building_id`、`home_anchor`、`current_stage`、`current_goal`、`active_skill_id`、`task_board`、`skill_instances`、`explored_regions`、`known_resources`、`completed_milestones`、`blocked_tasks`、`danger_zones`、`known_buildings`、`recent_failures`、`updatedAt`。
+  - 新增 `SUPPORTED_SCHEMAS` 与 `validateMemory(memory)`，提供完整的结构有效性与字段类型校验。
+- **平滑升级与数据自愈**：
+  - 新增 `migrateMemory(raw, targetSchema)`，平滑支持旧版本与未标记 schema 的旧世界记忆数据升级为 `bws.world-memory/1`（记录 `_migrated_from`）。
+  - 对 NaN / 非法浮点数坐标、超出范围的 stage、异常的数组/对象结构进行防御性自愈清洗，杜绝记忆被脏数据破坏或整份丢失。
+  - `createWorldMemoryStore#load` 读到旧格式或自愈后自动落盘升级。
+- **测试与验证**：
+  - 在 `tests/world-memory.test.mjs` 中新增 `WM-11`（校验与迁移自愈）与 `WM-12`（读取旧文件落盘自愈）。
+  - 全量回归测试从 939 增至 941 项全绿。
+
+---
+
 ## [Phase R.2] - 2026-11-19
 
 ### 架构收敛：Task Board 与 Skill Executor 架构收敛 (Orchestrator Convergence)

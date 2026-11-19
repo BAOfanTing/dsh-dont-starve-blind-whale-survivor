@@ -12,12 +12,20 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 
 import { createNotesStore, sanitizeWorldKey } from '../lib/notes-store.js'
-import { createWorldMemoryStore, emptyMemory, normalizeMemory } from '../lib/planner/world-memory.js'
+import {
+  createWorldMemoryStore,
+  emptyMemory,
+  normalizeMemory,
+  validateMemory,
+  migrateMemory,
+  MEMORY_SCHEMA,
+  SUPPORTED_SCHEMAS,
+} from '../lib/planner/world-memory.js'
 import { executeTool } from '../lib/tools.js'
 import { derivePlan } from '../lib/plan.js'
 import { MOD, loadTargets } from './target-harness.mjs'
@@ -260,4 +268,103 @@ test('WM-10：世界记忆 schema 完整性与 skill_instances / explored_region
     assert.deepEqual(loaded.explored_regions, ['spawn_meadow', 'forest_edge'])
     assert.deepEqual(loaded.known_resources, [{ prefab: 'goldnugget', x: 12, z: -34 }])
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('WM-11：validateMemory 与 migrateMemory 自愈升级校验', () => {
+  // 1. emptyMemory 必定是合法结构
+  const empty = emptyMemory('cluster:AAA/shard:1')
+  const vEmpty = validateMemory(empty)
+  assert.equal(vEmpty.valid, true)
+  assert.equal(vEmpty.errors.length, 0)
+
+  // 2. validateMemory 能够识别多种非法/损坏字段
+  const corrupted = {
+    schema: 'bws.world-memory/invalid_version',
+    current_stage: 99,
+    camp_site: { x: 'bad', z: 0 },
+    backup_site: { x: 10, z: NaN },
+    danger_zones: 'not_an_array',
+    skill_instances: ['should_be_object'],
+  }
+  const vCorrupted = validateMemory(corrupted)
+  assert.equal(vCorrupted.valid, false)
+  assert.ok(vCorrupted.errors.some((e) => e.includes('unsupported schema')))
+  assert.ok(vCorrupted.errors.some((e) => e.includes('current_stage out of range')))
+  assert.ok(vCorrupted.errors.some((e) => e.includes('camp_site')))
+  assert.ok(vCorrupted.errors.some((e) => e.includes('backup_site')))
+  assert.ok(vCorrupted.errors.some((e) => e.includes('danger_zones')))
+  assert.ok(vCorrupted.errors.some((e) => e.includes('skill_instances')))
+
+  // 3. migrateMemory 平滑升级无版本 legacy 数据
+  const legacy = {
+    camp_site: { x: 12.5, z: -33.2 },
+    current_stage: 2,
+    current_goal: 'explore',
+    completed_milestones: ['flint_collected'],
+  }
+  const migratedLegacy = migrateMemory(legacy)
+  assert.equal(migratedLegacy.schema, MEMORY_SCHEMA)
+  assert.equal(migratedLegacy._migrated_from, 'legacy_unversioned')
+  assert.equal(migratedLegacy.current_stage, 2)
+  assert.deepEqual(migratedLegacy.camp_site, { x: 12.5, z: -33.2 })
+  assert.deepEqual(migratedLegacy.completed_milestones, ['flint_collected'])
+  assert.deepEqual(migratedLegacy.skill_instances, {})
+
+  // 4. migrateMemory 自愈修复损坏坐标与超出范围的 stage
+  const brokenData = {
+    schema: 'bws.world-memory/0',
+    current_stage: -5,
+    camp_site: { x: NaN, z: 10 },
+    backup_site: { x: 'bad', z: 'data' },
+    home_anchor: { x: 100, z: Infinity },
+    danger_zones: 'corrupted',
+    skill_instances: 'not_object',
+    updatedAt: 'yesterday',
+  }
+  const healed = migrateMemory(brokenData)
+  assert.equal(healed.schema, MEMORY_SCHEMA)
+  assert.equal(healed._migrated_from, 'bws.world-memory/0')
+  assert.equal(healed.current_stage, 0)
+  assert.equal(healed.camp_site, null)
+  assert.equal(healed.backup_site, null)
+  assert.equal(healed.home_anchor, null)
+  assert.deepEqual(healed.danger_zones, [])
+  assert.deepEqual(healed.skill_instances, {})
+  assert.equal(healed.updatedAt, 0)
+
+  // 自愈后的结构必须通过 validateMemory
+  const vHealed = validateMemory(healed)
+  assert.equal(vHealed.valid, true)
+})
+
+test('WM-12：store.load 读到老版本或损坏记忆时自动升级并落盘自愈', () => {
+  const dir = tempDir()
+  try {
+    const store = createWorldMemoryStore({ dir })
+    const legacyPath = store.pathFor('cluster:LEGACY/shard:1')
+
+    // 手工写入一份无 schema 的老版本文件
+    const legacyRaw = {
+      worldKey: 'cluster:LEGACY/shard:1',
+      camp_site: { x: 50, z: -20 },
+      current_stage: 1,
+      completed_milestones: ['stone_collected'],
+    }
+    mkdirSync(dirname(legacyPath), { recursive: true })
+    writeFileSync(legacyPath, JSON.stringify(legacyRaw), 'utf8')
+
+    // 读出来应被自动升级与规范化
+    const loaded = store.load('cluster:LEGACY/shard:1')
+    assert.equal(loaded.schema, MEMORY_SCHEMA)
+    assert.deepEqual(loaded.camp_site, { x: 50, z: -20 })
+    assert.deepEqual(loaded.skill_instances, {})
+
+    // 检查磁盘上的文件是否已经被自动重写为升级后的结构
+    const diskContent = JSON.parse(readFileSync(legacyPath, 'utf8'))
+    assert.equal(diskContent.schema, MEMORY_SCHEMA)
+    assert.deepEqual(diskContent.skill_instances, {})
+    assert.ok(diskContent.updatedAt > 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

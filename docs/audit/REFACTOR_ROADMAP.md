@@ -12,7 +12,7 @@
 |---|---|---|---|---|---|
 | **ISSUE-01** | **技能参数传递断裂**：`SkillExecutor` 与 `run_skill` 无法接收 `skill_args`，`gather_resources` 强依赖默认 `CORE_RECIPE` | `lib/tools.js`, `lib/skills/skill-executor.js`, `lib/skills/gather-resources.js` | **P0 (关键执行断链)** | 在 `run_skill`、`SkillExecutor.run(skillId, taskId, args)` 中打通参数，持久化保存至 `inst.data`，恢复时保留 | **已解决 (Phase R.1)** |
 | **ISSUE-02** | **技能与任务定义双重冗余**：`establish-home.js` 与 `establish-home-skill.js`、`gather-resources.js` 与 `gather-resources-skill.js` 重复维护业务模型 | `lib/skills/establish-home.js`, `lib/skills/gather-resources.js`, `lib/planner/task-skill-orchestrator.js` | **P1 (核心架构冗余)** | 彻底分离 Task 与 Skill 职责，新增 `TaskSkillOrchestrator`，消除两套重复维护的状态机，单一入口推进 | **已解决 (Phase R.2)** |
-| **ISSUE-03** | **世界记忆结构不完整**：`emptyMemory` 缺少 `skill_instances`、`explored_regions`、`known_resources` 声明 | `lib/planner/world-memory.js` | **P1 (持久化契约不全)** | 在 `world-memory.js` 中规范化内存字段与 schema 校验 | 低，纯增量补齐 |
+| **ISSUE-03** | **世界记忆结构不完整**：`emptyMemory` 缺少 `skill_instances`、`explored_regions`、`known_resources` 声明 | `lib/planner/world-memory.js` | **P1 (持久化契约不全)** | 在 `world-memory.js` 中规范化内存字段与 schema 校验 | **已解决 (Phase R.3)** |
 | **ISSUE-04** | **规划层职责重叠**：旧版 `plan.js` 仍包含基础工具与背包防具规划，与层级任务看板重合 | `lib/plan.js`, `lib/planner/development-stages.js`, `lib/planner/decision-arbiter.js` | **P2 (规则冗余)** | 收缩 `plan.js` 仅保留 P0/P1 生存应急规则，发展类科技完全移交 `TaskBoard` | 中，需保障兼容性 |
 | **ISSUE-05** | **Lua 家务宏孤岛代码**：`chores.lua` 注册了 6 个动作但无任何上游调用链 | `DontStarveWhaleSurvivor/scripts/whale/chores.lua` | **P2 (孤岛死代码)** | 评估接入规范或标记为 Internal，避免未经验证的代码累积 | 低 |
 | **ISSUE-06** | **配方表 6 处硬编码维护**：材料数量分散在多个脚本 | `lib/plan.js`, `lib/planner/planner-core.js`, `lib/skills/*`, `lib/actions/specs/crafting.js` | **P2 (数据漂移风险)** | 提取统一只读配方模块 `lib/actions/recipes.js`，配方一致性测试统一盯防 | 低 |
@@ -119,11 +119,14 @@
   5. 规范 `[TASK]`, `[ORCHESTRATOR]`, `[SKILL]` 标准化日志输出；
   6. 新增 `tests/task-skill-orchestrator.test.mjs`（14/14 通过），全量回归测试 939 项全部通过。
 
-### 阶段 R.3：统一世界记忆数据规范
-- **目标**：完善 `world-memory.js` 的持久化字段（`ISSUE-03`）。
+### 阶段 R.3：统一世界记忆数据规范 (Phase R.3 已完成)
+- **目标**：完善 `world-memory.js` 的持久化字段与 schema 版本自愈升级（`ISSUE-03`）。
 - **行动**：
-  1. 补齐 `emptyMemory` 中的 `skill_instances`、`explored_regions`、`known_resources` 默认字段。
-  2. 在记忆加载与重置时加入版本自愈。
+  1. 补齐 `emptyMemory` 中的 `skill_instances`、`explored_regions`、`known_resources` 等全部结构字段声明。
+  2. 实现 `SUPPORTED_SCHEMAS`、`validateMemory` 与 `migrateMemory`。
+  3. 支持旧版本及无版本数据的平滑升级，修复损坏坐标、越界 stage 与异常结构。
+  4. `store.load` 自动检测并落盘自愈。
+  5. 补齐 `tests/world-memory.test.mjs`（WM-11, WM-12），全量 941 项测试全绿。
 
 ### 阶段 R.4：文档基准完全对齐
 - **目标**：消除所有文档间的版本、工具数、测试数冲突（`ISSUE-07`）。
