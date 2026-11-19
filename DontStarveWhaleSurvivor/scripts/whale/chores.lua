@@ -6,7 +6,10 @@
 --    - Chores（家务宏）：负责日常囤料、添柴、搜食、采花、收纳等生活事务。
 -- 2. 受控执行，绝不偷跑抢占：
 --    - 家务宏绝不挂在 Reflex 帧循环里自作主张（见缝插针抢占是角色停顿、漫游乱跑、actor_busy 的罪魁祸首）。
---    - 家务宏通过 Whale.actions 注册为受控 Action，完全听从主 Plan / 调度器的安排，在安全空闲时段被调度。
+--    - 家务宏提供 Whale.chores 内部函数供游戏内测试与受控循环调用；其注册的 Action 属于内部作业（Internal Jobs），
+--      不向 Node 端 ACTION_SPECS / LLM 工具表暴露，外部统一走原子动作与层级技能。
+-- 3. 权威一致性：
+--    - 所有外部命令必须通过 Node Dispatcher 下发并接受 Guard 校验，Chores 内部逻辑不破坏租约与双重闸门。
 
 local GLOBAL = GLOBAL
 local pcall = GLOBAL.pcall or pcall
@@ -259,7 +262,9 @@ function C.stow_light(p)
     return false, "unequip_failed"
 end
 
--- ─────────────────────────── 注册为 Whale Actions ───────────────────────────
+-- ─────────────────────────── 注册为 Whale Actions (Internal Chore Jobs) ───────────────────────────
+-- 说明：此处注册的宏动作属于 Lua 内部保留家务（Internal Jobs），不进入 Node 端 ACTION_SPECS 与 LLM 工具表。
+-- 外部控制由原子动作与 SkillExecutor 接管，避免双重调度通道。
 
 A.register("stock_light_materials", function(j, p)
     local ok, reason = C.stock_light_materials(p, j.args ~= nil and j.args.max_tiles or nil)
