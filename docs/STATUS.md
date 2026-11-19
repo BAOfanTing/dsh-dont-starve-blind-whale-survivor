@@ -318,3 +318,28 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
   - `tools.js#runSkillTool` 完整透传 `input.skill_args`，并在 `run_skill` 的 `inputSchema` 中正式声明 `skill_args` 字段。
   - `gather-resources-skill.js` 支持直接消费 `target_items` 字典或解析 `recipe` 配方名称（如 `"researchlab2"`）。
 - **验证**：新增 `GATHER-SKILL-3`, `GATHER-SKILL-4`, `GATHER-SKILL-5` 三例针对性测试，全量测试 **921/921 全绿**。
+
+### 8.3 Phase R.2 架构收敛：Task Board 与 Skill Executor 职责收敛 (Orchestrator Convergence)
+- **目标**：彻底解决 Task Board 和 Skill Executor 的职责重复，让整个项目只有一套复合任务执行状态机。
+- **改动**：
+  1. 新增 `lib/planner/task-skill-orchestrator.js`，实现 `TaskSkillOrchestrator`，作为 Task Board 与 Skill Executor 的权威连接器；
+  2. 明确四大核心职责划分：
+     - **Planner**：负责发展阶段、长期目标、任务生成、优先级与策略；
+     - **Task Board**：负责任务注册、依赖、优先级、状态、完成条件与阻塞/失败记录，不再维护复合技能的内部步骤；
+     - **Skill Executor**：统一管理技能实例、步骤状态机、原子动作派发、真实证据核验与有界重试；
+     - **TaskSkillOrchestrator**：获取唯一主任务、传递 `task.skill_id` 与 `task.skill_args`、处理生存紧急暂停与恢复、单步推进技能并将状态回写 Task Board；
+  3. 统一任务数据结构：支持 `id`, `title`, `status`, `priority`, `skill_id`, `skill_args`, `depends_on`, `completion_evidence`, `blocked_reason`, `attempts`, `progress`；
+  4. 重构建家与资源采集任务：
+     - `establish-home.js` 统一承载复合建家技能（勘察选址、前往营地、收集材料、建造科技机器、设家与真实核验），`establish-home-adapter.js` 保留看板任务生成；
+     - `gather-resources.js` 统一承载复合资源采集技能（背包与装备数量核算、缺口计算、中间产物依赖、原子动作派发、真实核对），`gather-resources-adapter.js` 保留看板任务生成；
+     - 消除重复业务描述，提供向后兼容导出垫片；
+  5. 统一执行入口与实例共享：
+     - `get_state` 保持纯只读观察与决策；
+     - `run_skill` 与自动调度共享同一个 `SkillExecutor` 实例；
+  6. Reflex 抢占与恢复：
+     - 紧急避险时安全暂停普通技能并保留进度；
+     - 危险解除后恢复执行未完成步骤，跳过已完成步骤；
+  7. 标准化日志输出：
+     - 规范 `[TASK]`, `[ORCHESTRATOR]`, `[SKILL]` 三层日志，包含 `world_key`, `task_id`, `skill_id`, `step_id`, `status`, `reason`；
+  8. 测试覆盖：新增 `tests/task-skill-orchestrator.test.mjs`，包含 14 项完整集成验证。
+- **验证**：全量测试 **939/939 全部通过**（无失败、无跳过）。

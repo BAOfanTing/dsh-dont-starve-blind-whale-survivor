@@ -381,19 +381,32 @@ TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然�
 ```
 优先级裁决：**P0/P1 生存**（下一步取规则引擎）> **P2/P3 当前阶段任务**（下一步取任务看板 `nextTask`+`nextHint`）> **P3/P4 兜底**（规则引擎：开局生存/存粮/探索）。Reflex 仍在 Lua 端独立抢占动作，本层只调整调度、不复制 Reflex。旧 `plan.js` 不删——它的 GOALS 继续作为生存/兜底下一步的来源。
 
-### 17.2 技能执行器（Skill → Step → Action → Verified → 回写）
+### 17.2 技能执行器与任务编排（Task → Orchestrator → Skill → Step → Action → Verified → 回写）
 ```
-lib/skills/skill-registry.js   技能自注册 + 校验（id/步骤/preconditions/completion/retry/timeout）
-lib/skills/skill-executor.js   SkillExecutor：一次 run_skill 推进一个有界步骤
-lib/skills/skill-utils.js      只读判定 + 「材料→原子动作」映射（target_kind 类，不吃 #N）
-lib/skills/survival-stabilize.js / establish-home-skill.js / gather-resources-skill.js
-lib/skills/index.js            装配并幂等注册全部技能
+lib/skills/skill-registry.js          技能自注册 + 校验（id/步骤/preconditions/completion/retry/timeout）
+lib/skills/skill-executor.js          SkillExecutor：一次 run 推进一个有界步骤（负责步骤状态机与证据核验）
+lib/skills/skill-utils.js             只读判定 + 「材料→原子动作」映射（target_kind 类，不吃 #N）
+lib/skills/survival-stabilize.js      生存稳定复合技能
+lib/skills/establish-home.js          建立家园复合技能（勘察选址、前往营地、材料收集、建造科学机器、设家）
+lib/skills/gather-resources.js        资源采集复合技能（配方材料缺口计算、中间产物依赖、原子采集）
+lib/skills/establish-home-adapter.js  旧版建家任务看板展开适配器（向后兼容）
+lib/skills/gather-resources-adapter.js 资源收集任务看板展开适配器（向后兼容）
+lib/planner/task-skill-orchestrator.js 任务与技能编排器（Orchestrator，连接 TaskBoard 与 SkillExecutor）
+lib/skills/index.js                   装配并幂等注册全部技能
 ```
+- **核心架构职责收敛 (Phase R.2)**：
+  - **Planner**：长期发展阶段、里程碑判定、任务生成规则与优先级策略；不下发动作。
+  - **Task Board**：高阶任务注册、依赖 DAG、任务优先级、状态与完成凭证；不再维护复合技能的内部步骤。
+  - **Skill Executor**：复合技能执行引擎，管理技能实例生命周期、步骤流转、原子动作下发、真实快照核验与有界重试。
+  - **TaskSkillOrchestrator**：任务看板与技能执行器的唯一粘合层。选择主任务、检查可执行性、启动/恢复技能、处理 Reflex 抢占、回写任务看板，并在完成后重新仲裁。
 - **执行原则**：每步「检查前置 → 选原子动作 → 串行过 dispatcher → 重读快照 → `step.isDone()` 验证 → 记录进度 → 下一步」。`ok=true` 不算完成，必须有快照证据（build 见建筑、gold 见金块数增加、move 见到达）。
-- **状态关联**：实例存 `world memory.skill_instances[skillId]`（`status/step_index/step_attempts/step_calls/data`）；`tasks → skill instance → step → action → verified → 回写看板`。同一技能重复启动=**恢复**旧实例；**同一角色同一时刻只有一个技能 in_progress**（启动新技能会 `pause` 旧技能并保留其 `step_index`，之后可 `resume`）。
+- **状态关联**：实例存 `world memory.skill_instances[skillId]`（`status/task_id/step_index/step_attempts/step_calls/data`）；`tasks → skill instance → step → action → verified → 回写看板`。同一技能重复启动=**恢复**旧实例；**同一角色同一时刻只有一个技能 in_progress**（启动新技能会 `pause` 旧技能并保留其 `step_index`，之后可 `resume`）。
 - **中断安全**：恢复时先跳过 `isDone` 为真的步骤，**不重放已完成动作**；失败有每步 `attempts` 上限与每步调用预算，超限 `failed`，避免无限采集/无限重试。
-- **入口**：`run_skill` 是**本地工具**（不进 dispatcher 白名单），内部对每个原子动作仍调 `dispatcher.dispatch()`（唯一出口），并对 `build` 复用 `guardBuild` 家乡门槛。F8（`agent.js`）与 DSH（`mcp-server`）都经 `runTool` 拿到同一 `ctx.planner`，因此共用同一技能执行逻辑。
-- **日志**：`[PLANNER] DECISION/TASK_SELECTED/...` 与 `[SKILL] START/RESUME/STEP_START/ACTION_DISPATCH/STEP_VERIFIED/STEP_FAILED/PAUSED/FINISHED`，均带 world_key/task_id/skill_id/step_id/进度/结果——"什么都没做"时能区分是无任务、依赖阻塞、技能暂停、等游戏动作还是 Planner 出错。
+- **入口与实例共享**：`get_state` 保持纯只读观察与决策；`run_skill` 与自动调度共享同一个 `SkillExecutor` 实例，内部对每个原子动作仍调 `dispatcher.dispatch()`（唯一出口），并对 `build` 复用 `guardBuild` 家园门槛。
+- **标准化日志**：三层统一日志输出，格式包含 `world_key`, `task_id`, `skill_id`, `step_id`, `status`, `reason`：
+  - `[TASK] SELECTED / START / PAUSED / COMPLETED / BLOCKED`
+  - `[ORCHESTRATOR] DISPATCH / RESUME / RECOVER`
+  - `[SKILL] START / RESUME / STEP_START / ACTION_DISPATCH / STEP_VERIFIED / STEP_FAILED / PAUSED / FINISHED`
 
 ### 17.3 模块化扩展规范
 新增技能只需在 `lib/skills/` 下实现一个 `{id,name,preconditions,steps[{id,title,isDone,nextAction}],completion,retry_policy,timeout_policy}` 并在 `index.js` 注册一行；不修改 Planner。`fight_spider` 继续用 Lua Battle Director，不在 Node 重写蜘蛛战斗。
