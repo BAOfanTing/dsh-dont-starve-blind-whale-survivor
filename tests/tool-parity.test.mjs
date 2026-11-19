@@ -87,7 +87,8 @@ test('reflex / macros 用到的模组动作不能被精简带走（它们在后�
 })
 
 test('本地工具走本地分支：不进 dispatcher，也不需要能用的 bridge（update_notes 是写工具）', async () => {
-  assert.deepEqual([...LOCAL_NAMES].sort(), ['get_guide', 'get_state', 'update_notes'])
+  // Phase G5：新增 run_skill（复合技能执行器入口）—— 也是本地工具，内部再走 dispatcher 下发原子动作。
+  assert.deepEqual([...LOCAL_NAMES].sort(), ['get_guide', 'get_state', 'run_skill', 'update_notes'])
   const boom = { call: async () => { throw new Error('本地工具不该走到 dispatcher/bridge') } }
   const guide = await executeTool('get_guide', {}, { bridge: boom, guides: {} })
   assert.equal(typeof guide, 'string')

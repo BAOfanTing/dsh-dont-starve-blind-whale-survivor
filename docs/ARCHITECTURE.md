@@ -359,4 +359,45 @@ TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然�
 
 **局限（诚实标注）**：本项目 Lua 不导出地图栅格、不暴露 GUID，所以选址是"基于 16 格 nearby + danger_zones 的局部评分"（`connectivity_mode=observed_nearby_only`），信息不足会要求继续探索，**不假装做了全图最佳选址**。真正的图选址/`query_map`/`query_places` 留待后续 Lua 工作。
 
+---
+
+## 17. Phase G：统一决策出口（Decision Arbiter）+ Skill Executor
+
+这一层解决两个问题：① `get_state` 过去同时渲染 `plan.js` 与 `planner-core` 两套「下一步」；② Skills 只会生成任务建议、不会真正执行。
+
+### 17.1 唯一决策出口
+```
+              ┌─ survivalPlan = plan.js derivePlan()   （生存/兜底规则引擎）
+快照 ─────────┤
+              └─ devPlan      = planner-core.plan()     （阶段/任务看板/家园）
+                          ↓
+        lib/planner/decision-arbiter.js  arbitrate()
+                          ↓  唯一 decision
+     { world_key, current_stage, primary_goal, current_task, current_skill,
+       decision_reason, priority(P0..P4), next_action, blocked_tasks, completion }
+                          ↓
+   get_state 文本：一条「## 当前计划（统一决策）」；JSON：decision + plan/development（均由 decision 派生）
+```
+优先级裁决：**P0/P1 生存**（下一步取规则引擎）> **P2/P3 当前阶段任务**（下一步取任务看板 `nextTask`+`nextHint`）> **P3/P4 兜底**（规则引擎：开局生存/存粮/探索）。Reflex 仍在 Lua 端独立抢占动作，本层只调整调度、不复制 Reflex。旧 `plan.js` 不删——它的 GOALS 继续作为生存/兜底下一步的来源。
+
+### 17.2 技能执行器（Skill → Step → Action → Verified → 回写）
+```
+lib/skills/skill-registry.js   技能自注册 + 校验（id/步骤/preconditions/completion/retry/timeout）
+lib/skills/skill-executor.js   SkillExecutor：一次 run_skill 推进一个有界步骤
+lib/skills/skill-utils.js      只读判定 + 「材料→原子动作」映射（target_kind 类，不吃 #N）
+lib/skills/survival-stabilize.js / establish-home-skill.js / gather-resources-skill.js
+lib/skills/index.js            装配并幂等注册全部技能
+```
+- **执行原则**：每步「检查前置 → 选原子动作 → 串行过 dispatcher → 重读快照 → `step.isDone()` 验证 → 记录进度 → 下一步」。`ok=true` 不算完成，必须有快照证据（build 见建筑、gold 见金块数增加、move 见到达）。
+- **状态关联**：实例存 `world memory.skill_instances[skillId]`（`status/step_index/step_attempts/step_calls/data`）；`tasks → skill instance → step → action → verified → 回写看板`。同一技能重复启动=**恢复**旧实例；**同一角色同一时刻只有一个技能 in_progress**（启动新技能会 `pause` 旧技能并保留其 `step_index`，之后可 `resume`）。
+- **中断安全**：恢复时先跳过 `isDone` 为真的步骤，**不重放已完成动作**；失败有每步 `attempts` 上限与每步调用预算，超限 `failed`，避免无限采集/无限重试。
+- **入口**：`run_skill` 是**本地工具**（不进 dispatcher 白名单），内部对每个原子动作仍调 `dispatcher.dispatch()`（唯一出口），并对 `build` 复用 `guardBuild` 家乡门槛。F8（`agent.js`）与 DSH（`mcp-server`）都经 `runTool` 拿到同一 `ctx.planner`，因此共用同一技能执行逻辑。
+- **日志**：`[PLANNER] DECISION/TASK_SELECTED/...` 与 `[SKILL] START/RESUME/STEP_START/ACTION_DISPATCH/STEP_VERIFIED/STEP_FAILED/PAUSED/FINISHED`，均带 world_key/task_id/skill_id/step_id/进度/结果——"什么都没做"时能区分是无任务、依赖阻塞、技能暂停、等游戏动作还是 Planner 出错。
+
+### 17.3 模块化扩展规范
+新增技能只需在 `lib/skills/` 下实现一个 `{id,name,preconditions,steps[{id,title,isDone,nextAction}],completion,retry_policy,timeout_policy}` 并在 `index.js` 注册一行；不修改 Planner。`fight_spider` 继续用 Lua Battle Director，不在 Node 重写蜘蛛战斗。
+
+### 17.4 与执行通道的关系（安全边界不变）
+技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。Phase G 只新增「编排层」，未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。
+
 

@@ -642,20 +642,12 @@ end
 local paused_by_us = false
 
 client_set_paused = function(want)
-    if GLOBAL.SetServerPaused == nil then
-        if pc_ok == nil then
-            pc_ok = false
-            print("[大肥鱼饿不死] 这个版本没有 SetServerPaused，AI 思考时不会暂停世界")
-        end
-        return
+    -- 整体禁用主动暂停世界：永远只允许解冻(false)，绝不暂停(true)
+    if want == true then return end
+    if GLOBAL.SetServerPaused ~= nil then
+        pcall(function() GLOBAL.SetServerPaused(false) end)
     end
-    local ok = pcall(function() GLOBAL.SetServerPaused(want) end)
-    if ok then
-        paused_by_us = want
-    elseif pc_ok == nil then
-        pc_ok = false
-        print("[大肥鱼饿不死] 暂停世界失败（可能不是房主），AI 思考时不会暂停")
-    end
+    paused_by_us = false
 end
 
 local function client_tick()
@@ -683,7 +675,13 @@ local function client_tick()
 end
 
 function B.start_client(world)
-    world:DoPeriodicTask(0.5, client_tick)
+    if GLOBAL.SetServerPaused ~= nil then
+        pcall(function() GLOBAL.SetServerPaused(false) end)
+    end
+    if GLOBAL.TheNet ~= nil and GLOBAL.TheNet.SetAutopaused ~= nil then
+        pcall(function() GLOBAL.TheNet:SetAutopaused(false) end)
+    end
+    Whale.util.DoStaticPeriodicTask(0.5, client_tick)
     -- 客户端的快捷键：F8 让内置 AI 开始/停下，F7 只开关小窗
     if Whale.hud ~= nil and Whale.hud.BindKeys ~= nil then
         Whale.hud.BindKeys()

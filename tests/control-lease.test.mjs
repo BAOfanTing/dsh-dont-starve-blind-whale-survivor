@@ -24,7 +24,12 @@ const ENV = { runtimeId: 'r-repro-0001', sessionId: 'sess-R', shardId: '1', acto
 
 function runWorker(file, owner, instanceId, startAt, force = '') {
   return execFileAsync(process.execPath, [WORKER, file, owner, instanceId, String(startAt), force], { cwd: ROOT, timeout: 15000 })
-    .then(({ stdout }) => JSON.parse(stdout.trim()))
+    .then(({ stdout }) => {
+      const lines = stdout.split('\n');
+      const jsonLine = lines.find(line => line.trim().startsWith('{'));
+      if (!jsonLine) throw new Error(`No JSON found in output: ${stdout}`);
+      return JSON.parse(jsonLine.trim());
+    })
 }
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'bws-lease-m202-'))

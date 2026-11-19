@@ -412,5 +412,21 @@ function U.log(msg)
     end
 end
 
+--- 周期任务，不受世界暂停影响（SetServerPaused）
+function U.DoStaticPeriodicTask(interval, fn)
+    local w = U.world()
+    if w ~= nil and w.DoStaticPeriodicTask ~= nil then
+        return w:DoStaticPeriodicTask(interval, fn)
+    end
+    if GLOBAL.staticScheduler ~= nil and GLOBAL.staticScheduler.ExecutePeriodic ~= nil then
+        local guid = (w ~= nil and w.GUID) or nil
+        return GLOBAL.staticScheduler:ExecutePeriodic(interval, fn, nil, nil, guid, w)
+    end
+    if w ~= nil and w.DoPeriodicTask ~= nil then
+        return w:DoPeriodicTask(interval, fn)
+    end
+    return nil
+end
+
 Whale = Whale or {}
 Whale.util = U

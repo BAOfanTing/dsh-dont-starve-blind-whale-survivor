@@ -157,7 +157,7 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（41 个 = 3 本地 + 38 动作）
+### 2.1 模型可见的工具（42 个 = 4 本地 + 38 动作）
 
 > 权威清单：`lib/actions/specs/*.js` 的 `ACTION_SPECS`。`OPEN_ACTIONS`、`TOOLS`、`RULES` 均从它派生，有 `tool-parity` / `prompt-parity` 测试保障。
 
@@ -166,6 +166,7 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 | `get_state` | 只读 | 时间/位置/三维/背包/附近/威胁/注意/需求提示；`format=json` 给结构化数据 |
 | `get_guide` | 只读 | 攻略四篇：主攻略 / 生存 / 战斗 / 烹饪（玩家可覆盖） |
 | `update_notes` | **本地写入** | 写长期笔记（**按世界分开存**），下次 `get_state` 显示在最前 |
+| `run_skill` | **本地编排** | ★ **执行复合技能**（survival_stabilize / establish_home / gather_resources）：每次推进一个有界步骤，内部仍走唯一 dispatcher；技能实例持久化、可恢复、不重复建 |
 | `pickup_nearest` | 动作 R2 | ★ **不会过期**：捡最近的一类地面材料（flint/twigs/cutgrass/log/rocks/goldnugget/charcoal/petals） |
 | `pickup_food` | 动作 R2 | ★ **不会过期**：实时搜并捡地上的**安全**食物（生蘑菇不算） |
 | `harvest_nearest` | 动作 R2 | ★ **不会过期**：采最近**已成熟**的食物植株（未成熟自动跳过） |
@@ -198,6 +199,8 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
   - **安全抢占与单槽保护**：仅 P0/P1 可中断普通任务，中断走唯一取消路径 `A.Abort`，确认清理干净后才启动新动作。
 - **计划层（Plan）**：从快照推导当前唯一目标并保持稳定，模型按建议行动，减少每轮从头规划开销。
 - **层级规划层（Planner）**：长期阶段（0..6）+ 中期任务看板（依赖/证据/重试冷却）+ 家园选址与建造约束；`get_state` 末尾输出「发展阶段/任务看板/下一步」，记忆按 `world_key` 隔离并落盘。P0/P1 生存事件让普通任务暂停但不丢长期目标。
+- **统一决策仲裁器（Decision Arbiter，Phase G）**：把「生存规则引擎（`plan.js`）」与「发展阶段/任务看板（`planner-core`）」收敛成**唯一 decision**；`get_state` 文本与 JSON 都只从它派生（兼容字段 `plan`/`development` 也来自同一 decision），不再出现两套互相独立的下一步。
+- **技能执行器（Skill Executor，Phase G）**：`lib/skills/skill-executor.js` 真正驱动多步骤技能，每次 `run_skill` 推进一个有界步骤、串行走 dispatcher、以快照证据（非 ok=true）判定步骤完成；技能实例存 `world memory`，支持启动/暂停/恢复/取消/失败恢复，且同一角色同一时刻只有一个技能在跑（新技能会暂停旧技能并保留进度）。
 - **Control Lease（控制租约）**：跨进程与 F8 互斥，换手严格等待旧持有者交回 `job_cleared` ACK。
 - **Lua Guard**：Node 端校验过的每一条约束，游戏内部重新做一次防御校验，杜绝非法注入。
 
@@ -258,3 +261,38 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 1. **补足关键自保动作**：开放主动加柴（`fuel`）与主动上药（`heal`）的高层模型工具联动。
 2. **坚持端到端真机验收纪律**：只有经过本地真机加载与日志观测验证的完整闭环，才进行 git 提交与版本定型。
 3. **严格遵守架构边界**：任何新增功能必须通过 Dispatcher、Control Lease 与 Lua Guard，绝不建立第二通信通道。
+
+---
+
+## 7. Phase G：统一规划决策 + 模块化 Skill Executor（本轮）
+
+> 目标：解决"两个规划器同时工作"，并把只产出任务建议的 Skills 升级为**真正执行多步骤工作流**的技能系统。
+> 证据类型：**UNIT（真实实现 + 合成可变世界 + 假 dispatcher）**；全量测试 **914/914 通过**。真机（真实游戏）验收仍未冒充，见 §7.5。
+
+### 7.1 G1 统一决策出口（Decision Arbiter）
+- 新增 `lib/planner/decision-arbiter.js`：`arbitrate(snapshot,{devPlan,survivalPlan})` → 唯一 `decision`（world_key / current_stage / primary_goal / current_task / current_skill / decision_reason / priority / next_action / blocked_tasks / completion）。
+  - P0/P1 生存 → 下一步取自 `plan.js` 的生存规则引擎（保命规则**全部保留**）。
+  - P2/P3 → 取自 `planner-core` 任务看板的唯一 `nextTask` + `nextHint`。
+  - P3/P4 兜底 → 规则引擎（覆盖开局生存、存粮、探索）。
+- `tools.js#getState`：装配 `planner` 时文本只渲染**一个** `## 当前计划（统一决策）`（含 发展阶段/主目标/任务/Skill/下一步/进度/阻塞/完成条件）；JSON 增加 `decision`，兼容字段 `plan`/`development` 均由同一 decision 派生（不再二次规划）。未装配 planner（单元测试）时退回旧 `renderPlan`，行为不变。
+- 旧 `plan.js` **未删除**：GOALS 生存规则继续作为生存/兜底下一步的来源；已由 Planner/TaskBoard 接管的建造目标（`build_science_machine`）保持不变（早已移除）。
+
+### 7.2 G2 Skill Executor 框架
+- `lib/skills/skill-registry.js`：技能自注册/校验；`lib/skills/skill-executor.js`：增量执行器。
+- 每步流程：检查前置 → 选原子动作 → **串行**过 dispatcher → **重读快照** → `step.isDone()` 验证 → 记录进度 → 下一步。
+- 关键性质：`ok=true` 不算完成（必须快照证据）；中断后跳过已完成步骤（不重放）；失败有次数上限与每步调用预算；同一技能重复启动=恢复；同一时刻只有一个技能 in_progress。
+- 实例持久化在 `world memory.skill_instances`（按世界隔离），`tasks → skill instance → step → action → verified → 回写`。
+
+### 7.3 G3/G4 三个可用技能
+- `survival_stabilize`：light → food → tools（沃尔夫冈用角色相关饥饿阈值；死亡/危险区交给 Reflex）。
+- `establish_home`：检查已有家→勘察→选址（复用 base-site-planner）→前往（主选不可达切备选）→收料（复用 gather 动作）→建科学机器→设家（`recordHomeFromSnapshot` 真实锚点）。**建造必须看到建筑真实出现**。
+- `gather_resources`：按真实缺口采集；中间产物依赖（缺 boards 先补 log 再 craft，不会一直砍树）；超出预算失败。
+
+### 7.4 G5 集成与日志
+- `run_skill` 作为**本地工具**暴露（`TOOLS` 42 个 = 4 本地 + 38 动作）；内部仍走唯一 dispatcher，并对 `build` 复用 `guardBuild` 家乡门槛。
+- F8（`agent.js`→`callTool`→`runTool`）与 DSH（`mcp-server`→`executeTool`→`runTool`）**共用同一 `ctx.planner` 与同一 dispatcher 链**，`run_skill` 两者都能用。
+- 日志统一：`[PLANNER] DECISION/GOAL_SELECTED/TASK_SELECTED/TASK_BLOCKED`（decision 输出）与 `[SKILL] START/RESUME/STEP_START/ACTION_DISPATCH/STEP_VERIFIED/STEP_FAILED/PAUSED/FINISHED`（executor 输出），均带 world_key / task_id / skill_id / step_id / 进度 / 结果。
+
+### 7.5 验收边界（诚实标注）
+- 自动化覆盖：决策唯一性、生存优先于建家、build/采集/gather 的真实证据核对、备用营地切换、已有家不重建、单角色单技能、中断不重放、失败上限、`get_state` 单一出口与 JSON 派生一致 —— 全部在 `tests/skill-executor.test.mjs` 用**合成可变世界**验证。
+- **真机（真实游戏）验收仍未在自动化里冒充**：全新世界从出生→稳定生存→选址→建家→发展这条闭环，需要在游戏内实际跑并看日志确认（Phase F 纪律不变）。
