@@ -516,45 +516,59 @@ test('ORCH-12: get_state 不会意外下发动作', async () => {
   assert.equal(calls.length, 0, 'get_state 执行过程不得派发任何游戏动作')
 })
 
-test('ORCH-13: run_skill 与自动调度使用同一个实例', async () => {
-  const world = makeWorld()
-  const planner = createPlanner()
-  const bridge = {
-    readState: () => ({ json: rawOf(world), ageMs: 0, path: 'fake.json' }),
-    leaseDirs: () => [],
-    readLeaseAck: () => null,
-  }
-  const ctx = {
-    bridge,
-    planner,
-    notes: { read: () => '', write: () => {} },
-    guides: {},
-    extraInstructions: '',
-    control: {
-      activeLease: () => ({ valid: true, authorized_actions: ['all'] }),
-      guard: () => null,
-    },
-    dispatcher: {
-      dispatch: async () => ({ status: 'succeeded' }),
-      describe: () => 'ok',
-    },
-  }
+test('ORCH-13: run_skill 指定 task_id 与自动调度使用同一个实例；不指定时独立隔离', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bws-orch-13-'))
+  try {
+    const store = createWorldMemoryStore({ dir })
+    const planner = createPlanner({ memoryStore: store })
+    const world = makeWorld()
+    const bridge = {
+      readState: () => ({ json: rawOf(world), ageMs: 0, path: 'fake.json' }),
+      leaseDirs: () => [],
+      readLeaseAck: () => null,
+    }
+    const ctx = {
+      bridge,
+      planner,
+      notes: { read: () => '', write: () => {} },
+      guides: {},
+      extraInstructions: '',
+      control: {
+        activeLease: () => ({ valid: true, authorized_actions: ['all'] }),
+        guard: () => null,
+      },
+      dispatcher: {
+        dispatch: async () => ({ status: 'succeeded' }),
+        describe: () => 'ok',
+      },
+    }
 
-  // 先通过 run_skill 启动一次
-  await executeTool('run_skill', { skill_id: 'gather_resources', max_steps: 1 }, ctx)
-  assert.ok(ctx.orchestrator, '工具应共享挂载 orchestrator')
-  const inst1 = ctx.orchestrator.executor.instanceOf('gather_resources')
-  assert.ok(inst1)
+    // 1. 指定 task_id: 'task_g' 时，run_skill 与 orchestrator 操作同一个任务实例
+    await executeTool('run_skill', { skill_id: 'gather_resources', task_id: 'task_g', max_steps: 1 }, ctx)
+    assert.ok(ctx.orchestrator, '工具应共享挂载 orchestrator')
+    const inst1 = ctx.orchestrator.executor.activeInstanceForTask('task_g')
+    assert.ok(inst1)
+    assert.equal(inst1.task_id, 'task_g')
 
-  // 再通过 orchestrator 调度推进一次
-  const mem = planner.memoryFor(snapOf(world))
-  mem.task_board = {
-    schema: 'bws.task-board/1',
-    tasks: [{ id: 'task_g', title: '收集', status: 'pending', priority: 1, skill_id: 'gather_resources' }],
+    // 再通过 orchestrator 调度推进同一个任务
+    const mem = planner.memoryFor(snapOf(world))
+    mem.task_board = {
+      schema: 'bws.task-board/1',
+      tasks: [{ id: 'task_g', title: '收集', status: 'pending', priority: 1, skill_id: 'gather_resources' }],
+    }
+    await ctx.orchestrator.tickOnce()
+    const inst2 = ctx.orchestrator.executor.activeInstanceForTask('task_g')
+    assert.equal(inst1, inst2, '指定同一 task_id 时，run_skill 与 orchestrator 必须操作同一个实例')
+
+    // 2. 不指定 task_id 时，作为独立手动任务，不覆盖 task_g 的实例
+    await executeTool('run_skill', { skill_id: 'gather_resources', max_steps: 1 }, ctx)
+    const manualInst = ctx.orchestrator.executor.activeInstanceForTask('manual:gather_resources')
+    assert.ok(manualInst)
+    assert.notEqual(manualInst.instance_id, inst1.instance_id, '独立手动调用必须拥有独立实例，不覆盖原有任务实例')
+    assert.equal(inst1.task_id, 'task_g', '原有任务的 task_id 不受影响')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
-  await ctx.orchestrator.tickOnce()
-  const inst2 = ctx.orchestrator.executor.instanceOf('gather_resources')
-  assert.equal(inst1, inst2, 'run_skill 与 orchestrator 必须操作同一个 SkillExecutor 实例')
 })
 
 test('ORCH-14: Task 和 Skill 不会出现状态互相矛盾', async () => {

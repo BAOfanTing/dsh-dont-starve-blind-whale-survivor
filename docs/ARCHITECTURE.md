@@ -400,15 +400,68 @@ lib/skills/index.js                   装配并幂等注册全部技能
   - **Skill Executor**：复合技能执行引擎，管理技能实例生命周期、步骤流转、原子动作下发、真实快照核验与有界重试。
   - **TaskSkillOrchestrator**：任务看板与技能执行器的唯一粘合层。选择主任务、检查可执行性、启动/恢复技能、处理 Reflex 抢占、回写任务看板，并在完成后重新仲裁。
 - **执行原则**：每步「检查前置 → 选原子动作 → 串行过 dispatcher → 重读快照 → `step.isDone()` 验证 → 记录进度 → 下一步」。`ok=true` 不算完成，必须有快照证据（build 见建筑、gold 见金块数增加、move 见到达）。
-- **状态关联**：实例存 `world memory.skill_instances[skillId]`（`status/task_id/step_index/step_attempts/step_calls/data`）；`tasks → skill instance → step → action → verified → 回写看板`。同一技能重复启动=**恢复**旧实例；**同一角色同一时刻只有一个技能 in_progress**（启动新技能会 `pause` 旧技能并保留其 `step_index`，之后可 `resume`）。
+- **状态关联**：实例存储在 `world memory.skill_instances[instance_id]`，通过 Proxy 包装层兼容按 `skill_id` 访问当前活动实例。内存根节点维护 `active_skill_instance_id` 标识当前控制角色的活跃实例。流程严格遵循 `tasks → skill instance → step → action → verified → 回写看板`。同一任务恢复执行时恢复原实例；**同一角色同一时刻只能有一个技能实例控制角色**（启动新技能时会将其他运行中实例置为 `paused` 并保留其 `step_index`，之后可安全 `resume`）。
 - **中断安全**：恢复时先跳过 `isDone` 为真的步骤，**不重放已完成动作**；失败有每步 `attempts` 上限与每步调用预算，超限 `failed`，避免无限采集/无限重试。
+- **失败重试真正执行**：任务首次失败记录失败原因并进入冷却（cooldown）；冷却期满后 Orchestrator 为该任务创建全新 `instance_id` 并重新读取最新快照，真实调用 Dispatcher 执行动作，旧实例作为审计历史保留；达到 `MAX_ATTEMPTS` 后才标记为永久 `failed`。
 - **入口与实例共享**：`get_state` 保持纯只读观察与决策；`run_skill` 与自动调度共享同一个 `SkillExecutor` 实例，内部对每个原子动作仍调 `dispatcher.dispatch()`（唯一出口），并对 `build` 复用 `guardBuild` 家园门槛。
 - **标准化日志**：三层统一日志输出，格式包含 `world_key`, `task_id`, `skill_id`, `step_id`, `status`, `reason`：
   - `[TASK] SELECTED / START / PAUSED / COMPLETED / BLOCKED`
   - `[ORCHESTRATOR] DISPATCH / RESUME / RECOVER`
   - `[SKILL] START / RESUME / STEP_START / ACTION_DISPATCH / STEP_VERIFIED / STEP_FAILED / PAUSED / FINISHED`
 
-### 17.3 模块化扩展规范
+### 17.3 任务身份与技能实例生命周期（Phase R.6 重构）
+
+在 Phase R.6 中，彻底修复了 Task Board、TaskSkillOrchestrator 与 Skill Executor 之间的实例身份混淆与生命周期缺陷：
+
+#### 17.3.1 核心概念分离
+- **Task (`task_id`)**：高阶规划任务的权威标识（如 `gather_log`, `gather_rocks`, `gather_goldnugget`）。描述“做什么、依赖谁、目标是什么、完成凭证是什么”。
+- **Skill (`skill_id`)**：技能模板的唯一标识（如 `gather_resources`, `establish_home`, `survival_stabilize`）。描述通用的多步骤执行逻辑与动作生成状态机。
+- **Skill Instance (`instance_id`)**：具体运行时的技能执行实例（格式：`inst_${skillId}_${taskId}_${timestamp}_${random}`）。描述“某任务绑定某次尝试的即时状态”，包含：
+  - `instance_id`：全局唯一实例主键
+  - `task_id`：所属任务 ID（自动任务 `task_...` 或手动任务 `manual:${skillId}`）
+  - `skill_id`：绑定的技能模板 ID
+  - `skill_args`：该实例固化的定制入参（如 `{ recipe: "science_machine", target_items: { rocks: 4 } }`），不同任务绝不互相污染
+  - `status`：`ready` / `in_progress` / `paused` / `failed` / `completed`
+  - `step_index`、`step_attempts`、`step_calls`、`calls`、`attempts`
+  - `created_at`、`updated_at`、`failed_at`、`completed_at`
+  - `data`：执行过程上下文与内部缓存
+
+#### 17.3.2 任务与技能实例生命周期流转
+
+```mermaid
+flowchart TD
+    subgraph Task_Lifecycle ["任务生命周期 (Task Board)"]
+        TR["Task: ready"] -->|"Orchestrator 调度"| TIP["Task: in_progress"]
+        TIP -->|"技能执行成功且核验通过"| TC["Task: completed"]
+        TIP -->|"技能失败 / 步骤超限"| TB["Task: blocked (cooldown)"]
+        TB -->|"冷却结束且 attempts < MAX"| TR
+        TB -->|"重试次数达上限"| TF["Task: failed (永久失败)"]
+    end
+
+    subgraph Instance_Lifecycle ["技能实例生命周期 (Skill Executor)"]
+        IR["Instance: ready"] -->|"启动 / run"| IIP["Instance: in_progress"]
+        IIP -->|"紧急生存抢占 / 手动操作"| IP["Instance: paused"]
+        IP -->|"威胁解除 / 重新调度"| IIP
+        IIP -->|"快照核验达成"| IC["Instance: completed"]
+        IIP -->|"步骤失败"| IF["Instance: failed"]
+    end
+
+    TIP -.->|"创建全新 instance_id"| IR
+    IC -.->|"提供真实证据"| TC
+    IF -.->|"回写失败原因并保留历史"| TB
+```
+
+#### 17.3.3 生命周期八项关键机制
+1. **实例完全解耦与隔离**：不同任务即使绑定相同 `skill_id`，也各自生成全新 `instance_id`，独立保存 `skill_args`，互不继承与覆盖；
+2. **同任务幂等恢复**：同一任务多次触发时，精确定位未完成的原实例，支持从原 `step_index` 续跑，不创建重复冗余实例；
+3. **失败重试真正下发动作**：首次失败记录 `failed_at` 与原因，旧实例作为审计历史保存。任务冷却到期后，Orchestrator 为其分配新 `instance_id`，重新读取最新快照，真实调用 Dispatcher 下发动作（调用计数 > 0），杜绝直接退回失败；
+4. **单角色单活动实例互斥**：全系统严格限制同一时刻只有一个活动技能实例控制角色。启动新实例或恢复旧实例时，自动将其它活跃实例置为 `paused`；
+5. **手动操作与自动调度安全隔离**：`run_skill` 未提供 `task_id` 时默认分配 `manual:${skillId}`。手动操作临时抢占控制权后，后续自动调度能够安全无损恢复原自动任务的实例与上下文；
+6. **世界记忆与实例严格隔离**：世界切换时，只读取当前 `world_key` 对应的实例空间，不唤醒或恢复其他世界的实例；
+7. **快照事实核验**：技能每步完成必须依靠最新快照事实核对（物品真实进包、建筑真实落成、坐标物理到达），杜绝轻信 `ok: true` 或复用旧实例完成态；
+8. **纯只读观察**：`get_state` 保持纯只读，决不下发任何动作指令。
+
+### 17.4 模块化扩展规范
 新增技能只需在 `lib/skills/` 下实现一个 `{id,name,preconditions,steps[{id,title,isDone,nextAction}],completion,retry_policy,timeout_policy}` 并在 `index.js` 注册一行；不修改 Planner。`fight_spider` 继续用 Lua Battle Director，不在 Node 重写蜘蛛战斗。
 
 ### 17.4 与执行通道的关系（安全边界不变）

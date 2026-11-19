@@ -13,10 +13,11 @@
 | **ISSUE-01** | **技能参数传递断裂**：`SkillExecutor` 与 `run_skill` 无法接收 `skill_args`，`gather_resources` 强依赖默认 `CORE_RECIPE` | `lib/tools.js`, `lib/skills/skill-executor.js`, `lib/skills/gather-resources.js` | **P0 (关键执行断链)** | 在 `run_skill`、`SkillExecutor.run(skillId, taskId, args)` 中打通参数，持久化保存至 `inst.data`，恢复时保留 | **已解决 (Phase R.1)** |
 | **ISSUE-02** | **技能与任务定义双重冗余**：`establish-home.js` 与 `establish-home-skill.js`、`gather-resources.js` 与 `gather-resources-skill.js` 重复维护业务模型 | `lib/skills/establish-home.js`, `lib/skills/gather-resources.js`, `lib/planner/task-skill-orchestrator.js` | **P1 (核心架构冗余)** | 彻底分离 Task 与 Skill 职责，新增 `TaskSkillOrchestrator`，消除两套重复维护的状态机，单一入口推进 | **已解决 (Phase R.2)** |
 | **ISSUE-03** | **世界记忆结构不完整**：`emptyMemory` 缺少 `skill_instances`、`explored_regions`、`known_resources` 声明 | `lib/planner/world-memory.js` | **P1 (持久化契约不全)** | 在 `world-memory.js` 中规范化内存字段与 schema 校验 | **已解决 (Phase R.3)** |
-| **ISSUE-04** | **规划层职责重叠**：旧版 `plan.js` 仍包含基础工具与背包防具规划，与层级任务看板重合 | `lib/plan.js`, `lib/planner/development-stages.js`, `lib/planner/decision-arbiter.js` | **P2 (规则冗余)** | 收缩 `plan.js` 仅保留 P0/P1 生存应急规则，发展类科技完全移交 `TaskBoard` | 中，需保障兼容性 |
+| **ISSUE-04** | **规划层职责重叠**：旧版 `plan.js` 仍包含基础工具与背包防具规划，与层级任务看板重合 | `lib/plan.js`, `lib/planner/development-stages.js`, `lib/planner/decision-arbiter.js` | **P2 (规则冗余)** | 收缩 `plan.js` 仅保留 P0/P1 生存应急规则，发展类科技完全移交 `TaskBoard` | **已解决 (Phase R.4)** |
 | **ISSUE-05** | **Lua 家务宏孤岛代码**：`chores.lua` 注册了 6 个动作但无任何上游调用链 | `DontStarveWhaleSurvivor/scripts/whale/chores.lua` | **P2 (孤岛死代码)** | 评估接入规范或标记为 Internal，避免未经验证的代码累积 | 低 |
 | **ISSUE-06** | **配方表 6 处硬编码维护**：材料数量分散在多个脚本 | `lib/plan.js`, `lib/planner/planner-core.js`, `lib/skills/*`, `lib/actions/specs/crafting.js` | **P2 (数据漂移风险)** | 提取统一只读配方模块 `lib/actions/recipes.js`，配方一致性测试统一盯防 | 低 |
-| **ISSUE-07** | **文档严重滞后与数据冲突**：README 漏写工具数与 run_skill，ARCHITECTURE.md 缺少层级规划与技能层 | `README.md`, `docs/ARCHITECTURE.md`, `docs/STATUS.md` | **P1 (治理可信度)** | 更新所有文档，使工具数统一为 42、测试统一为 918、更新架构说明 | 无代码破坏 |
+| **ISSUE-07** | **文档严重滞后与数据冲突**：README 漏写工具数与 run_skill，ARCHITECTURE.md 缺少层级规划与技能层 | `README.md`, `docs/ARCHITECTURE.md`, `docs/STATUS.md` | **P1 (治理可信度)** | 更新所有文档，使工具数统一为 42、测试对齐最新状态、更新架构说明 | **已解决 (Phase R.5)** |
+| **ISSUE-08** | **任务与技能实例身份混淆与重试失效**：不同 Task 共享 `memory.skill_instances[skill_id]`，失败实例未真实重试下发动作，并发无互斥保障 | `lib/skills/skill-executor.js`, `lib/planner/world-memory.js`, `lib/planner/task-board.js`, `lib/planner/task-skill-orchestrator.js`, `lib/tools.js` | **P0 (生命周期与身份缺陷)** | Task ID 与 Skill Instance ID 彻底分离，冷却期满重建全新 instance_id 并真实下发动作，单角色单实例互斥 | **已解决 (Phase R.6)** |
 
 ---
 
@@ -136,9 +137,30 @@
   3. 强化统一决策输出：`get_state` 在装配 planner 时统一输出 `## 当前计划（统一决策）`，彻底消除双份计划对 AI 模型的认知干扰。
   4. 新增 `PLAN-R4-1`、`PLAN-R4-2` 契约回归测试，全量测试达 943 项全绿。
 
-### 阶段 R.5：文档基准完全对齐
+### 阶段 R.5：文档基准完全对齐（已完成）
 - **目标**：消除所有文档间的版本、工具数、测试数冲突（`ISSUE-07`）。
-- **行动**：
+- **行动与成果**：
   1. 更新 `README.md`，写明 42 个工具并加入 `run_skill` 用法。
   2. 更新 `docs/STATUS.md`，将测试基准校准为 943 全绿，消除内部矛盾。
   3. 整理文档结构，确保系统只有一份权威架构说明。
+
+### 阶段 R.6：任务身份与技能实例生命周期重构 (Phase R.6 已完成)
+- **目标**：彻底解决 Task ID 与 Skill Instance ID 混淆、失败重试未真正下发动作、同技能跨任务参数串扰与并发互斥问题（`ISSUE-08`）。
+- **行动与成果**：
+  1. **Task ID 与 Skill Instance ID 彻底分离**：
+     - `world memory.skill_instances[instance_id]` 唯一存储实例，增加 `active_skill_instance_id`；
+     - 实例包含 `instance_id`、`task_id`、`skill_id`、`skill_args`、`status`、`step_index`、`step_attempts`、`step_calls`、`created_at`、`updated_at`、`failed_at`、`completed_at`；
+     - Proxy 包装层保障历史以 `skill_id` 读取时的透明向前兼容；
+     - 同一技能模板的多个不同任务（如连续三个材料采集任务）强制拥有不同 `instance_id`，参数相互独立。
+  2. **失败重试真实执行**：
+     - 任务失败保留失败原因与历史实例，不再覆盖；
+     - Task Board 进入冷却期 `cooldown`，任务临时置为 `blocked`；
+     - 冷却结束后恢复 `ready`；再次调度时分配全新 `instance_id`，重新读取最新快照，真实调用 Dispatcher 执行动作（动作调用计数 > 0），杜绝直接返回 failed 或盲目重放动作；达到 `MAX_ATTEMPTS` 后标记为永久 `failed`。
+  3. **调度边界与互斥保障**：
+     - 严格单角色单活动实例互斥，启动新实例自动将其它实例置为 `paused`；
+     - `run_skill` 默认绑定 `manual:${skillId}`，与自动调度实例彻底隔离；手动操作结束后自动任务安全恢复；
+     - `get_state` 绝对保持只读，不产生任何动作下发副作用；
+     - 跨世界实例严格物理隔离，切换世界后绝不恢复其它世界的实例。
+  4. **测试与验证**：
+     - 新增 `tests/task-instance-lifecycle.test.mjs`，包含 16 个生命周期场景测试（LIFECYCLE-01 至 LIFECYCLE-16）以及 1 个完整端到端三资源串行任务测试（LIFECYCLE-INTEGRATION）；
+     - 全量测试通过数从 943 增至 **959/959 全部通过**（0 失败、0 跳过）。

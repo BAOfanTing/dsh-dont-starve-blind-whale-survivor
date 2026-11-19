@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜全量测试 918 → **943** 全绿｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜全量自动化测试 **959/959 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -343,3 +343,45 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
      - 规范 `[TASK]`, `[ORCHESTRATOR]`, `[SKILL]` 三层日志，包含 `world_key`, `task_id`, `skill_id`, `step_id`, `status`, `reason`；
   8. 测试覆盖：新增 `tests/task-skill-orchestrator.test.mjs`，包含 14 项完整集成验证。
 - **验证**：全量测试 **939/939 全部通过**（无失败、无跳过）。
+
+### 8.4 Phase R.3 记忆规范：World Memory Schema 统一与数据自愈升级 (World Memory Governance)
+- **目标**：规范 `world-memory.js` 的持久化字段契约，支持结构自愈升级与容错。
+- **改动**：
+  1. `emptyMemory` 补齐全部契约字段：`schema` (`bws.world-memory/1`)、`worldKey`、`task_board`、`skill_instances`、`explored_regions`、`known_resources` 等；
+  2. 实现 `SUPPORTED_SCHEMAS`、`validateMemory` 与 `migrateMemory`，平滑兼容旧版本数据并防御性清洗异常浮点与越界字段；
+  3. `store.load` 自动检测旧版本数据并在内存升级后落盘自愈。
+- **验证**：新增 `WM-11`、`WM-12` 两项测试，测试集达到 **941/941 全绿**。
+
+### 8.5 Phase R.4 规则收敛：Planner 决策仲裁与 plan.js 纯粹化 (Planner Core Pureification)
+- **目标**：彻底理清 Planner Core、Decision Arbiter 与旧 `plan.js` 的边界重叠。
+- **改动**：
+  1. 梳理 Decision Arbiter 优先级梯队：P0/P1 生存绝对抢占，P2/P3 驱动 Task Board 阶段任务，P3/P4 执行日常与探索兜底；
+  2. 收敛 `lib/plan.js` 为纯生存应急引擎，移除过时的制造与采集规则（移交 Task Board）；
+  3. `get_state` 在装配 planner 时统一输出单一 `## 当前计划（统一决策）`。
+- **验证**：新增 `PLAN-R4-1`、`PLAN-R4-2` 两项测试，测试集达到 **943/943 全绿**。
+
+### 8.6 Phase R.6 实例生命周期：Task ID 与 Skill Instance ID 彻底分离 (Task Identity & Instance Lifecycle)
+- **目标**：修复 Phase R.2 遗留的 Task Board、TaskSkillOrchestrator、Skill Executor 之间的实例身份共享、失败不能真实重试、参数串扰与并发互斥缺陷。
+- **核心改动**：
+  1. **Task ID 与 Skill Instance ID 彻底分离**：
+     - `memory.skill_instances[instance_id]` 作为唯一物理持久化存储，内存根节点维护 `active_skill_instance_id`；
+     - 实例包含 `instance_id`、`task_id`、`skill_id`、`skill_args`、`status`、`step_index`、`attempts`、`step_attempts`、`step_calls`、`calls`、`data`、`created_at`、`updated_at`、`failed_at`、`completed_at`；
+     - 引入 Proxy 包装层 `wrapSkillInstances`，无损兼容按 `memory.skill_instances[skillId]` 访问当前活动实例，平滑支持旧版内存迁移；
+     - 不同任务即使绑定相同技能（如连续三个 gather 任务），强制创建独立 `instance_id`，各实例独立拥有 `skill_args`，互不污染与继承。
+  2. **失败重试真实执行**：
+     - 任务执行失败时记录失败原因与 `failed_at`，旧实例作为审计历史保留在内存中；
+     - Task Board 进入 cooldown 冷却期，任务状态临时置为 `blocked`；
+     - 冷却结束后恢复 `ready`；再次被 Orchestrator 调度时，SkillExecutor 为该任务创建全新 `instance_id`，重新读取最新快照，真实调用 Dispatcher 下发动作（断言动作调用计数 > 0），杜绝直接返回 failed 或盲目重放动作；达到 `MAX_ATTEMPTS` 后才永久标记为 `failed`。
+  3. **调度边界与互斥保障**：
+     - 严格保证同一时刻只有一个活动实例控制角色控制权（启动新实例自动将旧实例置为 `paused`）；
+     - 手动 `run_skill` 支持显式 `task_id`，缺省默认为 `manual:${skillId}`，与自动任务完全隔离；手动调用抢占角色结束后，后续自动调度能够安全恢复原自动任务的旧实例；
+     - `get_state` 保持纯只读，绝不下发任何动作指令；
+     - 跨世界实例严格物理隔离，切换世界后绝不恢复其它世界的实例。
+  4. **快照事实凭证**：
+     - 任务完成必须有对应目标的真实快照证据（物品数量增加、建筑真实存在、坐标到达），绝不轻信 `ok: true` 或复用历史 completed 状态。
+- **测试覆盖**：
+  - 新增 `tests/task-instance-lifecycle.test.mjs`，包含 LIFECYCLE-01 至 LIFECYCLE-16 全部 16 个生命周期场景以及 1 个完整端到端三资源串行任务测试（`LIFECYCLE-INTEGRATION`：缺木头×4、石头×4、金块×1 串行真实执行并依赖快照证据依次完成）。
+  - 全量自动化测试达到 **959/959 全部通过**（959 pass, 0 fail, 0 skipped）。
+- **真机验收纪律说明**：
+  - 本次全量测试 959/959 通过属于**自动化测试（单元/合成世界集成）**通过；
+  - 真实游戏（DST 联机版真机）运行仍需在游戏内挂载模组并实机观测日志（真机验收记录以真机日志证据为准，不冒充真实游戏通过）。

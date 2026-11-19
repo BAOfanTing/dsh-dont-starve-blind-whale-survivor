@@ -4,6 +4,44 @@
 
 ---
 
+## [Phase R.6] - 2026-11-19
+
+### 实例身份与生命周期：Task ID 与 Skill Instance ID 分离与真实重试 (Task Identity & Instance Lifecycle)
+- **Task ID 与 Skill Instance ID 彻底分离**：
+  - `lib/planner/world-memory.js`：将 `skill_instances` 从以 `skill_id` 为键升级为以 `instance_id` 为全局物理唯一键，根节点增加 `active_skill_instance_id`。通过 Proxy 包装层 `wrapSkillInstances` 保持向后兼容老代码对活动实例的直接读取。
+  - `lib/skills/skill-executor.js`：`newInstance()` 生成具有唯一性的 `instance_id`，并记录 `task_id`、`skill_id`、`skill_args`、`status`、`step_index`、`step_attempts`、`step_calls`、`created_at`、`updated_at`、`failed_at`、`completed_at`。
+  - 同一技能类型的多个不同任务（如 `gather_log`、`gather_rocks`、`gather_goldnugget`）各自绑定独立 `instance_id`，参数相互隔离，彻底根除跨任务串实例、串参数问题。
+- **失败重试真实执行**：
+  - 任务失败时保留失败原因与历史实例，不再覆盖旧实例。
+  - 任务进入看板冷却，冷却期满后 Orchestrator 针对该任务分配全新 `instance_id` 重新调度，保留原 `skill_args`。
+  - 重新读取最新快照，真实调用 Dispatcher 下发动作（调用计数 > 0），杜绝直接返回 failed 或重放历史动作。
+  - 达到最大尝试次数（`MAX_ATTEMPTS`）后任务正式进入永久 `failed`。
+- **调度边界与互斥保障**：
+  - 单角色单活动实例互斥：`#pauseOthers()` 保证全系统同一时刻只有一个活动实例控制角色。
+  - `run_skill` 支持显式 `task_id`，缺省默认为 `manual:${skillId}`，与自动调度实例彻底隔离。手动操作结束后，自动调度可安全恢复原自动任务。
+  - `get_state` 绝对保持只读，不产生任何动作下发副作用。
+  - 跨世界实例严格物理隔离，切换世界后绝不恢复其它世界的实例。
+- **测试与验证**：
+  - 新增 `tests/task-instance-lifecycle.test.mjs`，包含 LIFECYCLE-01 至 LIFECYCLE-16 全部 16 个场景以及 LIFECYCLE-INTEGRATION 三资源连续采集集成验证。
+  - 全量自动化测试达到 **959/959 全部通过**（959 pass, 0 fail, 0 skipped）。
+
+---
+
+## [Phase R.4] - 2026-11-19
+
+### 决策收敛：Planner 决策仲裁与 plan.js 纯粹化 (Planner Core Pureification)
+- **仲裁梯队明确**：
+  - P0/P1 生存绝对抢占，优先使用生存规则引擎保障角色安全。
+  - P2/P3 统一驱动 Task Board 阶段任务。
+  - P3/P4 负责开局基本生存、存粮与探索兜底。
+- **plan.js 纯粹化**：
+  - 移除中长期建造与高级装备制造规则，全面移交 Task Board。
+  - `get_state` 纯只读渲染单一统一决策计划块。
+- **测试与验证**：
+  - 新增 `PLAN-R4-1`、`PLAN-R4-2`，全量测试达 943 项全绿。
+
+---
+
 ## [Phase R.3] - 2026-11-19
 
 ### 记忆规范与自愈：World Memory Schema 统一与版本自愈升级 (World Memory Governance)
