@@ -19,6 +19,8 @@
 | **ISSUE-07** | **文档严重滞后与数据冲突**：README 漏写工具数与 run_skill，ARCHITECTURE.md 缺少层级规划与技能层 | `README.md`, `docs/ARCHITECTURE.md`, `docs/STATUS.md` | **P1 (治理可信度)** | 更新所有文档，使工具数统一为 42、测试对齐最新状态、更新架构说明 | **已解决 (Phase R.5)** |
 | **ISSUE-08** | **任务与技能实例身份混淆与重试失效**：不同 Task 共享 `memory.skill_instances[skill_id]`，失败实例未真实重试下发动作，并发无互斥保障 | `lib/skills/skill-executor.js`, `lib/planner/world-memory.js`, `lib/planner/task-board.js`, `lib/planner/task-skill-orchestrator.js`, `lib/tools.js` | **P0 (生命周期与身份缺陷)** | Task ID 与 Skill Instance ID 彻底分离，冷却期满重建全新 instance_id 并真实下发动作，单角色单实例互斥 | **已解决 (Phase R.6)** |
 | **ISSUE-09** | **自主执行接入缺失与运行隔离不足**：正式 MCP 入口未接通调度器，缺乏跨请求共享且互斥的世界运行时，缺乏自动/手动模式控制 | `lib/planner/world-runtime-manager.js`, `lib/tools.js`, `tests/autopilot-runtime.test.mjs` | **P0 (自主执行能力缺失)** | 新增 `WorldRuntimeManager` 集中世界上下文与互斥锁，引入 `advance_task` 工具接入 Orchestrator，实现三种执行模式权限隔离 | **已解决 (Phase R.7)** |
+| **ISSUE-11** | **执行安全与生存稳定性漏洞**：Stop 竞态并发撕裂锁、unknown 结果盲目重试、seek 预算未透传、食物分类粗糙、食物熔断永久拉黑 | `lib/planner/world-runtime-manager.js`, `lib/skills/food-candidate-selector.js`, `lib/dispatcher.js` | **P0 (稳定性漏洞)** | 递增锁 generation 校验释放、全链路 Stop 信号、unknown 状态对账保护、预算透传、精准营养评估与冷却放行 | **已解决 (Phase R.7.2)** |
+| **ISSUE-12** | **复合执行链控制权与运行时可靠性漏洞**：复合技能控制权身份丢失、unknown 终态重激活、unverified 动作盲目重发、Stop 队列命令泄漏 | `lib/tools.js`, `lib/planner/world-runtime-manager.js`, `lib/skills/skill-executor.js`, `lib/bridge.js` | **P0 (控制权与执行可靠性)** | 控制权参数化无状态透传、unknown 终态保护与显式人工对账、unverified 对账闭环、HTTP 待提取队列即时清理与 Quarantine 隔离屏障 | **已解决 (Phase R.7.3)** |
 | **ISSUE-10** | **自主生存循环循环不闭环** | (待定) | **P1 (自治闭环)** | 实现长期目标自主生成与持续生存任务自主循环 | **待办 (Phase R.8)** |
 
 ---

@@ -501,5 +501,25 @@ flowchart TD
 - **需求驱动评估**：`food-candidate-selector.js` 严格区分 `hunger`、`health`、`sanity` 目标需求。在饥饿需求下过滤饱食度为 0 的物品（如花瓣 `petals`），杜绝误吃；综合考虑营养缺口匹配度与新鲜度（`freshness * 50`）；
 - **失败类型甄别与熔断恢复**：`reflex_active`、`actor_busy`、`result_timeout`、`awaiting_reconciliation` 属于调度或等待状态，不计入熔断器失败计数；目标熔断只依赖冷却时间 `blockedUntil`，冷却到期自动放行，彻底消除永久拉黑；维护 120s TTL 与 50 条上限容量自愈清理。
 
+### 17.6 复合执行链控制权与运行时可靠性治理 (Phase R.7.3)
+
+#### 17.6.1 复合技能控制权身份透传 (Control Ownership Propagation)
+- **调用级无状态透传**：`{ owner, ownerInstanceId }` 不作为 `WorldRuntime` 单例实例的可变属性常驻，而是严格跟随每一次 `advance_task` / `run_skill` / `executeTask` 异步闭包从顶层传递到底层：
+  `tools.js (executeTool) → WorldRuntime (advanceTask / executeTask) → TaskSkillOrchestrator (tickOnce / executeTask) → SkillExecutor (run) → Dispatcher.dispatch() → LeaseManager.validate() → GameBridge.call(envelope)`
+- **命令信封权威性**：在 `GameBridge` 生成底层 JSON 载荷时，信封（`envelope`）的 `requested_by`、`owner_type`、`owner_instance_id` 始终精确反映本次动作的发起方身份，防止 MCP 客户端调用复合技能时回退为 `system`，以及并发排队任务间的身份残留。
+
+#### 17.6.2 终态 `unknown` 保护与显式人工对账 (Terminal State & Manual Resolution)
+- **保护性终态**：将 `unknown` 明确纳为不可回退的终态（与 `completed`, `failed`, `cancelled` 并列）。`SkillExecutor` 与 `TaskSkillOrchestrator` 拒绝重新将 `unknown` 实例激活为 `in_progress`，拒绝重新 dispatch 原子动作，并在 Task Board 上显式标记为 `blocked` (`task_outcome_unknown`)；
+- **人工对账机制**：通过 `resolveUnknownTask(taskId, { instanceId, commandId, resolution, evidence })` 进行显式人工干预，严格校验 `commandId` 与 `instanceId` 匹配性，支持 `completed`（标记达成并提供证据）、`abandoned`（放弃任务转为 cancelled）、`unexecuted`（核实未执行重置为 failed 允许重试）。
+
+#### 17.6.3 `unverified` 状态与对账闭环 (Unverified Handling)
+- 动作返回 `unverified`（游戏说做完了但快照核验未确认）时，绝不当成普通单步失败立即重做动作，而是转入 `awaiting_reconciliation`；
+- 后续轮次优先使用新鲜快照核验证据（步骤 `isDone`），证实成功则前进，连续 3 次未证实才进入终态 `unknown`。
+
+#### 17.6.4 Stop 取消闭环与 Quarantine 隔离屏障
+- **HTTP 待提取队列即时剔除**：在 `GameBridge` 中挂载 `signal` 取消监听器，当下发前已被取消或排队期间收到 abort 信号时，立即从 `pendingHttpCommands` 队列中移除，杜绝已被取消的命令被游戏端轮询取出执行；
+- **锁释放超时 Quarantine 屏障**：`WorldRuntime.stop()` 在等待持有锁任务退出时设定有界超时（最高 5 秒）；若超时持有者仍未退出，则激活 `quarantined = true` 与 `cancelRequested = true`，形成强制隔离屏障，所有后续任务均无法获取锁；直到原任务持有者真实退出并在 `finally` 中释放锁时，隔离屏障才自愈解除。
+
+
 
 

@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜**完成执行安全与生存稳定性收尾 (Phase R.7.2)**｜全量自动化测试 **1036/1036 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜**完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)**｜全量自动化测试 **1057/1057 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -428,3 +428,27 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
      - 优化 `gathering.lua` 采摘状态保护，增加 `locomotor.bufferedaction` 与 `doing` 标签感知，重推等待窗口延长至 >2.5s，杜绝首次采摘动画被误判超时强行打断重做的现象。
 - **测试覆盖**：
   - 新增核心测试套件，全量自动化测试达到 **1036/1036 全部通过**（1036 pass, 0 fail, 0 skipped）。
+
+### 8.9 Phase R.7.3 复合执行链控制权与运行时可靠性治理 (Runtime Execution Integrity & Control Ownership)
+- **目标**：解决复合技能控制权身份丢失、unknown 终态被意外重激活、unverified 动作被盲目重发以及 Stop 期间排队命令可能泄漏给 Lua 执行等核心执行可靠性缺陷。
+- **改动与修复**：
+  1. **P0: 复合技能控制权身份透传 (Control Ownership Propagation)**：
+     - 打通 `runSkillTool` / `advanceTaskTool` -> `WorldRuntime` -> `TaskSkillOrchestrator` -> `SkillExecutor` -> `Dispatcher` -> `LeaseManager` -> `GameBridge` 全链路，确保 `{ owner, ownerInstanceId }` 严格按次传递；
+     - 不在 `WorldRuntime` 单例中使用可变状态常驻所有权身份，支持并发排队任务各自隔离；
+     - 生成命令信封（`envelope`）时完整携带 `requested_by`、`owner_type` 与 `owner_instance_id`。
+  2. **P0/P1: 终态 `unknown` 保护与对账防重发防激活 (Terminal State Protection & Anti-Replay)**：
+     - 将 `unknown` 纳入终态集合（与 `completed`, `failed`, `cancelled` 并列），`SkillExecutor.run()` 拒绝重新激活 `unknown` 实例并阻止下发底层动作；
+     - `TaskSkillOrchestrator` 与 Task Board 将 `unknown` 任务置为 `blocked` (`task_outcome_unknown`) 并持久化；
+     - 提供显式人工对账解决接口 `resolveUnknownTask(taskId, { instanceId, commandId, resolution, evidence })`。
+  3. **P0/P1: `unverified` 状态与对账闭环 (Unverified Handling & Reconciliation)**：
+     - Dispatcher 返回 `unverified` 时绝不立即重发，进入 `awaiting_reconciliation` 并记录 `before_snapshot_id`；
+     - 后续轮次比对最新快照完成核验推进，3 次对账预算耗尽仍未证实才转入终态 `unknown`。
+  4. **P0/P1: Stop 取消闭环与隔离屏障 (Stop Cancellation Closed-Loop & Quarantine Fencing)**：
+     - `GameBridge` 为 HTTP 通道命令注册 abort 监听器，命令被取消时立即从 `pendingHttpCommands` 剔除，防止被 Lua 轮询取出执行；
+     - `WorldRuntime.stop()` 强化锁持有者超时检测，超时未放锁则激活 `quarantined = true` 与 `cancelRequested = true` 屏障拒绝后续任务，直到原锁真实释放才自愈解除；
+     - Lua 端验证 `actions.Start('stop')` 打断在行任务并回执失败，同时严格保持 Reflex 保命抢占绝对不可被打断。
+  5. **P1: 32格雷达、资源过期与食物效用对齐**：
+     - `known_resources` 引入时间戳、状态、置信度并支持失败反向传播剔除超时未验证（>300s）资源；
+     - 食物效用计算严格过滤负面脑残食物（生肉/青蛙腿）与饱食度 0 物品。
+- **测试覆盖**：
+  - 新增 6 组自动化测试套件（`runtime-control-ownership`, `unverified-reconciliation`, `unknown-reconciliation` UNKNOWN-09~14, `stop-command-delivery`, `stop-runtime-quarantine`, `stop-lua-integration`），全量自动化测试达到 **1057/1057 全部通过** (0 fail, 0 skipped)。

@@ -4,6 +4,34 @@
 
 ---
 
+## [Phase R.7.3] - 2026-11-20
+
+### 复合执行链控制权与运行时可靠性治理 (Runtime Execution Integrity & Control Ownership)
+- **P0: 复合技能控制权身份透传 (Control Ownership Propagation)**:
+  - 修复复合技能调度链（`advance_task` / `run_skill` -> `WorldRuntime` -> `TaskSkillOrchestrator` -> `SkillExecutor` -> `Dispatcher` -> `LeaseManager` -> `GameBridge`）中控制权身份丢失的问题；
+  - 严格以每次调用的调用参数形式向下传递 `{ owner, ownerInstanceId }`，严禁在 `WorldRuntime` 单例内部使用可变对象级状态存储调用者身份，防止并发调用间身份串用；
+  - 确保下发至 Lua 的命令信封（`envelope`）中完整包含 `requested_by`、`owner_type`、`owner_instance_id`，MCP 客户端以 `mcp_client` 身份下发，内置 AI 以 `f8_agent` 身份下发，系统自主调度以 `system` 身份下发。
+- **P0/P1: 终态 `unknown` 保护与对账防重发防激活 (Terminal State Protection & Anti-Replay)**:
+  - 将 `unknown` 明确纳入任务与技能实例终态保护集合（与 `completed`, `failed`, `cancelled` 并列）；
+  - `activeInstanceForTask`、`instanceOf` 以及 `SkillExecutor.run()` 识别 `unknown` 实例后拒绝重置为 `in_progress`，拒绝重新 dispatch 原子动作，直接返回 `{ status: 'blocked', reason: 'task_outcome_unknown' }`；
+  - `TaskSkillOrchestrator.tickOnce` 与 `executeTask` 识别 `unknown` 结果后将 Task Board 看板对应任务置为 `blocked` (`blocked_reason = 'task_outcome_unknown'`) 并持久化；
+  - 新增显式人工对账解决机制 `resolveUnknownTask(taskId, { instanceId, commandId, resolution, evidence })`，严格校验 `commandId` 与 `instanceId` 匹配性，支持 `'completed'`, `'abandoned'`, `'unexecuted'` 三种显式闭环。
+- **P0/P1: `unverified` 状态与对账闭环 (Unverified Handling & Reconciliation)**:
+  - 严格区分 `unverified` 与普通单步失败：当游戏返回 ok 但快照核验未通过时（`outcome.status === 'unverified'`），绝不作为普通失败立即重发新动作，而是进入 `awaiting_reconciliation`；
+  - 在后续轮次中比对最新快照：若快照中观察到真实生效证据（如背包物品增加、位置到位、建筑出现），立即推进完成并不重复下发；若 3 次对账预算耗尽仍未证实，转为受保护的终态 `unknown`。
+- **P0/P1: Stop 取消闭环与过期命令围栏 (Stop Cancellation Closed-Loop & Quarantine Fencing)**:
+  - 在 `GameBridge` 中为 HTTP 待提取队列注册 `signal` 取消监听器，当命令在下发前已被取消或排队期间收到 abort 信号时，立即从 `pendingHttpCommands` 队列中剔除，防止其被 Lua 模组在下一次轮询中执行；
+  - `WorldRuntime.stop()` 强化锁协调超时处理：当持有锁的执行线程在超时时间内未能退出并释放锁时，激活 `quarantined = true` 与 `cancelRequested = true` 隔离屏障，彻底阻断任何后续新任务的执行；直至持有者在 `finally` 中真实释放锁后，才自愈解除隔离；
+  - 在 Lua 端 `actions.Start('stop')` 验证闭环：当下发 stop 动作时，立即调用 `stop_actions(p)` 打断在行动作并向 Bridge 报告前置任务被打断失败，随后在下一 tick 完成 `stop` 并上报；若在行动作为 Reflex 保命动作，则严格拒绝打断，保证 Reflex 保命优先权。
+- **P1: 32格雷达、资源过期与食物效用对齐**:
+  - `known_resources` 补齐时间戳、状态（`observed`, `verified`, `inaccessible`）、`confidence` 与失败次数；
+  - `explore-utils.js` 引入 `recordResourceFailure` 失败反向传播，对超过 300 秒未验证或确认不可达的资源进行剔除；
+  - 食物决策层完善负面 Sanity 过滤与饱食度 0 过滤，生肉/青蛙腿等扣脑残食物在 Sanity 模式下严格拒绝（返回 -9999），无饱食度花瓣在饥饿模式下严格拒绝。
+- **测试与验证**:
+  - 全量自动化测试达到 **1057/1057 全部通过** (0 失败、0 跳过、0 错误)，较上阶段净增 21 个高覆盖率专项测试用例。
+
+---
+
 ## [Phase R.7.2] - 2026-11-20
 
 ### 执行安全与生存稳定性收尾 (Execution Safety & Survival Stability Closing)
