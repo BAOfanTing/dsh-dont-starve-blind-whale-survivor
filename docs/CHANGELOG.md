@@ -7,6 +7,9 @@
 ## [Phase R.7.2] - 2026-11-20
 
 ### 执行安全与生存稳定性收尾 (Execution Safety & Survival Stability Closing)
+- **动作与移动平滑度优化（Issue 1 & 2）**：
+  - **位移到达判定阈值收紧**：将 `movement.lua` 中 `move_to` 默认到达判定从 0.8 格收紧至 0.35 格（约 1.4 世界单位），进入原生拾取/采摘臂展范围 (< 1.5 单位)，彻底解决角色跑至附近骤停、紧接着再次起步走位才采/捡的断层问题；同步收紧障碍重试停靠距离（0.8 格）与 `go_to`（0.5 格）；
+  - **采集动画打断防重推保护**：重构 `gathering.lua` 中 `gather_area` 的 `is_acting` 判定，新增 `locomotor.bufferedaction` 与 stategraph `doing` 状态标签感知；将重推窗口从 0.8s 延长并严格限制在非执行状态（`not is_acting and waited > 2.5`），彻底根除采摘动画刚播放即被自我重推打断、导致必须做两次动作才采下物品的严重冲突。
 - **ISSUE-01: Stop 与 Runtime Mutex 安全协调机制**：
   - `WorldRuntime` 引入递增 `generation` 与 `lockOwnerId` 锁所有权体系，确保锁只能由当前持有者释放，杜绝旧任务 `finally` 误放新任务锁；
   - `stop()` 升级为原子协调流程：标记 `cancelRequested`，清空排队任务，通过 `AbortController` 向全链路（Runtime -> Orchestrator -> SkillExecutor -> Dispatcher -> Bridge）广播取消信号；

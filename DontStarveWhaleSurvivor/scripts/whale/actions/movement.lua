@@ -136,8 +136,11 @@ JOBS.move_to = function(j, p)
         return "run"
     end
 
+    -- 贴身到达判定：收紧至 0.35 格（约 1.4 世界单位），进入原生拾取/采集臂展范围 (< 1.5 世界单位)
+    -- 避免角色停在 0.8~1.2 格外导致下一个原子动作发生二次起步位移与断层
+    local stop_dist = tonumber(j.args.radius) or tonumber(j.args.stop_dist) or 0.35
     local away = tile_away(p, tx, tz)
-    if away <= 1.2 then
+    if away <= stop_dist then
         return "done", string.format("走到了 (%d,%d) 附近（还差 %.1f 格）", tx, tz, away)
     end
 
@@ -175,6 +178,9 @@ JOBS.move_to = function(j, p)
             j.data.retry = (j.data.retry or 0) + 1
             local max_retry = (timeout <= 10) and 2 or 6
             if j.data.retry >= max_retry then
+                if away <= 0.8 then
+                    return "done", string.format("走到了 (%d,%d) 附近（挡在 %.1f 格外）", tx, tz, away)
+                end
                 return "fail", string.format("走不到 (%d,%d)：卡在 %.1f 格外（可能有东西挡着）", tx, tz, away)
             end
             walk_to(p, tx, tz)
@@ -233,7 +239,7 @@ JOBS.go_to = function(j, p)
         end
     end
     local away = tile_away(p, j.data.tx, j.data.tz)
-    if away <= 1.5 then
+    if away <= 0.5 then
         return "done", string.format("走到 %s 旁边了 (%.1f 格)", j.data.name, away)
     end
     if U.now() - j.t0 > (tonumber(j.args.timeout) or 90) then

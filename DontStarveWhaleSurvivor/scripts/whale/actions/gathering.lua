@@ -570,8 +570,10 @@ local function area_summary(done, product_counts, failed)
 end
 
 -- 到附近后交给原生 PushAction 按目标碰撞半径接近并采摘。
-local APPROACH_TILES = 1.6
-local APPROACH_UNITS = APPROACH_TILES * 4   -- 1 格 = 4 世界单位
+-- 贴身接近半径：1.2 格（4.8 世界单位），覆盖 1 格内（4 单位）的就近目标直接起步采摘。
+-- 结合 is_acting 对 loco.bufferedaction 与 doing 状态的严格保护，杜绝采摘动画被提前重推打断。
+local APPROACH_TILES = 1.2
+local APPROACH_UNITS = APPROACH_TILES * 4   -- 1 格 = 4 世界单位 (1.2 格 = 4.8 世界单位)
 
 local function gather_busy(p)
     if p:GetBufferedAction() ~= nil then return true end
@@ -786,8 +788,18 @@ JOBS.gather_area = function(j, p)
             return "run"
         end
         -- 动作没在跑、东西却还能采 → 多半是刚才那下没推上去（离得远/被挡），重推几次
+        -- 避免误伤：弯腰采摘动画本身约需 0.8~1.0 秒，且移动、做动作或引擎持有 bufferedaction 时绝不能重推打断正在进行的动作
         local waited = U.now() - j.data.phase_start
-        if not busy(p) and waited > 0.8 then
+        local loco = p.components ~= nil and p.components.locomotor or nil
+        local has_ba = (p:GetBufferedAction() ~= nil) or (loco ~= nil and loco.bufferedaction ~= nil)
+        local is_moving = p.sg ~= nil and p.sg:HasStateTag("moving")
+        local is_doing = p.sg ~= nil and (p.sg:HasStateTag("doing") or p.sg:HasStateTag("busy") or not p.sg:HasStateTag("idle"))
+        local is_acting = has_ba or is_moving or is_doing
+        if is_acting then
+            j.data.ever_acting = true
+        end
+
+        if not is_acting and waited > 2.5 then
             if (j.data.pushes or 0) < 3 then
                 j.data.pushes = (j.data.pushes or 0) + 1
                 j.data.phase_start = U.now()

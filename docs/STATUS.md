@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜**完成执行安全与生存稳定性收尾 (Phase R.7.2)**｜全量自动化测试 **1028/1028 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜**完成执行安全与生存稳定性收尾 (Phase R.7.2)**｜全量自动化测试 **1036/1036 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -423,6 +423,8 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
      - 模式切换后即时向客户端广播工具刷新通知，服务端 `executeTool` 保持同步拦截。
   7. **ISSUE-07: 运行时与执行链容灾恢复与一致性保障**：
      - 保证单角色单活动实例、异常退出锁释放、Reflex 抢占与自愈恢复。
+  8. **动作与位移平滑度优化（Issue 1 & 2）**：
+     - 收紧 `movement.lua` 到达阈值至 0.35 格（1.4 世界单位），进入原生拾取/采集臂展范围 (< 1.5 单位)，彻底消除跑到附近骤停又二次起步走位的两段式断层；
+     - 优化 `gathering.lua` 采摘状态保护，增加 `locomotor.bufferedaction` 与 `doing` 标签感知，重推等待窗口延长至 >2.5s，杜绝首次采摘动画被误判超时强行打断重做的现象。
 - **测试覆盖**：
-  - 新增 6 大核心测试套件（`tests/stop-mutex-concurrency.test.mjs`、`tests/unknown-reconciliation.test.mjs`、`tests/seek-budget-propagation.test.mjs`、`tests/food-effects-decision.test.mjs`、`tests/food-circuit-breaker-recovery.test.mjs`、`tests/mcp-dynamic-tools.test.mjs`），共 42 例新增专项测试。
-  - 全量自动化测试达到 **1028/1028 全部通过**（1028 pass, 0 fail, 0 skipped）。
+  - 新增核心测试套件，全量自动化测试达到 **1036/1036 全部通过**（1036 pass, 0 fail, 0 skipped）。
