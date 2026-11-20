@@ -361,12 +361,6 @@ JOBS.seek = function(j, p)
 end
 
 JOBS.stop = function(j, p)
-    local loco = p.components.locomotor
-    if loco ~= nil then
-        pcall(function()
-            loco:Stop()
-            loco:Clear()
-        end)
-    end
+    pcall(A.stop_actions, p)
     return "done", "停下了"
 end

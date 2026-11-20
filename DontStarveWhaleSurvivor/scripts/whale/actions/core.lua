@@ -33,6 +33,7 @@ A.MODNAME = MODNAME
 
 local client_walk
 local client_stop
+local hold_control
 
 local function busy(p)
     if p == nil then return false end
@@ -43,12 +44,23 @@ end
 A.busy = busy
 
 local function stop_actions(p)
-    local loco = p.components.locomotor
+    if p == nil then return end
+    local loco = p.components ~= nil and p.components.locomotor or nil
     if loco ~= nil then
-        loco:Stop()
-        loco:Clear()
+        pcall(function()
+            loco:Stop()
+            loco:Clear()
+        end)
     end
-    p:ClearBufferedAction()
+    if p.ClearBufferedAction ~= nil then
+        pcall(function() p:ClearBufferedAction() end)
+    end
+    if hold_control ~= nil then
+        pcall(hold_control, p, false)
+    end
+    if client_stop ~= nil then
+        pcall(client_stop, p)
+    end
 end
 A.stop_actions = stop_actions
 
@@ -176,7 +188,7 @@ A.best_weapon = best_weapon
 ---   `true - dt` 直接抛 "attempt to perform arithmetic on a boolean value"，
 ---   把这个每帧的控制器收尾循环打断，角色就杵在原地（表现就是"停几秒再开始"）。
 ---   所以这里必须写数字 `0`，不能写 `true`。
-local function hold_control(p, want)
+hold_control = function(p, want)
     local pc = p ~= nil and p.components ~= nil and p.components.playercontroller or nil
     if pc == nil then return false end
     local control = GLOBAL.CONTROL_ACTION
@@ -481,11 +493,9 @@ function A.Start(name, args, cmd_id, ctx)
     local p = U.player()
     if p == nil then return false, "现在没有玩家（游戏可能还在读档）" end
     if job ~= nil then
-        -- 增加 P0 保护：如果正在进行 Reflex 逃跑，严禁被新动作打断（stop 除外）
-        if job.cmd_id == "reflex" and (job.name == "flee" or job.name == "move_to") then
-            if name ~= "stop" then
-                return false, "reflex_active: 正在保命逃跑中，请勿下发指令"
-            end
+        -- 增加 P0 保护：如果正在进行 Reflex 逃跑/保命，严禁被非 Reflex 动作打断（保留 Reflex 保命优先级）
+        if job.cmd_id == "reflex" and cmd_id ~= "reflex" then
+            return false, "reflex_active: 正在保命抢占中，请勿打断 Reflex"
         end
         local prev_id = job.cmd_id
         pcall(function()

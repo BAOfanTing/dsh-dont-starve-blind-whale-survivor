@@ -474,4 +474,32 @@ flowchart TD
 ### 17.4 与执行通道的关系（安全边界不变）
 技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。Phase G-R7 只新增「编排层」，未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。
 
+### 17.5 执行安全与生存稳定性机制（Phase R.7.2 收尾）
+
+#### 17.5.1 Mutex 所有权与 Generation 令牌模型
+为了彻底消除并发竞态与旧任务 finally 释放新任务锁的风险，`WorldRuntime` 采用递增 generation 与所有权持有者校验：
+- **所有权绑定**：每次获取锁时生成唯一的 `ownerId`（如 `advance_task:1`、`execute:2`）及单调递增的 `lockSeq`；
+- **校验释放**：`#releaseLock(ownerId)` 强制校验 `currentLockOwner === ownerId`，旧任务异步返回后若已被抢占或过期，静默忽略，绝不误放新任务锁；
+- **队列身份校验**：等待队列条目绑定 `ownerId` 与 `taskId`，取消或超时的队列项绝不进入后续执行。
+
+#### 17.5.2 全链路 Stop 协调与 Reflex 优先级保命
+- **原子协调**：调用 `stop()` 时原子标记 `cancelRequested = true`，立刻阻断新任务进入，并清空等待队列；
+- **取消信号全链路穿透**：通过 `AbortController` 产生的 `signal` 贯穿：
+  `WorldRuntime → Orchestrator → SkillExecutor → Dispatcher → GameBridge.call`
+  各层在等待前与等待中均感知 `signal.aborted`，快速短路退出；
+- **底层动作打断与 Reflex 保命**：向底层下发唯一 `stop` 动作清理玩家控制状态与行动队列；同时在 Lua `core.lua` 中严格校验：
+  `if job.cmd_id == "reflex" and cmd_id ~= "reflex" then return false, "reflex_active" end`
+  保证普通动作与用户 stop 绝不打断关键生存逃跑或急救。
+
+#### 17.5.3 `unknown` 结果对账与防重复下发状态机
+为防止网络/进程超时或未定回执导致重复建造、重复制造、重复进食等副作用：
+- **`awaiting_reconciliation` 状态**：Dispatcher 返回 `unknown` 或 `result_timeout` 时，技能实例暂不标记失败，而是挂载对账元数据（`command_id`, `tool`, `args`, `issued_at`, `reconcile_attempts`）；
+- **禁止重放动作**：对账期间严禁下发相同动作；
+- **快照事实对账**：下一轮推进时，先读取最新快照，根据动作类型核验证据（build 查附近建筑、craft 查背包数量增加、eat 查三维变化、harvest/chop/mine 查产物入包或目标状态）；核验通过则推进步骤，核验不通过在重试预算（3 次）耗尽后才标记 `unknown`。
+
+#### 17.5.4 需求驱动食物评估与熔断恢复
+- **需求驱动评估**：`food-candidate-selector.js` 严格区分 `hunger`、`health`、`sanity` 目标需求。在饥饿需求下过滤饱食度为 0 的物品（如花瓣 `petals`），杜绝误吃；综合考虑营养缺口匹配度与新鲜度（`freshness * 50`）；
+- **失败类型甄别与熔断恢复**：`reflex_active`、`actor_busy`、`result_timeout`、`awaiting_reconciliation` 属于调度或等待状态，不计入熔断器失败计数；目标熔断只依赖冷却时间 `blockedUntil`，冷却到期自动放行，彻底消除永久拉黑；维护 120s TTL 与 50 条上限容量自愈清理。
+
+
 

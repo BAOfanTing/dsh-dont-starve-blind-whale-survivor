@@ -124,13 +124,7 @@ function E.PickBest(inventory, healing_only)
             if not can then return end
             if E.AUTO_SAFE[item.prefab] ~= true then return end
             if healing_only and not E.CanHeal(item) then return end
-            -- 分数：优先新鲜度高的，其次按白名单里定义的顺序（越靠前越基础）
-            local freshness = 1
-            local stackable = item.components ~= nil and item.components.perishable or nil
-            if stackable ~= nil then
-                local ok_f, pct = pcall(function() return stackable:GetPercent() end)
-                if ok_f and type(pct) == "number" then freshness = pct end
-            end
+
             local hunger = 0
             local health = 0
             local edible = item.components ~= nil and item.components.edible or nil
@@ -139,6 +133,17 @@ function E.PickBest(inventory, healing_only)
                 if ok_h and type(h) == "number" then hunger = h end
                 local ok_hp, hv = pcall(function() return edible.healthvalue end)
                 if ok_hp and type(hv) == "number" then health = hv end
+            end
+
+            -- 花瓣等不恢复饥饿的物品，在非回血场景下严禁作为饥饿恢复食物
+            if not healing_only and hunger <= 0 then return end
+
+            -- 分数：优先新鲜度高的，其次按白名单里定义的顺序（越靠前越基础）
+            local freshness = 1
+            local stackable = item.components ~= nil and item.components.perishable or nil
+            if stackable ~= nil then
+                local ok_f, pct = pcall(function() return stackable:GetPercent() end)
+                if ok_f and type(pct) == "number" then freshness = pct end
             end
             -- 残血时优先吃回血的（熟肉 +20 血，浆果 0）：回血值加权，但别盖过新鲜度/饥饿。
             local score = freshness * 10 + hunger + math.max(0, health) * 4

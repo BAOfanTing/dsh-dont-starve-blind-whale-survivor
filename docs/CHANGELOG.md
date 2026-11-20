@@ -4,6 +4,37 @@
 
 ---
 
+## [Phase R.7.2] - 2026-11-20
+
+### 执行安全与生存稳定性收尾 (Execution Safety & Survival Stability Closing)
+- **ISSUE-01: Stop 与 Runtime Mutex 安全协调机制**：
+  - `WorldRuntime` 引入递增 `generation` 与 `lockOwnerId` 锁所有权体系，确保锁只能由当前持有者释放，杜绝旧任务 `finally` 误放新任务锁；
+  - `stop()` 升级为原子协调流程：标记 `cancelRequested`，清空排队任务，通过 `AbortController` 向全链路（Runtime -> Orchestrator -> SkillExecutor -> Dispatcher -> Bridge）广播取消信号；
+  - 下发底层的 `stop` 动作，严格保护 Lua 侧 Reflex 保命抢占（Reflex 正在执行时普通动作与 stop 均不可中断保命行为）；
+  - 定义严格的 Stop 状态（`not_started`, `cancel_requested`, `in_flight`, `cancelled`, `completed`, `unknown`），超时必须如实返回 `unknown`，不得伪装成功。
+- **ISSUE-02: `unknown` 结果对账与防重复执行**：
+  - 当底层动作返回 `unknown` 或 `result_timeout` 时，实例进入 `awaiting_reconciliation` 状态，完整保留 `command_id`、`tool`、`args`、`issued_at` 等身份；
+  - 严禁在结果未定时重复下发具有副作用的动作（如 `build`, `craft`, `eat`, `pickup`, `harvest`, `chop`, `mine`）；
+  - 下一轮推进时优先通过新鲜快照与真实证据进行对账（如建筑是否生成、物品是否入包、血量/饥饿是否变化）；3 次对账仍无法确认时才进入终态 `unknown` 并上报。
+- **ISSUE-03: `seek` 寻食预算全链路贯穿**：
+  - 将 `plan.budget_s: 15` 从 Plan -> SkillExecutor -> WorldRuntime -> Dispatcher -> Bridge -> Lua Envelope 完整透传；
+  - Dispatcher 动态根据 `budget_s` 计算有效超时时间（`budget_s * 1000 + 15000` 缓冲），杜绝上层先于游戏执行超时的截断问题。
+- **ISSUE-04: 食物需求分类与精确评估 (Hunger / Health / Sanity)**：
+  - 食物选择器严格区分 `hunger`、`health`、`sanity` 需求，饥饿模式下严格过滤饱食度为 0 的物品（如花瓣 `petals`），杜绝误吃花瓣充饥；
+  - 综合考量营养缺口匹配度与新鲜度（`freshness * 50`），并与 Lua 模组 `eatrules.lua` 逻辑严格对齐。
+- **ISSUE-05: 食物目标熔断器安全恢复机制**：
+  - 区分暂时性失败（`reflex_active`、`actor_busy`、`result_timeout`、`awaiting_reconciliation` 不计入熔断）与永久性失效（`target_gone` 直接注销）；
+  - 移除失败次数永久拉黑，熔断锁定状态随冷却时间自然到期恢复；
+  - 实现定时清理器 `purgeExpiredFailures()`，设置 120 秒 TTL 并将失败记录上限限制为 50 条，避免内存泄漏。
+- **ISSUE-06: MCP 工具列表动态变更推送与模式切换**：
+  - 实现客户端 SSE 列表变更通知 `notifications/tools/list_changed`（`listChanged: true`）；
+  - 模式切换后即时向客户端广播工具刷新通知，服务端 `executeTool` 保持同步拦截。
+- **测试与验证**：
+  - 新增 6 大核心测试套件（`tests/stop-mutex-concurrency.test.mjs`、`tests/unknown-reconciliation.test.mjs`、`tests/seek-budget-propagation.test.mjs`、`tests/food-effects-decision.test.mjs`、`tests/food-circuit-breaker-recovery.test.mjs`、`tests/mcp-dynamic-tools.test.mjs`），共 42 例新增专项测试。
+  - 全量自动化测试达到 **1028/1028 全部通过**（1028 pass, 0 fail, 0 skipped）。
+
+---
+
 ## [Phase R.7] - 2026-11-20
 
 ### 自主任务执行运行时集成与治理：WorldRuntime、advance_task 与生存紧急仲裁 (Autopilot Runtime Integration)

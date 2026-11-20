@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜**完成自主执行运行时集成 (Phase R.7)**｜全量自动化测试 **986/986 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜**完成执行安全与生存稳定性收尾 (Phase R.7.2)**｜全量自动化测试 **1028/1028 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -385,3 +385,44 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 - **真机验收纪律说明**：
   - 本次全量测试 959/959 通过属于**自动化测试（单元/合成世界集成）**通过；
   - 真实游戏（DST 联机版真机）运行仍需在游戏内挂载模组并实机观测日志（真机验收记录以真机日志证据为准，不冒充真实游戏通过）。
+
+### 8.7 Phase R.7 自主任务执行运行时集成 (Autopilot Runtime Integration)
+- **目标**：打通 LLM -> `advance_task` -> `WorldRuntime` -> `Orchestrator.tick()` -> `SkillExecutor` -> `Dispatcher` 的完整调度链路，并支持运行模式管控。
+- **改动**：
+  1. 新增 `lib/planner/world-runtime-manager.js`，管理世界级权威上下文与并发互斥；
+  2. 实现 Autopilot / Assisted / Manual 三种运行模式，动态维护可用 MCP 工具；
+  3. 实现 P0/P1 生存危机（饥饿、黑夜、低血、Reflex）的自动抢占与安全暂停/恢复；
+  4. 新增 `lib/planner/prefab-utils.js` 解决建筑结构与别名映射问题；
+  5. 引入食物候选选择器与基础熔断器。
+- **验证**：新增 4 套核心测试，全量测试达到 **986/986 全绿**。
+
+### 8.8 Phase R.7.2 执行安全与生存稳定性收尾 (Execution Safety & Survival Stability Closing)
+- **目标**：彻底解决取消竞态、未知结果重复下发、寻食预算丢失、食物类型混淆、目标永久封禁等 5 大稳定性漏洞。
+- **改动与修复**：
+  1. **ISSUE-01: Stop 与 Runtime Mutex 安全协调机制**：
+     - `WorldRuntime` 引入递增 `generation` 与 `lockOwnerId` 锁所有权体系，确保锁只能由当前持有者释放，杜绝旧任务 `finally` 误放新任务锁；
+     - `stop()` 升级为原子协调流程：标记 `cancelRequested`，清空排队任务，通过 `AbortController` 向全链路（Runtime -> Orchestrator -> SkillExecutor -> Dispatcher -> Bridge）广播取消信号；
+     - 下发底层的 `stop` 动作，严格保护 Lua 侧 Reflex 保命抢占（Reflex 正在执行时普通动作与 stop 均不可中断保命行为）；
+     - 定义严格的 Stop 状态（`not_started`, `cancel_requested`, `in_flight`, `cancelled`, `completed`, `unknown`），超时必须如实返回 `unknown`，不得伪装成功。
+  2. **ISSUE-02: `unknown` 结果对账与防重复执行**：
+     - 当底层动作返回 `unknown` 或 `result_timeout` 时，实例进入 `awaiting_reconciliation` 状态，完整保留 `command_id`、`tool`、`args`、`issued_at` 等身份；
+     - 严禁在结果未定时重复下发具有副作用的动作（如 `build`, `craft`, `eat`, `pickup`, `harvest`, `chop`, `mine`）；
+     - 下一轮推进时优先通过新鲜快照与真实证据进行对账（如建筑是否生成、物品是否入包、血量/饥饿是否变化）；3 次对账仍无法确认时才进入终态 `unknown` 并上报。
+  3. **ISSUE-03: `seek` 寻食预算全链路贯穿**：
+     - 将 `plan.budget_s: 15` 从 Plan -> SkillExecutor -> WorldRuntime -> Dispatcher -> Bridge -> Lua Envelope 完整透传；
+     - Dispatcher 动态根据 `budget_s` 计算有效超时时间（`budget_s * 1000 + 15000` 缓冲），杜绝上层先于游戏执行超时的截断问题。
+  4. **ISSUE-04: 食物需求分类与精确评估 (Hunger / Health / Sanity)**：
+     - 食物选择器严格区分 `hunger`、`health`、`sanity` 需求，饥饿模式下严格过滤饱食度为 0 的物品（如花瓣 `petals`），杜绝误吃花瓣充饥；
+     - 综合考量营养缺口匹配度与新鲜度（`freshness * 50`），并与 Lua 模组 `eatrules.lua` 逻辑严格对齐。
+  5. **ISSUE-05: 食物目标熔断器安全恢复机制**：
+     - 区分暂时性失败（`reflex_active`、`actor_busy`、`result_timeout`、`awaiting_reconciliation` 不计入熔断）与永久性失效（`target_gone` 直接注销）；
+     - 移除失败次数永久拉黑，熔断锁定状态随冷却时间自然到期恢复；
+     - 实现定时清理器 `purgeExpiredFailures()`，设置 120 秒 TTL 并将失败记录上限限制为 50 条，避免内存泄漏。
+  6. **ISSUE-06: MCP 工具列表动态变更推送与模式切换**：
+     - 实现客户端 SSE 列表变更通知 `notifications/tools/list_changed`（`listChanged: true`）；
+     - 模式切换后即时向客户端广播工具刷新通知，服务端 `executeTool` 保持同步拦截。
+  7. **ISSUE-07: 运行时与执行链容灾恢复与一致性保障**：
+     - 保证单角色单活动实例、异常退出锁释放、Reflex 抢占与自愈恢复。
+- **测试覆盖**：
+  - 新增 6 大核心测试套件（`tests/stop-mutex-concurrency.test.mjs`、`tests/unknown-reconciliation.test.mjs`、`tests/seek-budget-propagation.test.mjs`、`tests/food-effects-decision.test.mjs`、`tests/food-circuit-breaker-recovery.test.mjs`、`tests/mcp-dynamic-tools.test.mjs`），共 42 例新增专项测试。
+  - 全量自动化测试达到 **1028/1028 全部通过**（1028 pass, 0 fail, 0 skipped）。
