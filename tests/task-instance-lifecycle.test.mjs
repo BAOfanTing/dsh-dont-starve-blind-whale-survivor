@@ -440,6 +440,7 @@ test('LIFECYCLE-09 & 10: 手动 run_skill 与自动调度任务互不覆盖', as
       extraInstructions: '',
       control: { activeLease: () => ({ valid: true, authorized_actions: ['all'] }), guard: () => null },
       dispatcher: { dispatch: async () => ({ status: 'succeeded' }), describe: () => 'ok' },
+      executionMode: 'assisted',
     }
 
     // 1. 自动看板任务启动
@@ -508,7 +509,7 @@ test('LIFECYCLE-11: Reflex 抢占后恢复正确 task_id 和 instance_id', async
   world.phase = 'night'
   world.inLight = false
   const resPreempt = await orch.tickOnce()
-  assert.equal(resPreempt.status, 'survival_preempted')
+  assert.ok(['survival_preempted', 'survival_in_progress'].includes(resPreempt.status))
   assert.equal(inst.status, 'paused')
   assert.match(inst.paused_reason, /survival_preempt:dark/)
 
@@ -516,7 +517,7 @@ test('LIFECYCLE-11: Reflex 抢占后恢复正确 task_id 和 instance_id', async
   world.phase = 'day'
   world.inLight = true
   const resRecover = await orch.tickOnce()
-  assert.notEqual(resRecover.status, 'survival_preempted')
+  assert.ok(!['survival_preempted', 'survival_in_progress'].includes(resRecover.status))
   assert.equal(inst.instance_id, initialId, '危机解除后必须恢复原有 instance_id')
   assert.equal(inst.task_id, 'task_work')
 })

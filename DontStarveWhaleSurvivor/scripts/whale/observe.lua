@@ -701,6 +701,16 @@ function O.BuildData(actor, opts)
                 data.danger_zones = dzs
             end
         end
+        if reflex ~= nil and reflex.Status ~= nil then
+            local ok_st, st = pcall(reflex.Status)
+            if ok_st and type(st) == "table" then
+                data.reflex = {
+                    active = st.intent ~= nil or (Whale.job ~= nil and Whale.job.cmd_id == "reflex"),
+                    intent = st.intent,
+                    enabled = st.enabled,
+                }
+            end
+        end
         data.dead = not info.alive
         data.x, data.z = info.tile_x, info.tile_z
         data.day = data.world ~= nil and data.world.day or nil

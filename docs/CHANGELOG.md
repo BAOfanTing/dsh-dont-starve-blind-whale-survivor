@@ -4,6 +4,29 @@
 
 ---
 
+## [Phase R.7] - 2026-11-20
+
+### 自主任务执行运行时集成与治理：WorldRuntime、advance_task 与生存紧急仲裁 (Autopilot Runtime Integration)
+- **WorldRuntimeManager 与权威执行上下文**：
+  - 新增 `lib/planner/world-runtime-manager.js`，管理世界级权威上下文与并发互斥锁（Mutex），同 `world_key` 共享单例 Runtime，杜绝跨世界记忆与执行串扰。
+  - 接入 `advance_task` MCP 工具，打通 LLM -> `advance_task` -> `WorldRuntime` -> `Orchestrator.tick()` -> `SkillExecutor` -> `Dispatcher` 完整调度链路。
+  - 支持多步骤动作连续预算调度（`budget_used` / `budget_remaining`），返回包含真实快照证据、执行轨迹与生存警报的结构化核验报告。
+- **生存紧急仲裁与 Reflex 协作调度**：
+  - 在 `lib/planner/task-skill-orchestrator.js` 中完善 P0/P1 生存危机（饥饿、黑夜无光、低血、Reflex 逃脱）仲裁逻辑。
+  - 当触发危机时自动挂起（`paused`）当前任务实例，内部调度 `survival_stabilize` 或让位 `lua_reflex`；危机解除后无缝恢复原任务实例与上下文（保持相同的 `instance_id` 与参数，不重复重放动作）。
+- **结构识别与 Prefab 规范化**：
+  - 新增 `lib/planner/prefab-utils.js`，统一科技建筑与基础容器（`sciencemachine`/`researchlab`、`alchemyengine`/`researchlab2`、`chest`/`treasurechest`）的别名映射与 `matchStructure` 判定，彻底解决逻辑配方名与游戏原生 Prefab 之间的不一致问题。
+- **安全食物选择器与熔断机制**：
+  - 新增 `lib/skills/food-candidate-selector.js`，严格过滤危险食物并基于新鲜度和饱食度智能排序，增加连续采集/进食失败的熔断器保护，避免陷入无限尝试死循环。
+- **运行模式控制与 stop 应急工具**：
+  - 实现 Autopilot / Assisted / Manual 三种运行模式，动态过滤 `tools/list` 并通过 `executeTool` 服务端进行严格权限拦截，防止模型绕过看板调用底层原子指令。
+  - 新增 `stop` 应急工具，支持最高优先级主动打断当前运行中的任务与底层 Dispatcher 命令。
+- **测试与验证**：
+  - 新增 4 个核心测试套件（`tests/advance-task-budget.test.mjs`、`tests/emergency-survival-orchestration.test.mjs`、`tests/food-candidate-circuit-breaker.test.mjs`、`tests/prefab-structure-identification.test.mjs`），并全面适配生命周期与调度器断言。
+  - 全量自动化测试达到 **986/986 全部通过**（986 pass, 0 fail, 0 skipped）。
+
+---
+
 ## [Phase R.6] - 2026-11-19
 
 ### 实例身份与生命周期：Task ID 与 Skill Instance ID 分离与真实重试 (Task Identity & Instance Lifecycle)

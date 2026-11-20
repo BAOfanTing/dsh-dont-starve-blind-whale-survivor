@@ -49,6 +49,8 @@ E.FOODS = {
     corn_cooked = "烤玉米",
     pumpkin_cooked = "烤南瓜",
     eggplant_cooked = "烤茄子",
+    acorn_cooked = "烤桦栗果",
+    petals = "花瓣",
 }
 
 --- 自动挑食物时的保守白名单（不包含任何生蘑菇）。
@@ -75,6 +77,8 @@ E.AUTO_SAFE = {
     corn_cooked = true,
     pumpkin_cooked = true,
     eggplant_cooked = true,
+    acorn_cooked = true,
+    petals = true,
 }
 
 --- 明确**不**放行的（写在这里是为了让后来者知道这是刻意的，不是漏了）

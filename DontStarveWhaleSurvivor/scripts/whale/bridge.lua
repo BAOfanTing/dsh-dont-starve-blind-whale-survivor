@@ -372,7 +372,11 @@ dispatch_command = function(cmd)
         }
     )
     if not started then
-        B.Report(false, err or "动作没能开始", id, "action_start_failed")
+        local r = "action_start_failed"
+        if err ~= nil and string.find(tostring(err), "reflex_active") then
+            r = "reflex_active"
+        end
+        B.Report(false, err or "动作没能开始", id, r)
     end
 end
 

@@ -379,7 +379,7 @@ test('INT-2：executeTool(build) 在有 planner 时被家园门槛拦下（未�
       },
     }
     const bridge = { readState: () => ({ json: raw, ageMs: 0, path: 'fake.json' }), leaseDirs: () => [], readLeaseAck: () => null }
-    const ctx = { bridge, planner, notes: { read: () => '', write: () => {} }, guides: {}, extraInstructions: '' }
+    const ctx = { bridge, planner, notes: { read: () => '', write: () => {} }, guides: {}, extraInstructions: '', executionMode: 'assisted' }
     // 材料齐（1金4木4石），但还没活稳（阶段0）/没选营地 → 必须被拒，绝不就地建
     const text = await executeTool('build', { recipe: 'sciencemachine' }, ctx)
     assert.match(text, /失败/)

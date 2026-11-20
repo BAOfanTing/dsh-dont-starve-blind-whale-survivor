@@ -519,7 +519,7 @@ test('GATHER-SKILL-5：run_skill 本地工具端到端透传 skill_args', async 
     const raw = rawState()
     // 背包里放 2 树枝，传入目标 target_items 只要 2 树枝
     const bridge = { readState: () => ({ json: raw, ageMs: 0, path: 'fake.json' }), leaseDirs: () => [], readLeaseAck: () => null }
-    const ctx = { bridge, planner, notes: { read: () => '', write: () => {} }, guides: {}, extraInstructions: '' }
+    const ctx = { bridge, planner, notes: { read: () => '', write: () => {} }, guides: {}, extraInstructions: '', executionMode: 'assisted' }
     const text = await executeTool('run_skill', {
       skill_id: 'gather_resources',
       skill_args: { target_items: { sapling: 0 } },

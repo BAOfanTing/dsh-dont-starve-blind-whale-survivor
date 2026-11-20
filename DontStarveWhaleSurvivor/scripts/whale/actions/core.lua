@@ -481,9 +481,11 @@ function A.Start(name, args, cmd_id, ctx)
     local p = U.player()
     if p == nil then return false, "现在没有玩家（游戏可能还在读档）" end
     if job ~= nil then
-        -- 增加 P0 保护：如果正在进行 Reflex 逃跑，严禁被新动作打断
+        -- 增加 P0 保护：如果正在进行 Reflex 逃跑，严禁被新动作打断（stop 除外）
         if job.cmd_id == "reflex" and (job.name == "flee" or job.name == "move_to") then
-            return false, "reflex_active: 正在保命逃跑中，请勿下发指令"
+            if name ~= "stop" then
+                return false, "reflex_active: 正在保命逃跑中，请勿下发指令"
+            end
         end
         local prev_id = job.cmd_id
         pcall(function()

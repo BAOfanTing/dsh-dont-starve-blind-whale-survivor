@@ -1509,7 +1509,7 @@ test('OBS2-10：走完整 executeTool 时，模型传数字 target_ref 也能正
     completeHandover: () => ({ ok: true }),
   }
   const text = await executeTool('pickup', { target_ref: 1, snapshot_id: 'r1-n2' }, {
-    bridge, control, owner: 'system', ownerInstanceId: 'i', notes: { read: () => '', write: () => {} }, guides: {},
+    bridge, control, owner: 'system', ownerInstanceId: 'i', notes: { read: () => '', write: () => {} }, guides: {}, executionMode: 'assisted',
   })
   assert.equal(commands.length, 1, `应该下发了 1 条命令，实际 ${commands.length}（回执：${text}）`)
   assert.equal(commands[0].args.target_ref, '#1', '下发到游戏的必须是补好 # 的引用')
