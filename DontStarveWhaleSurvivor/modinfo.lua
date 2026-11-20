@@ -72,7 +72,7 @@ configuration_options = {
     {
         name = "OBSERVER_SCAN_RADIUS",
         label = "实体扫描半径",
-        hover = "Phase 1 观察器扫描附近实体的半径（格）。越大越耗，建议 16。",
+        hover = "Phase 1 观察器扫描附近实体的半径（格）。分层雷达：16格近景全景+32格远景关键资源，默认 32 格。",
         options = {
             { description = "8 格", data = 8 },
             { description = "12 格", data = 12 },
@@ -80,7 +80,7 @@ configuration_options = {
             { description = "24 格", data = 24 },
             { description = "32 格", data = 32 },
         },
-        default = 16,
+        default = 32,
     },
     {
         name = "OBSERVER_SCAN_SECONDS",

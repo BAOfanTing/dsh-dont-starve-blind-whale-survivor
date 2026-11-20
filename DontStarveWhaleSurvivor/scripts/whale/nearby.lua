@@ -136,6 +136,89 @@ local function work_action_of(ent)
     return w.action.id
 end
 
+local NEAR_ZONE_RADIUS = 16
+
+-- 远景雷达只保留的关键实体/稀缺资源/地标/威胁（白名单）
+local RADAR_KEY_PREFABS = {
+    -- 矿石与地下产物
+    rock1 = true, rock2 = true, rock_flintless = true, rock_flintless_med = true, rock_flintless_low = true,
+    rock_petrified_tree = true, rock_petrified_tree_med = true, rock_petrified_tree_low = true,
+    nitre = true, marblepillar = true, marbletree = true,
+    -- 地面稀缺/高价值材料
+    flint = true, goldnugget = true, gears = true, marble = true, redgem = true, bluegem = true, houndstooth = true,
+    -- 食物/成熟植株
+    carrot = true, carrot_planted = true,
+    -- 蜂巢/蜂箱/关键巢穴
+    beehive = true, wasphive = true, beebox = true,
+    spiderden = true, spiderden_2 = true, spiderden_3 = true,
+    tallbirdnest = true, houndmound = true,
+    -- 发条怪与关键机械
+    knight = true, bishop = true, rook = true,
+    knight_nightmare = true, bishop_nightmare = true, rook_nightmare = true,
+    -- 关键生物房/建筑
+    pighouse = true, rabbithouse = true, mermhouse = true,
+}
+
+--- 远景雷达区（16~32格）分层过滤：只看关键地标与稀缺资源，防 Token 爆炸
+local function interesting_radar(ent, actor)
+    if ent == nil or not ent:IsValid() then return false end
+    local prefab = ent.prefab and string.lower(tostring(ent.prefab)) or ""
+
+    -- 1. 显式过滤远景杂物：小鸟、蝴蝶、地皮碎片
+    if has_tag(ent, "bird") or prefab == "crow" or prefab == "robin" or prefab == "robin_winter" or prefab == "canary" or prefab == "seagull" then
+        return false
+    end
+    if prefab == "butterfly" or string.find(prefab, "turf_", 1, true) ~= nil then
+        return false
+    end
+
+    -- 2. 矿石（普通岩石、金矿脉、硝石矿等）：可开采的矿物
+    local w = work_action_of(ent)
+    if w == "MINE" then return true end
+
+    -- 3. 显式白名单内的关键 prefab（发条怪、蜂巢、猪人房、高价值矿物/材料等）
+    if RADAR_KEY_PREFABS[prefab] then return true end
+
+    -- 4. 关键建筑/地标/工作台
+    if has_tag(ent, "structure") or comp(ent, "prototyper") ~= nil then
+        return true
+    end
+
+    -- 5. 成熟食物（成熟浆果丛、胡萝卜等食物源）
+    local item = comp(ent, "inventoryitem")
+    local edible = comp(ent, "edible")
+    local h = comp(ent, "health")
+    local ground_item = item ~= nil and item.owner == nil and h == nil
+    if ground_item and is_real_food(edible) then
+        return true
+    end
+    if FOOD_SOURCES[prefab] then
+        if (has_tag(ent, "pickable") and not has_tag(ent, "barren")) or comp(ent, "pickable") ~= nil then
+            return true
+        end
+        local hr = comp(ent, "harvestable")
+        if hr ~= nil and hr.CanBeHarvested ~= nil then
+            local ok, ready = pcall(function() return hr:CanBeHarvested() end)
+            if ok and ready then return true end
+        end
+    end
+
+    -- 6. 危险威胁与关键首领（仇恨锁定我们，或者发条/首领级怪物）
+    local combat = comp(ent, "combat")
+    if combat ~= nil and combat.target ~= nil and combat.target == actor then
+        return true
+    end
+    if has_tag(ent, "epic") or has_tag(ent, "chess") or has_tag(ent, "hound") then
+        return true
+    end
+
+    -- 远距离普通的树木（CHOP）、普通草丛树苗花朵、地面的树枝草叶等一律过滤
+    return false
+end
+
+N.InterestingRadar = interesting_radar
+N.NEAR_ZONE_RADIUS = NEAR_ZONE_RADIUS
+
 --- 判断这个实体值不值得进 nearby（不认识的 fx/装饰一律不进）
 local function interesting(ent)
     if comp(ent, "health") ~= nil then return true end
@@ -379,7 +462,8 @@ end
 -- ─────────────────────────── 扫描 ───────────────────────────
 
 --- 扫一遍，返回 { entities = { {block, ent} ... }, found = n } 或 nil, err
-local function scan(actor, radius)
+local function scan(actor, radius, near_radius)
+    near_radius = near_radius or NEAR_ZONE_RADIUS
     local x, y, z = U.pos(actor)
     if x == nil then return nil, "no_position" end
     local ok, ents = pcall(function()
@@ -390,7 +474,14 @@ local function scan(actor, radius)
     local out = {}
     for _, ent in ipairs(ents) do
         if ent ~= nil and ent ~= actor and ent:IsValid() and not ent:HasTag("INLIMBO") then
-            if interesting(ent) then
+            local dist = U.dist(actor, ent) / U.TILE
+            local ok_candidate = false
+            if (radius ~= nil and radius <= near_radius) or dist <= near_radius then
+                ok_candidate = interesting(ent)
+            else
+                ok_candidate = interesting_radar(ent, actor)
+            end
+            if ok_candidate then
                 local category, item_kind = N.Classify(ent, actor)
                 if category ~= nil then
                     local block = describe(ent, actor, category, item_kind)
@@ -651,7 +742,7 @@ end
 local function build(actor, info, now, opts, identity)
     local started_ms, timer_source = clock_ms()
 
-    local scanned, err = scan(actor, opts.radius)
+    local scanned, err = scan(actor, opts.radius, opts.near_radius)
     if scanned == nil then
         scan_seq = scan_seq + 1
         local snapshot_id = RUNTIME_ID .. "-n" .. tostring(scan_seq)

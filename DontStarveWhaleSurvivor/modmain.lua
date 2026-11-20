@@ -83,7 +83,7 @@ if Whale.config ~= nil and Whale.config.build ~= nil then
     Whale.config.build(function(key)
         if key == "state_interval" then return modconfig("INTERVAL", 1) end
         if key == "observe_interval" then return modconfig("OBSERVER_INTERVAL", 2) end
-        if key == "scan_radius" then return modconfig("OBSERVER_SCAN_RADIUS", 16) end
+        if key == "scan_radius" then return modconfig("OBSERVER_SCAN_RADIUS", 32) end
         if key == "scan_seconds" then return modconfig("OBSERVER_SCAN_SECONDS", 1) end
         if key == "nearby_max_total" then return modconfig("OBSERVER_NEARBY_MAX_TOTAL", 60) end
         if key == "nearby_max_per_bucket" then return modconfig("OBSERVER_NEARBY_MAX_PER_BUCKET", 12) end

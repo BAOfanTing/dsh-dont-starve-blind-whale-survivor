@@ -19,7 +19,7 @@ local C = {}
 C.DEFAULTS = {
     state_interval = 1,
     observe_interval = 2,
-    scan_radius = 16,
+    scan_radius = 32,
     -- OBSERVATION-01：默认从 4 降到 1。
     -- 实测扫描只要 1ms；而 4 秒缓存意味着模型最坏拿到"已经用掉 2 秒"的帧，
     -- 它思考要 3~5 秒 → 动作到达时必然 stale_snapshot（真机 8 次失败里 6 次是这个）。
