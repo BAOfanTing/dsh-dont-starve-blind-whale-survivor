@@ -7,7 +7,7 @@
 //   **只 push 一次** BufferedAction 就干等 —— 可树要 4~5 下才倒、石头要挖好几下，
 //   永远等不到 `work_done`，最后超时。旧路径 `job_work` 早就有连砍机制，新路径漏了。
 //
-// 证据类型：INTEGRATION（fengari 跑真实 actions/gathering.lua 的 work_by_ref；假实体）
+// 证据类型：INTEGRATION（fengari 跑真实 actions/work.lua 的 work_by_ref；假实体）
 //
 // ★ 夹具注意：`gathering.lua` 在**加载时**就 `local push = A.push` / `local hold_control = A.hold_control`
 //   捕获了原函数，所以运行时改 `Whale.actions.push` 是无效的。要观察"砍了几下"，
@@ -20,7 +20,7 @@ import { join } from 'node:path'
 
 import { MOD, loadTargets } from './target-harness.mjs'
 
-const gatheringLua = readFileSync(join(MOD, 'scripts', 'whale', 'actions', 'gathering.lua'), 'utf8')
+const gatheringLua = readFileSync(join(MOD, 'scripts', 'whale', 'actions', 'work.lua'), 'utf8')
 
 /**
  * 造一棵"要砍 N 下才倒"的树。

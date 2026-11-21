@@ -56,6 +56,7 @@ function collectUsedActions() {
     'actions/core.lua',
     'actions/movement.lua',
     'actions/gathering.lua',
+    'actions/work.lua',
     'actions/combat.lua',
     'actions/survival.lua',
     'actions/crafting.lua',

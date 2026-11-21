@@ -259,7 +259,7 @@ export async function loadTargets({ entities = [], items = [], knowsRecipe = tru
     + 'lease_ack = "whale_lease_ack.json", io_lease_ack = "whale_io_lease_ack.json" } }')
   for (const n of MODULE_ORDER) {
     if (n === 'actions') {
-      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+      for (const sub of ['core', 'movement', 'gathering', 'work', 'combat', 'survival', 'crafting', 'interaction']) {
         run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', sub + '.lua'), 'utf8'))
       }
     }

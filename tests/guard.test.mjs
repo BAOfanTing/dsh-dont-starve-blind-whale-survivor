@@ -106,7 +106,7 @@ async function load(files = { 'whale_io_lease.json': authority() }) {
   run('Whale = { verbose = false, version = "0.14.1" }')
   for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard_specs', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     if (name === 'actions') {
-      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+      for (const sub of ['core', 'movement', 'gathering', 'work', 'combat', 'survival', 'crafting', 'interaction']) {
         run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', sub + '.lua'), 'utf8'))
       }
     }

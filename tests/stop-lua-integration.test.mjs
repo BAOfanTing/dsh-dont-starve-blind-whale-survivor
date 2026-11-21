@@ -121,7 +121,7 @@ function loadMod(fengari) {
     'config', 'actor', 'nearby', 'observe', 'native', 'actions', 'bridge',
   ]) {
     if (name === 'actions') {
-      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+      for (const sub of ['core', 'movement', 'gathering', 'work', 'combat', 'survival', 'crafting', 'interaction']) {
         run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', `${sub}.lua`), 'utf8'), `actions/${sub}.lua`)
       }
     }

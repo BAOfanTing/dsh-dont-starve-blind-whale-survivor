@@ -144,7 +144,7 @@ async function load({ withGuard = false, withActions = false } = {}) {
   if (withGuard || withActions) mods.push('guard_specs', 'guard', 'actions', 'macros', 'bridge')
   for (const n of mods) {
     if (n === 'actions') {
-      for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
+      for (const sub of ['core', 'movement', 'gathering', 'work', 'combat', 'survival', 'crafting', 'interaction']) {
         run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', `${sub}.lua`), 'utf8'), `actions/${sub}.lua`)
       }
     }
