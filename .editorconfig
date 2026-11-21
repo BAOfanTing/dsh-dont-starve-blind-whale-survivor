@@ -1,0 +1,15 @@
+root = true
+
+# 统一编辑器行为，减少跨机器/跨编辑器的无意义 diff。
+# 注意：本仓库 .gitattributes 已约定一律用 LF（text=auto eol=lf）。
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Markdown 里行尾空格有语义（软换行），不裁剪
+[*.md]
+trim_trailing_whitespace = false

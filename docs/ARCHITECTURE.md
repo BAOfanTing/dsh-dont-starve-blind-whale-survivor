@@ -1,9 +1,9 @@
 # 架构（当前有效）
 
 > 本文只描述**现在真正在跑**的系统。历史架构（A 栈的 TypeScript bridge / mcp-server / agent、
-> HTTP 18788 那一套）已全部归档，见 [`archive/milestones/INDEX.md`](archive/milestones/INDEX.md)。
+> HTTP 18788 那一套）已全部归档，见 [`archive/README.md`](archive/README.md)。
 >
-> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.39.0）+ `lib/`（DSH 插件，0.10.0）
+> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.41.1）+ `lib/`（DSH 插件，0.12.0）
 
 ---
 
@@ -23,12 +23,12 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  ① DSH 会话：模型 → MCP 工具（Streamable HTTP + SSE）                                      │
 │  ② 游戏里按 F8：插件内置 AI → 同一套工具定义                                               │
 └───────────────────────────────────────┬─────────────────────────────────────────────────┘
-                                        │  工具 = lib/tools.js 的 TOOLS（42 个 = 4 本地 + 38 动作）
+                                        │  工具 = lib/tools.js 的 TOOLS（43 个 = 5 本地 + 38 动作）
                                         ▼
 ┌──────────────────────────── DSH 插件进程（Node，lib/）────────────────────────────────────┐
 │                                                                                          │
 │  tools.js  executeTool()                                                                 │
-│     ├─ 本地工具 → 读快照/写笔记/复合技能（get_state / get_guide / update_notes / run_skill） │
+│     ├─ 本地工具 → 调度/读快照/写笔记/复合技能（advance_task / get_state / get_guide / update_notes / run_skill） │
 │     └─ 动作      → dispatcher.dispatch()  ────────────────┐                               │
 │                                                            │                               │
 │  dispatcher.js  ①参数与快照校验 ②拿控制租约 ③写命令 ④等结果 ⑤核对真实状态  ◄── 唯一允许    │
@@ -138,11 +138,11 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 
 ---
 
-## 7. 工具表面（41 个）与共用链路
+## 7. 工具表面（43 个）与共用链路
 
 ```
-TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写笔记
-      + ACTION_SPECS 的 38 个动作                   ← 必须过 dispatcher
+TOOLS = [advance_task, get_state, get_guide, update_notes, run_skill]   ← 本地：调度 / 读快照 / 写笔记 / 复合技能
+      + ACTION_SPECS 的 38 个动作                                       ← 必须过 dispatcher
 ```
 
 动作按领域放在 `lib/actions/specs/`：
@@ -161,8 +161,9 @@ TOOLS = [get_state, get_guide, update_notes]        ← 本地：读快照 / 写
 `lib/actions/state-query.js` 集中处理"快照的两种 JSON 形状"（背包数组/对象、装备 slots/worn），
 所有 `verify()` 都基于它做前后比对。
 
-- 这 3 个**本地工具**不进 dispatcher：`get_state` / `get_guide` 只读快照与攻略；
-  **`update_notes` 会写本地文件**（覆盖 `~/.dsh/plugins-data/…/notes.md`，空字符串 = 清空）。
+- 这 5 个**本地工具**不进 dispatcher 的原子动作白名单：`get_state` / `get_guide` 只读快照与攻略；
+  **`update_notes` 会写本地文件**（覆盖 `~/.dsh/plugins-data/…/notes.md`，空字符串 = 清空）；
+  `advance_task` / `run_skill` 是调度与复合技能入口，内部再经 dispatcher 下发原子动作。
 - F8 的 `agent.js` 和 MCP 的 `mcp-server.js` 都调**同一个** `executeTool()` 和**同一份** `TOOLS`。
 - 所以"F8 能做的事"和"MCP 能做的事"必然一致，不存在两条链路。
 - dispatcher 的白名单 `OPEN_ACTIONS = Object.keys(ACTION_SPECS)` 是唯一开关：工具表里有的动作，

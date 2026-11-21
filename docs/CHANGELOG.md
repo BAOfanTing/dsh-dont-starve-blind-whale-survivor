@@ -221,7 +221,7 @@
   - 实例共享：`run_skill` 与自动调度共享同一个 `SkillExecutor` 实例。
   - 日志规范化：统一三层日志 `[TASK]`, `[ORCHESTRATOR]`, `[SKILL]`。
 - **文档更新**：
-  - 更新 `docs/ARCHITECTURE.md`、`docs/STATUS.md`、`docs/audit/REFACTOR_ROADMAP.md`（将 ISSUE-01 与 ISSUE-02 标记为已解决）。
+  - 更新 `docs/ARCHITECTURE.md`、`docs/STATUS.md`、`docs/archive/audit/REFACTOR_ROADMAP.md`（将 ISSUE-01 与 ISSUE-02 标记为已解决）。
 - **测试指标**：
   - 全量 939 项单元与集成测试 100% 通过（0 失败、0 跳过）。
 

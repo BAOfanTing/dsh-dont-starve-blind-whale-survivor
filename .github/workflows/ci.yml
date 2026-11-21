@@ -1,0 +1,25 @@
+name: CI
+
+# 说明：测试依赖 @deepseek-ai/schemastery（见 package.json），需 CI 环境能访问对应 npm 源。
+# 若使用私有/镜像源，请在仓库 Secrets 里配置 NODE_AUTH_TOKEN 并在下面加 setup-node 的 registry-url。
+on:
+  push:
+    branches: [main, stabilize/architecture-baseline]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+      - name: Syntax check (lint)
+        run: npm run lint
+      - name: Doc / tool-table consistency
+        run: npm run check:docs
+      - name: Unit & integration tests
+        run: npm test

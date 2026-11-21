@@ -206,7 +206,7 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（42 个 = 4 本地 + 38 动作）
+### 2.1 模型可见的工具（43 个 = 5 本地 + 38 动作）
 
 > 权威清单：`lib/actions/specs/*.js` 的 `ACTION_SPECS`。`OPEN_ACTIONS`、`TOOLS`、`RULES` 均从它派生，有 `tool-parity` / `prompt-parity` 测试保障。
 
@@ -338,7 +338,7 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 - `gather_resources`：按真实缺口采集；中间产物依赖（缺 boards 先补 log 再 craft，不会一直砍树）；超出预算失败。
 
 ### 7.4 G5 集成与日志
-- `run_skill` 作为**本地工具**暴露（`TOOLS` 42 个 = 4 本地 + 38 动作）；内部仍走唯一 dispatcher，并对 `build` 复用 `guardBuild` 家乡门槛。
+- `run_skill` 作为**本地工具**暴露（`TOOLS` 43 个 = 5 本地 + 38 动作）；内部仍走唯一 dispatcher，并对 `build` 复用 `guardBuild` 家乡门槛。
 - F8（`agent.js`→`callTool`→`runTool`）与 DSH（`mcp-server`→`executeTool`→`runTool`）**共用同一 `ctx.planner` 与同一 dispatcher 链**，`run_skill` 两者都能用。
 - 日志统一：`[PLANNER] DECISION/GOAL_SELECTED/TASK_SELECTED/TASK_BLOCKED`（decision 输出）与 `[SKILL] START/RESUME/STEP_START/ACTION_DISPATCH/STEP_VERIFIED/STEP_FAILED/PAUSED/FINISHED`（executor 输出），均带 world_key / task_id / skill_id / step_id / 进度 / 结果。
 
@@ -352,13 +352,13 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 
 > 目标：停止无序新增功能，完成全仓库架构与代码审计，建立统一架构基线与重构路线图，并完成高价值缺陷的精准修复。
 
-### 8.1 六份权威审计报告交付 (`docs/audit/`)
-1. `docs/audit/CODEBASE_INVENTORY.md`：覆盖 Node 插件、Lua 模组、测试与工具的完整模块清单，明确职责、调用方、被调用方与状态（active/legacy/duplicate/dead/incomplete）。
-2. `docs/audit/CALL_GRAPH.md`：绘制从输入层 (MCP/F8) 到 Dispatcher、Lua Guard、Actions/Battle 的端到端调用图与数据流。
-3. `docs/audit/DUPLICATE_LOGIC.md`：深度剖析 `plan.js` 与 `planner`、`establish-home` 与 `establish-home-skill` 等 7 处核心重复系统。
-4. `docs/audit/ACTION_REGISTRY.md`：建立 38 个原子动作 + 4 个本地工具的权威全量矩阵，完成十大检查项审计。
-5. `docs/audit/DOCUMENT_CONFLICTS.md`：全面梳理 README、ARCHITECTURE、STATUS 之间的版本、工具数、测试数差异。
-6. `docs/audit/REFACTOR_ROADMAP.md`：确立未来收敛阶段路线图，并起草 `ARCHITECTURE.md` 目标架构草案。
+### 8.1 六份权威审计报告交付（已归档至 `docs/archive/audit/`）
+1. `docs/archive/audit/CODEBASE_INVENTORY.md`：覆盖 Node 插件、Lua 模组、测试与工具的完整模块清单，明确职责、调用方、被调用方与状态（active/legacy/duplicate/dead/incomplete）。
+2. `docs/archive/audit/CALL_GRAPH.md`：绘制从输入层 (MCP/F8) 到 Dispatcher、Lua Guard、Actions/Battle 的端到端调用图与数据流。
+3. `docs/archive/audit/DUPLICATE_LOGIC.md`：深度剖析 `plan.js` 与 `planner`、`establish-home` 与 `establish-home-skill` 等 7 处核心重复系统。
+4. `docs/archive/audit/ACTION_REGISTRY.md`：建立 38 个原子动作 + 5 个本地工具的权威全量矩阵，完成十大检查项审计。
+5. `docs/archive/audit/DOCUMENT_CONFLICTS.md`：全面梳理 README、ARCHITECTURE、STATUS 之间的版本、工具数、测试数差异。
+6. `docs/archive/audit/REFACTOR_ROADMAP.md`：确立未来收敛阶段路线图，并起草 `ARCHITECTURE.md` 目标架构草案。
 
 ### 8.2 Phase R.1 阶段门禁修复：打通技能参数传递 (Skill Args Passing)
 - **问题**：`SkillExecutor` 和 `run_skill` 此前无法接收动态参数，导致 `gather_resources` 技能只能依赖写死的默认 `CORE_RECIPE`，无法为建造炼金引擎、帐篷等高级建筑收集材料。
