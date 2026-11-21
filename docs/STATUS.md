@@ -1,6 +1,55 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜**完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)**｜全量自动化测试 **1057/1057 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)｜**完成统一任务执行核心可靠性与 F8/DSH 接入一致性治理 (Phase R.7.4)**｜全量自动化测试 **1083/1083 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
+
+---
+
+## Phase R.7.4 关键变更与状态机（本阶段新增）
+
+本阶段只做一件事：让 F8 与 DSH 共用同一套游戏规划/执行核心，并修复执行链的可靠性问题。**不存在第二套 Planner、F8 专属或 DSH 专属的游戏策略。**
+
+### 1.8.1 统一执行链（两条入口，一层汇合）
+
+```text
+F8 内置 AI:  模型 → AiRunner → callTool() → runTool() → executeTool() → 共享 Planner / Runtime / Executor / Dispatcher
+DSH MCP:     模型 → MCP Client → executeTool() → runTool() → executeTool() → 共享 Planner / Runtime / Executor / Dispatcher
+```
+
+- 两条链**只在模型协议、Tool Call 解析、调用方身份（`f8_agent` / `mcp_client`）、Control Lease 上不同**；
+- 汇合点在 `runTool()` / `executeTool()`，之后全部进入 `TaskSkillOrchestrator → SkillExecutor → Dispatcher → Control Lease → Lua Guard → 游戏动作 → 新 Snapshot 验证`；
+- F8 与 DSH 的 `tools/list` 都通过 `toolsForExecutionMode(config)` 按同一 `executionMode` 生成，模式一致由构造方式保证。
+
+### 1.8.2 Task 状态流转
+
+| 状态 | 含义 | 恢复条件 |
+|---|---|---|
+| `pending` / `ready` / `scheduled` | 可调度 | — |
+| `in_progress` | 正在执行 / 等待下一步 | 技能推进 |
+| `blocked` (`blocked_kind`) | 暂时阻塞，带结构化原因 | `dependency` 看依赖；`cooldown` 看退避；其它看退避到点 / `resolved` / `checkPreconditions`；`unknown_outcome`、`cancelled` **必须人工处理** |
+| `completed` / `done` | 快照证据确认完成（终态） | — |
+| `failed` | 达到 `MAX_ATTEMPTS` 或预算耗尽（终态） | 重新规划生成同名任务方可重开 |
+
+`blocked_kind` 取值：`dependency / cooldown / precondition / survival_preempt / resource_missing / target_missing / path_unreachable / external_condition / unknown_outcome / cancelled`。**所有进入 blocked 的路径都由 `blockTask()` 统一写入**，禁止散落直接赋 `status='blocked'`。
+
+### 1.8.3 Executor → Orchestrator 状态映射
+
+| Executor 状态 | Orchestrator 处理 |
+|---|---|
+| `completed` | 任务完成（`markDone`） |
+| `reflex_active` | 让出控制权给 Lua Reflex，不派发普通动作 |
+| `blocked` | 写结构化 blocked（含 reason），按 kind 决定退避/永久 |
+| `failed` / `rejected` | `registerFailure`（attempts+1、指数退避，耗尽转 failed） |
+| `awaiting_reconciliation` | 保持 in_progress，等待核实，**不重发原动作** |
+| `unknown` | 置 blocked(`unknown_outcome`)，终态保护，需人工核实 |
+| `cancelled` | 置 blocked(`cancelled`)，不再自动调度 |
+| `timeout` | 视为未知，进入核实/保护 |
+| `step_in_progress` / `step_verified` / `running` | 继续推进（真正的进行中） |
+
+### 1.8.4 采集距离语义
+
+- `detectionRange`（Snapshot 能看见）≠ `interactionRange`（能直接交互）≠ `gatherSearchRadius`（`gather_area` 实际搜索半径）。
+- `gatherSearchRadius` 权威来源是 `gathering.lua` 的 `j.data.radius = tonumber(ctx.radius) or 8`；JS 侧常量 `LUA_GATHER_SEARCH_RADIUS = 8` 必须与之一致（有 `tests/r74-gather-range.test.mjs` 守护）。
+- 目标在搜索半径外时**一律先 `move_to`**，到达后由执行器重新读快照再采集；禁止再用 `range: Infinity`。
 
 ---
 

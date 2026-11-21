@@ -520,6 +520,27 @@ flowchart TD
 - **HTTP 待提取队列即时剔除**：在 `GameBridge` 中挂载 `signal` 取消监听器，当下发前已被取消或排队期间收到 abort 信号时，立即从 `pendingHttpCommands` 队列中移除，杜绝已被取消的命令被游戏端轮询取出执行；
 - **锁释放超时 Quarantine 屏障**：`WorldRuntime.stop()` 在等待持有锁任务退出时设定有界超时（最高 5 秒）；若超时持有者仍未退出，则激活 `quarantined = true` 与 `cancelRequested = true`，形成强制隔离屏障，所有后续任务均无法获取锁；直到原任务持有者真实退出并在 `finally` 中释放锁时，隔离屏障才自愈解除。
 
+### 17.7 统一任务执行核心与 F8 / DSH 接入一致性 (Phase R.7.4)
+
+#### 17.7.1 两条入口、一套核心
+- **F8 内置 AI**：`模型 → AiRunner → callTool() → runTool() → executeTool() → Planner/Runtime/Executor/Dispatcher`；
+- **DSH MCP**：`模型 → MCP Client → executeTool() → runTool() → executeTool() → Planner/Runtime/Executor/Dispatcher`；
+- 两者只在「模型请求协议 / Tool Call 解析 / 调用方身份（`f8_agent` / `mcp_client`）/ Control Lease」上不同；游戏任务规划、资源选择、生存优先级、寻路、任务恢复、技能执行、结果验证**全部共用同一份代码**。禁止 F8 专属或 DSH 专属 gameplay fallback。
+- 工具列表一致性：两入口都通过 `toolsForExecutionMode(config)` 按当前 `executionMode` 生成 `tools/list`；F8 不再把裸 `toolList` 传入 `AiRunner`（无参调用会永远回退 `autopilot`）。
+
+#### 17.7.2 状态机与失败语义（禁止"压缩成进行中"）
+- `SkillExecutor` 状态经 `classifyExecutorStatus()` 明确映射：`completed → completed`、`reflex_active → reflex_active`、`blocked/failed/unknown/awaiting_reconciliation/cancelled/timeout` 各自保留，只有 `step_in_progress / step_verified / running` 才是 `in_progress`。
+- Task Board 统一用 `blockTask()` 写结构化阻塞（`blocked_kind / blocked_reason / 可选退避`）；`evaluateBoard()` 对 `blocked` 任务仅在「依赖满足 / 退避到点 / 显式 resolved / `checkPreconditions` 通过」时恢复，`unknown_outcome / cancelled` 为永久保护。`failed` 为终态（attempts/budget 耗尽），与 `blocked` 严格区分。
+- `advanceTask()` 的动作预算有明确计数定义，并对「同一目标+同一动作连续失败」设硬上限（连续 3 次即停，`stop_reason = repeated_failed_action`）；`rejected` 不算有效进展。
+
+#### 17.7.3 采集距离语义
+- `detectionRange`（Snapshot 能看见）≠ `interactionRange`（能直接交互）≠ `gatherSearchRadius`（`gather_area` 实际搜索半径）。
+- `gatherSearchRadius` 权威来源是 `gathering.lua` 的 `j.data.radius = tonumber(ctx.radius) or 8`；JS 常量 `LUA_GATHER_SEARCH_RADIUS = 8` 必须与之一致（测试守护）。资源在搜索半径外一律先 `move_to`，到达后重新读快照再采集。
+
+#### 17.7.4 F8 无 tool call 与夜间照明
+- F8 模型只回自然语言、无 tool call 时，记录 `NO_TOOL_CALL` 诊断并有界退避（`IDLE_GIVE_UP`），**绝不把自然语言当成动作已执行**，也不在 AiRunner 内绕过 `runTool()` 直连 Dispatcher/Lua。
+- 照明判断区分 `player.in_light`（实际光照）、附近光源、背包便携光源、手上/头上光源：**背包里有火把不等于玩家被照亮**；只有 `player.in_light` 或手上/头上可用光源才算安全。白天/黄昏备光由 `plan.js` 的 `prep_light` 负责，夜间由 `light` 负责。
+
 
 
 

@@ -4,6 +4,42 @@
 
 ---
 
+## [Phase R.7.4] - 2026-11-21
+
+### 统一任务执行核心可靠性与 F8 / DSH 接入一致性治理 (Shared Execution Reliability & Agent Parity)
+
+本阶段第一原则：**游戏逻辑只有一套**，不允许 F8 专属或 DSH 专属的游戏策略。F8 与 DSH 只在"模型请求协议 / tool call 解析 / 调用方身份 / Control Lease"上不同，最终都必须汇入同一套 Planner / Runtime / Executor / Dispatcher。
+
+- **P0: 采集距离与 Lua 搜索半径不一致 (Gather Range Consistency)**:
+  - `lib/skills/skill-utils.js` 的 `MATERIAL_SPEC` 曾把 `twigs / cutgrass / petals` 写成 `range: Infinity`，而 Lua `gather_area` 默认只在 8 格内搜索；
+  - 后果：JS 认为 20 格外的草可采 → 直接 `gather_area` → Lua 找不到 → `rejected` → 上层原地重试；
+  - 修复：把"发现范围 / 交互范围 / 采集搜索半径"三个概念拆开，新增命名常量 `LUA_GATHER_SEARCH_RADIUS (8)`、`PICKUP_INTERACTION_RANGE (2.5)`、`WORK_NEAREST_RANGE (6)`，并在注释里标明权威来源是 `gathering.lua`；资源超出搜索半径一律先 `move_to`，到达后由执行器重新读快照再采集；
+  - 新增测试 `tests/r74-gather-range.test.mjs`（含 Lua↔JS 半径一致性断言，杜绝再次写成 Infinity）。
+- **P0: 紧急生存任务状态传播 (Emergency Status Propagation)**:
+  - `lib/planner/task-skill-orchestrator.js` 之前把 `survival_stabilize` 除 `completed / reflex_active` 以外的所有结果都包装成 `survival_in_progress`；
+  - 修复：新增 `classifyExecutorStatus()` 明确映射 `completed / reflex_active / blocked / failed / unknown / awaiting_reconciliation / cancelled / timeout / running`，`blocked/failed/unknown/cancelled/awaiting_reconciliation` 原样上报并保留底层 `reason / instance_id / step`，绝不伪装成"仍在执行"。
+- **P0: advance_task 重复失败动作保护 (Repeated Failed Action Guard)**:
+  - `lib/planner/world-runtime-manager.js` 的 `advanceTask()` 之前把 `rejected` 也当成一次普通动作计入预算，真机出现一整轮 10 次 `gather_area → rejected`、角色原地不动；
+  - 修复：明确动作预算计数定义，并对"同一目标+同一动作连续失败 / 连续无进展"设硬上限（连续 3 次即停，`stop_reason = 'repeated_failed_action'`），报告里附 `failed_action` 与 `repeated_failed_action` 字段；`rejected` 不再被视为有效进展。
+- **P0: Task Board blocked 状态生命周期 (Blocked Lifecycle)**:
+  - `lib/planner/task-board.js` 之前当任务"只写 `blocked_reason`、没写 `blocked_kind`"时，`evaluateBoard()` 会把它无条件重置为 `ready`，形成 `ready→执行→blocked→ready` 无限横跳；
+  - 修复：新增统一写入入口 `blockTask()`（结构化 `blocked_kind / blocked_reason`，可带退避 `retryAfterMs`，`attempts` 到 `MAX_ATTEMPTS` 升级为 `failed`）；`evaluateBoard()` 对 `blocked` 任务只有在「依赖满足 / 退避到点 / 显式 resolved / checkPreconditions 通过」时才恢复，`unknown_outcome / cancelled` 为永久保护；
+  - Orchestrator 的 blocked/failed/unknown/cancelled/timeout 全部改为结构化回写，不再散落直接赋值。
+- **P1: F8 与 DSH 工具列表模式一致 (Tool List Parity)**:
+  - `lib/index.js` 之前把裸函数 `toolList` 传给 `AiRunner`，`this.toolList()` 无参调用永远回退 `autopilot`，导致 F8 在 Assisted/Manual 下只看到 Autopilot 工具；
+  - 修复：新增 `toolsForExecutionMode(config)`，F8 与 DSH 两个入口都通过它按当前 `executionMode` 解析工具表（构造上保证一致）；新增 `tests/r74-agent-parity.test.mjs` 覆盖三种模式与源码回归守卫。
+- **P1: F8 无 tool call 诊断与有界重试 (No-tool-call Governance)**:
+  - `lib/agent.js` 对"模型只回自然语言、没有 tool call"的情况补充 `NO_TOOL_CALL` 诊断日志（步骤 / 调用数 / 重试次数 / 内容摘要）与会话日志；不把自然语言当成动作已执行；`IDLE_GIVE_UP` 有界，达到上限主动停止；
+  - 未新增任何"仅对 F8 生效"的隐藏自动执行 fallback，未在 AiRunner 内绕过 `runTool()` 直连 Dispatcher/Lua。
+- **P1: 夜间照明判断 (Night Lighting)**:
+  - `lib/skills/skill-utils.js` / `lib/planner/survival-priority.js` 明确区分 `player.in_light`（实际光照）、附近光源、背包便携光源、手上/头上光源：**背包里带火把不等于玩家被照亮**；只有 `player.in_light` 或手上/头上可用光源才算安全，否则夜间触发 P0 并优先 `equip`；
+  - 白天/黄昏的备光由 `lib/plan.js` 的 `prep_light` 目标负责（材料充足但未成光源时仍提示制作），夜间由 `light` 目标负责，避免黄昏就点火把烧燃料。
+- **测试与验证**:
+  - 新增 `tests/r74-gather-range.test.mjs`、`tests/r74-emergency-status.test.mjs`、`tests/r74-blocked-lifecycle.test.mjs`、`tests/r74-agent-parity.test.mjs`，覆盖任务书要求的回归测试 A / B / C / D / E / F；
+  - 保留 R.7.3 全部执行安全机制（owner 身份传播、Control Lease、Lua Guard、Stop 取消与隔离、unknown/awaiting_reconciliation 保护、过期快照与目标保护、Dispatcher 唯一出口）。
+
+---
+
 ## [Phase R.7.3] - 2026-11-20
 
 ### 复合执行链控制权与运行时可靠性治理 (Runtime Execution Integrity & Control Ownership)
