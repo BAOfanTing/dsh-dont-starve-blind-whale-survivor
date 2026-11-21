@@ -13,6 +13,12 @@
 - `lib/agent.js`：模型首次"无 tool call"时给出一次**接口层纠偏**（列出当前可用工具并要求调用 `advance_task`），不自动执行游戏动作、不绕过 `runTool()`；
 - 更新测试 `tests/r74-agent-parity.test.mjs`（新增 D3：Autopilot 提示词一致性；强化 E1：空转纠偏提示）；Node 侧改动，不涉及模组 Lua，模组版本保持 0.41.1。
 
+### 走位→采集之间的数秒空转排查与优化 (Inter-action Idle)
+- 真机日志（`session.jsonl` 结构化时延）拆分：`move_to` 动作本身 `ms=5141`（真实走路），走到后到下一次 `harvest_nearest` 之间约 **4.3s** 是**模型的一整轮推理**（`THINK ~4-6s`）；因 `freezeTime=false`（世界不暂停），角色在这段时间站着不动，看起来就是"走到物资前停好几秒才捡"；
+- 放大因素：保命反射抢吃导致 `target_gone` / `not_in_inventory` 反复重试，叠加更多空转；
+- 优化：`lib/tools.js` 的 RULES 鼓励把**确定性的连续步骤放同一条回复里一起发**（例如先 `move_to` 再 `harvest_nearest/pickup_nearest/gather_area`），系统按序执行，省掉两步之间的模型空转；`#N + snapshot_id` 的动作不跨步连发（移动后快照失效）；
+- 说明：Autopilot（`advance_task`）本就在一次调用内连续执行多个原子动作、无逐步模型空转，是"自己玩"最顺的模式；Assisted 模式下按此提示词可显著减少停顿。
+
 ---
 
 ## [Phase R.7.4.1] - 2026-11-21
