@@ -1,0 +1,18 @@
+#!/bin/sh
+# 提交信息校验：type(scope): subject（commitlint）。
+# 通过 core.hooksPath=.githooks 生效（npm run setup:hooks 安装）；CI 不需要钩子。
+MSG_FILE="$1"
+if [ -d "node_modules/@commitlint/cli" ]; then
+  npx --no-install commitlint --edit "$MSG_FILE"
+  if [ $? -ne 0 ]; then
+    echo ""
+    echo "✖ 提交信息不符合规范。格式：type(scope): subject（scope 必填）"
+    echo "  例：fix(runtime): 修复…… / feat(reflex): …… / docs(rules): ……"
+    echo "  type ∈ feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+    echo "  scope 例：runtime/dispatcher/bridge/skills/reflex/planner/tools/modes …"
+    exit 1
+  fi
+else
+  echo "⚠ 未检测到 commitlint（先 npm install），本次跳过提交信息校验"
+fi
+exit 0
