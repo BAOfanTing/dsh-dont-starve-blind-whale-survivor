@@ -422,7 +422,7 @@ test('SM-11：build 的工具 enum 与 BUILDABLE_RECIPES 同源（不许各写�
 })
 
 test('SM-9：Lua 侧同样允许数字（否则 Node 放行、Lua 拒，模型会看到莫名其妙的 bad_format）', () => {
-  const guard = readFileSync(join(MOD, 'scripts', 'whale', 'guard.lua'), 'utf8')
+  const guard = readFileSync(join(MOD, 'scripts', 'whale', 'guard_specs.lua'), 'utf8')
   assert.match(guard, /prefab = \{ type = "string", pattern = "\^\[a-z0-9_\]\+\$"/, 'Lua 的 prefab 也要允许数字')
   // target_kind 是我们自己的固定枚举，保持严格（不许数字）
   const kindRules = guard.match(/target_kind = \{ type = "string", pattern = "([^"]+)"/g) ?? []

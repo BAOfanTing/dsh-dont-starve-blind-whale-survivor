@@ -253,9 +253,9 @@ test('TN-10（INTEGRATION）：五类动作真的能跑起来（目标由服务�
 })
 
 test('TN-12：Node 白名单与 Lua 白名单逐条一致（新增动作不许只在一侧）', () => {
-  const guard = readFileSync(join(MOD, 'scripts', 'whale', 'guard.lua'), 'utf8')
-  const block = guard.match(/G\.ACTIONS = \{([\s\S]*?)\n\}/)
-  assert.ok(block, '解析不到 guard.lua 的 G.ACTIONS 表')
+  const guard = readFileSync(join(MOD, 'scripts', 'whale', 'guard_specs.lua'), 'utf8')
+  const block = guard.match(/Whale\.guard_action_specs = \{([\s\S]*?)\n\}/)
+  assert.ok(block, '解析不到 guard_specs.lua 的 guard_action_specs 表')
   const luaActions = [...block[1].matchAll(/^    ([a-z_]+) = \{/gm)].map((m) => m[1]).sort()
   assert.ok(luaActions.length >= 36, `Lua 侧动作表应该至少有 36 条，实际 ${luaActions.length}`)
   assert.deepEqual(luaActions, [...OPEN_ACTIONS].sort(),

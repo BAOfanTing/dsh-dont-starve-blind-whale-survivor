@@ -141,7 +141,7 @@ async function load({ withGuard = false, withActions = false } = {}) {
   run(luaIoFiles({ 'whale_io_lease.json': authority({ runtime_id: RUNTIME }) }), '租约文件')
   run('Whale = { verbose = false, version = "0.17.0", files = { lease = "whale_lease.json", io_lease = "whale_io_lease.json", lease_ack = "whale_lease_ack.json", io_lease_ack = "whale_io_lease_ack.json" } }', 'Whale')
   const mods = ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']
-  if (withGuard || withActions) mods.push('guard', 'actions', 'macros', 'bridge')
+  if (withGuard || withActions) mods.push('guard_specs', 'guard', 'actions', 'macros', 'bridge')
   for (const n of mods) {
     if (n === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {

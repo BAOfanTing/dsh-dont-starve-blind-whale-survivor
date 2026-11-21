@@ -781,6 +781,8 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         "scripts/whale/config.lua", "scripts/whale/actor.lua",
         -- M1.4：附近实体结构化（独立模块）
         "scripts/whale/nearby.lua",
+        -- guard 的白名单规格（必须先于 guard 加载）
+        "scripts/whale/guard_specs.lua",
         -- M2.0：动作安全底座（Lua 侧最终授权者）
         "scripts/whale/guard.lua",
         -- 生活家务宏（受控执行，剥离自 reflex）
@@ -794,12 +796,13 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
         assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
     end
-    assert(#MODIMPORTS == 22, "只该 modimport 22 个 B 栈模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 23, "只该 modimport 23 个 B 栈模块，实际 " .. #MODIMPORTS)
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
 assert(idx("scripts/whale/util.lua") < idx("scripts/whale/pickuprules.lua"), "pickuprules 要在 util 之后")
 assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/nearby.lua"), "pickuprules 必须在 nearby 之前（观察侧要用）")
 assert(idx("scripts/whale/harvestrules.lua") < idx("scripts/whale/nearby.lua"), "harvestrules 必须在 nearby 之前（观察侧要用）")
 assert(idx("scripts/whale/harvestrules.lua") < idx("scripts/whale/guard.lua"), "harvestrules 必须在 guard 之前（执行侧要用）")
+assert(idx("scripts/whale/guard_specs.lua") < idx("scripts/whale/guard.lua"), "guard_specs 必须在 guard 之前（guard 要读它）")
 assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/guard.lua"), "pickuprules 必须在 guard 之前（执行侧要用）")
 -- TARGET-REFRESH：targetrules 依赖 pickuprules/harvestrules/eatrules，且 nearby/guard 都要用它
 assert(idx("scripts/whale/eatrules.lua") < idx("scripts/whale/targetrules.lua"), "targetrules 要在 eatrules 之后（用 AUTO_SAFE）")

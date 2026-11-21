@@ -31,7 +31,7 @@ export const testAuthority = (over = {}) => authority({
 /** 模组加载顺序（和 modmain.lua 一致；targetrules 在 eatrules 之后、craftrules 之前） */
 const MODULE_ORDER = [
   'json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'targetrules',
-  'craftrules', 'equiprules', 'config', 'actor', 'nearby', 'guard', 'observe',
+  'craftrules', 'equiprules', 'config', 'actor', 'nearby', 'guard_specs', 'guard', 'observe',
   'actions', 'macros', 'bridge',
 ]
 

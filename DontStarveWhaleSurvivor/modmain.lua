@@ -95,6 +95,8 @@ if Whale.config ~= nil and Whale.config.build ~= nil then
 end
 
 modimport("scripts/whale/nearby.lua")
+-- 白名单规格数据（guard 的第二道闸，必须先于 guard 加载）
+modimport("scripts/whale/guard_specs.lua")
 -- M2.0：动作安全底座（Lua 侧最终授权者）
 modimport("scripts/whale/guard.lua")
 modimport("scripts/whale/observe.lua")

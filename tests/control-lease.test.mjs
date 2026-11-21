@@ -300,7 +300,7 @@ async function guardVm(files) {
   run(GUARD_STUB)
   run(luaIoFiles(files))
   run('Whale = { verbose = false, version = "0.14.1" }')
-  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard_specs', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     if (name === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
         run(readFileSync(join(ROOT, 'DontStarveWhaleSurvivor', 'scripts', 'whale', 'actions', sub + '.lua'), 'utf8'))
@@ -568,7 +568,7 @@ async function loadChannelEnv() {
   run(STUB_CHANNEL)
   run(luaIoFiles({})) // 没有 io 文件：模拟真机 GLOBAL.io == nil 的情况
   run('Whale = { verbose = false, version = "0.14.2", files = { lease = "whale_lease.json", io_lease = "whale_io_lease.json" } }')
-  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard_specs', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     if (name === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
         run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', sub + '.lua'), 'utf8'))
@@ -699,7 +699,7 @@ async function loadAckEnv() {
   run(STUB_ACK)
   // 捕获 write_both 写出的 ack 文本（io 通道不可用，ps 通道记录到 IO_WRITES）
   run(`Whale = { verbose=false, version="0.14.3", files={ lease="whale_lease.json", io_lease="whale_io_lease.json", lease_ack="whale_lease_ack.json", io_lease_ack="whale_io_lease_ack.json" } }`)
-  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
+  for (const name of ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'guard_specs', 'guard', 'observe', 'actions', 'macros', 'bridge']) {
     if (name === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'combat', 'survival', 'crafting', 'interaction']) {
         run(readFileSync(join(MOD, 'scripts', 'whale', 'actions', sub + '.lua'), 'utf8'))

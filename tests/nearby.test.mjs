@@ -1700,7 +1700,7 @@ async function loadLuaAN({ withGuard = false } = {}) {
   run(STUB_AN, '假游戏')
   run('Whale = { verbose = false, version = "0.16.0" }', 'Whale')
   const mods = ['json', 'util', 'pickuprules', 'harvestrules', 'config', 'actor', 'nearby', 'observe']
-  if (withGuard) mods.push('guard')
+  if (withGuard) mods.push('guard_specs', 'guard')
   for (const n of mods) run(readFileSync(join(MOD, 'scripts', 'whale', n + '.lua'), 'utf8'), n + '.lua')
   const CONFIG_CODE = `Whale.config.build(function(k)
         if k == "scan_radius" then return 16 end
