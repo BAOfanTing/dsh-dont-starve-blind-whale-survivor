@@ -247,6 +247,27 @@ function B.WriteLeaseAck(authority)
                       FILES.io_lease_ack or "whale_io_lease_ack.json", text)
 end
 
+-- ─────────────── R8.1：本地动作（Reflex）换手冻结 ───────────────
+-- revoking 一经观察立即冻结 Reflex 的新动作；只有读到**新鲜、合法的非 revoking 权威**才解冻。
+-- 冻结不改变权威判定本身，只是让 Reflex 在换手窗口内不再启动新动作（先冻结→再停旧动作→再写 ACK）。
+local _local_action_frozen = false
+function B.FreezeLocalActions(reason)
+    if _local_action_frozen then return false end
+    _local_action_frozen = true
+    B._freeze_reason = tostring(reason or "lease_revoking")
+    pcall(function() print("[大肥鱼饿不死] 本地动作冻结：" .. B._freeze_reason) end)
+    return true
+end
+function B.UnfreezeLocalActions()
+    if not _local_action_frozen then return false end
+    _local_action_frozen = false
+    local was = B._freeze_reason
+    B._freeze_reason = nil
+    pcall(function() print("[大肥鱼饿不死] 本地动作解冻：权威状态已恢复（" .. tostring(was) .. "）") end)
+    return true
+end
+function B.LocalActionsFrozen() return _local_action_frozen == true end
+
 --- 每 tick 通过**已验证的持久化字符串通道**读权威租约，缓存给同步的 guard.validate 用。
 --- Node 写的是带 KLEI 头的普通文件，TheSim:GetPersistentString 能读到（命令通道就这么工作）。
 local function poll_authority()
@@ -259,6 +280,7 @@ local function poll_authority()
         local a = guard.parse_authority(text)
         if a ~= nil then
             Whale.authority_cache = { data = a, at = os.time() }
+            if a.status ~= "revoking" then B.UnfreezeLocalActions() end
             return
         end
     end
@@ -268,6 +290,7 @@ local function poll_authority()
         local a = guard.parse_authority(text)
         if a ~= nil then
             Whale.authority_cache = { data = a, at = os.time() }
+            if a.status ~= "revoking" then B.UnfreezeLocalActions() end
         end
     end)
 end
@@ -279,7 +302,8 @@ local function poll_lease()
     local cache = Whale ~= nil and Whale.authority_cache or nil
     if cache == nil or type(cache.data) ~= "table" then return end
     if cache.data.status == "revoking" then
-        B.WriteLeaseAck(cache.data)
+        B.FreezeLocalActions("lease_revoking")   -- ① 先冻结 Reflex 新动作
+        B.WriteLeaseAck(cache.data)              -- ② 再 A.Abort 停旧动作并写 ACK
     end
 end
 

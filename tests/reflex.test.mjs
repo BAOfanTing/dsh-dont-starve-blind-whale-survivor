@@ -2048,3 +2048,165 @@ test('FIX-02-17：目标是个不会打人的活物（比如打中立建筑/巢�
   `)
 })
 
+
+// ═══════════════════════ R8.1：本地生存大脑（换手冻结 / 温度方向 / 日常维护） ═══════════════════════
+
+const R81_SETUP = `
+  NEARBY = {}
+  PLAYER.components.health.currenthealth = 150
+  PLAYER.components.health.maxhealth = 150
+  PLAYER.components.hunger.current = 150
+  PLAYER.components.hunger.max = 200
+  PLAYER.components.sanity.current = 200
+  PLAYER.components.sanity.max = 200
+  PLAYER.components.temperature = { GetCurrent = function() return 20 end }
+  PLAYER.components.inventory._items = {}
+  PLAYER.components.inventory._equipped = {}
+  PUSHED = nil
+  MOVED_TO = nil
+  BUFFERED = nil
+  Whale.job = nil
+  Whale.reflex_on = true
+  Whale.reflex_force_off = false
+  GLOBAL.TheWorld.state.phase = "day"
+  GLOBAL.TheWorld.state.temperature = 20
+`
+const PUT_TORCH = 'PLAYER.components.inventory._equipped[GLOBAL.EQUIPSLOTS.HANDS] = mkitem("torch", 1, { fueled = { IsEmpty = function() return false end, GetPercent = function() return 0.9 end } })'
+
+test('R81-FREEZE-01：revoking 冻结期间 Reflex 不启动任何新动作；A.Start(reflex) 直接拒绝；解冻后恢复', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run(PUT_TORCH, '有火把避免走造光分支')
+  run('Whale.bridge.LocalActionsFrozen = function() return FROZEN == true end; FROZEN = true', '冻结钩子')
+  runFile('local ok = Whale.actions.Start("move_to", { x = 3, z = 3 }, "reflex"); BLK = ok and "no" or "yes"')
+  assert.equal(global('BLK'), 'yes', '冻结期间 A.Start(reflex) 必须返回失败')
+  run(eachTick(10), '冻结下跑 10 tick')
+  runFile('FZP = (PUSHED ~= nil or Whale.job ~= nil) and "yes" or "no"')
+  assert.equal(global('FZP'), 'no', '冻结期间不得启动任何反射动作')
+  run('FROZEN = false', '解冻')
+  run('GLOBAL.TheWorld.state.phase = "night"', '改夜间避免白天收火把干扰')
+  run('PLAYER.components.sanity.current = 60', '理智低')
+  run('NEARBY = { newent("flower", 2, 0, {}) }', '近处有花')
+  run(eachTick(10), '解冻后跑 10 tick')
+  runFile('UFZ = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.notEqual(global('UFZ'), 'none', '解冻后反射应能重新启动维护动作')
+})
+
+test('R81-TEMP-01：过热（>65）绝不向火堆移动（只上报）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('GLOBAL.TheWorld.state.phase = "night"', '夜间+火把避免白天收火把')
+  run(PUT_TORCH, '有火把')
+  run('NEARBY = { newent("campfire", 2, 0, {"fire"}, { fueled = { IsEmpty = function() return false end, GetPercent = function() return 0.9 end } }) }', '近处火堆')
+  run('PLAYER.components.temperature = { GetCurrent = function() return 80 end }', '过热 80')
+  run(eachTick(10), '跑 10 tick')
+  runFile('HOT_MOVED = ((MOVED_TO ~= nil) or (Whale.job ~= nil and Whale.job.name == "move_to")) and "yes" or "no"')
+  runFile('HOT_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.equal(global('HOT_MOVED'), 'no', '过热时不得向火堆移动')
+  assert.equal(global('HOT_JOB'), 'none', '过热时不应启动任何动作（只上报）')
+})
+
+test('R81-TEMP-02：过冷（<5）会靠近点燃的热源', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('GLOBAL.TheWorld.state.phase = "night"', '夜间+火把')
+  run(PUT_TORCH, '有火把避免造光')
+  run('NEARBY = { newent("campfire", 2, 0, {"fire"}, { fueled = { IsEmpty = function() return false end, GetPercent = function() return 0.9 end } }) }', '近处点燃火堆')
+  run('PLAYER.components.temperature = { GetCurrent = function() return -5 end }', '过冷 -5')
+  run(eachTick(10), '跑 10 tick')
+  runFile('COLD_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.equal(global('COLD_JOB'), 'move_to', '过冷时应当 move_to 热源')
+})
+
+test('R81-SANITY-01：低理智 + 近处有花 → 空闲时采集（P2）', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('GLOBAL.TheWorld.state.phase = "night"', '夜间避免收火把')
+  run(PUT_TORCH, '有火把')
+  run('PLAYER.components.sanity.current = 60', '理智低 30%')
+  run('NEARBY = { newent("flower", 2, 0, {}) }', '近处有花')
+  run(eachTick(10), '跑 10 tick')
+  runFile('SAN_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.equal(global('SAN_JOB'), 'gather', '低理智空闲且有近花时应 gather 采花')
+})
+
+test('R81-SANITY-02：低理智但附近没有花 → 不无目标漫游', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('GLOBAL.TheWorld.state.phase = "night"', '夜间避免收火把')
+  run(PUT_TORCH, '有火把')
+  run('PLAYER.components.sanity.current = 60', '理智低')
+  run('NEARBY = {}', '附近无花')
+  run(eachTick(10), '跑 10 tick')
+  runFile('NOFLOWER_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.equal(global('NOFLOWER_JOB'), 'none', '附近无花时不得启动漫游/采集')
+})
+
+test('R81-FOOD-01：没有安全食物时不执行 eat', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('GLOBAL.TheWorld.state.phase = "night"', '夜间避免收火把')
+  run(PUT_TORCH, '有火把')
+  run('PLAYER.components.hunger.current = 80', '饥饿 40%')
+  run('PLAYER.components.inventory._items[1] = mkitem("monstermeat", 2)', '只有怪物肉（不安全）')
+  run(eachTick(10), '跑 10 tick')
+  runFile('FOOD_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.notEqual(global('FOOD_JOB'), 'eat', '没有安全食物时绝不能 eat')
+})
+
+test('R81-PREEMPT-01：P2 维护（理智采花）不得抢占正在进行的模型任务', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('GLOBAL.TheWorld.state.phase = "night"', '夜间避免收火把')
+  run(PUT_TORCH, '有火把')
+  run('PLAYER.components.sanity.current = 60', '理智低')
+  run('NEARBY = { newent("flower", 2, 0, {}) }', '近处有花')
+  runFile('Whale.actions.Start("move_to", { x = 50, z = 50 }, "mcp_client")')
+  run(eachTick(10), '跑 10 tick')
+  runFile('KEEP_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.equal(global('KEEP_JOB'), 'move_to', 'P2 理智维护不得抢占模型任务')
+})
+
+test('R81-PREEMPT-02：P0 紧急（夜间无光）仍可抢占模型任务', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('GLOBAL.TheWorld.state.phase = "night"', '入夜')
+  run('PLAYER.components.inventory._items[1] = mkitem("cutgrass", 2); PLAYER.components.inventory._items[2] = mkitem("twigs", 2)', '火把材料够')
+  runFile('Whale.actions.Start("move_to", { x = 50, z = 50 }, "mcp_client")')
+  run(eachTick(10), '跑 10 tick')
+  runFile('P0_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.notEqual(global('P0_JOB'), 'move_to', 'P0 夜间无光应抢占模型任务（job 应变为造光相关）')
+})
+
+test('R81-FUEL-01：火源低于阈值（白天<20%）→ 空闲时启动一次 add_fuel', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('NEARBY = { newent("campfire", 2, 0, {"fire"}, { fueled = { IsEmpty = function() return false end, GetPercent = function() return 0.1 end } }) }', '低燃料火堆')
+  run('PLAYER.components.inventory._items[1] = mkitem("log", 5)', '背包有木头')
+  run(eachTick(10), '跑 10 tick')
+  runFile('FUEL_JOB = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.equal(global('FUEL_JOB'), 'add_fuel', '白天低燃料空闲时应启动 add_fuel')
+})
+
+test('R81-FUEL-02：燃料状态未更新 → 冷却期内不会连续重复添柴', async () => {
+  const fengari = await import('fengari')
+  const { run, runFile, global } = loadReflex(fengari)
+  run(R81_SETUP, 'setup')
+  run('NEARBY = { newent("campfire", 2, 0, {"fire"}, { fueled = { IsEmpty = function() return false end, GetPercent = function() return 0.1 end } }) }', '低燃料火堆')
+  run('PLAYER.components.inventory._items[1] = mkitem("log", 5)', '背包有木头')
+  run(eachTick(10), '启动 add_fuel')
+  // 推进核心动作两次：start→acting→done（燃料百分比桩不变=未更新）
+  run('if Whale.job ~= nil then Whale.actions.Tick(); Whale.actions.Tick() end', '把这次添柴跑完（燃料未涨）')
+  run(eachTick(20), '继续跑反射')
+  runFile('FUEL2 = (Whale.job ~= nil) and tostring(Whale.job.name) or "none"')
+  assert.notEqual(global('FUEL2'), 'add_fuel', '燃料没更新时不得连续重复添柴')
+})

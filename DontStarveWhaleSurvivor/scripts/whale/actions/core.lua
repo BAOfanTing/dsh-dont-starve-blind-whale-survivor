@@ -483,6 +483,11 @@ function A.run_sub(m, name, args)
 end
 
 function A.Start(name, args, cmd_id, ctx)
+    -- R8.1：租约换手冻结期间，禁止任何 reflex 通道启动新动作（防止其它路径绕过冻结）
+    if cmd_id == "reflex" and Whale ~= nil and Whale.bridge ~= nil
+        and Whale.bridge.LocalActionsFrozen ~= nil and Whale.bridge.LocalActionsFrozen() then
+        return false, "local_action_frozen"
+    end
     local fn = JOBS[name]
     if fn == nil then
         local known = {}

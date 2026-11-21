@@ -38,10 +38,24 @@ local PERMANENT_LIGHTS = {
 }
 
 -- ── 阈值 ──────────────────────────────────────────────────────────────────
-local EAT_CRITICAL = 0.30     -- 真正紧急饥饿（<= 30%）：背包有安全食物时允许 P1 紧急进食
-local EAT_NOTIFY = 0.50       -- 普通饥饿（< 50%）：只通知 Plan，绝不申请紧急抢占
-local HEAL_EMERGENCY = 0.35    -- 生命 < 35%：P1 回血
-local SANITY_LOW = 0.55        -- 理智 < 55%：通知 Plan 预警暗影怪（提前采花/做花环缓冲）
+-- ── R8.1 集中配置：本地生存大脑的阈值/频率唯一硬编码处（改这里，不散落） ──
+local CFG = {
+    every = 5,                 -- Reflex 每 N 个 0.2s tick 跑一次（≈1s）
+    fuel_night_min = 0.35,     -- 夜间火源燃料比例低于此值 → P1 添柴
+    fuel_day_min = 0.20,       -- 白天低于此值 → P2 空闲补充
+    fuel_radius = 12,
+    food_prevent = 0.50,       -- 饥饿低于此值 → 空闲预防性进食（P2）
+    food_critical = 0.30,      -- 严重饥饿 → P1
+    heal_emergency = 0.35,     -- 生命低于此值 → P1 回血
+    sanity_maint = 0.55,       -- 理智低于此值 → 维护（P2，空闲且近处有花）
+    sanity_flower_radius = 8,
+    temp_cold_act = 5, temp_cold_ok = 8,   -- 过冷动作/恢复阈值（滞回）
+    temp_hot_act = 65, temp_hot_ok = 60,   -- 过热动作/恢复阈值（滞回）
+}
+local EAT_CRITICAL = CFG.food_critical
+local EAT_NOTIFY = CFG.food_prevent
+local HEAL_EMERGENCY = CFG.heal_emergency
+local SANITY_LOW = CFG.sanity_maint
 
 local last = {}          -- 上一次执行时间（防抖）
 local recent = {}        -- 最近做过的事
@@ -52,6 +66,7 @@ local inflight = nil     -- 当前在跑的反射意图
 local pending = nil      -- 已发起、待核对的意图
 local is_dead = false    -- 角色死亡状态记忆
 local failed_flee_targets = {} -- 失败/不可达的逃生目标点冷却
+local temp_state = nil        -- 温度滞回状态："cold"/"hot"/nil
 local danger_zones = {}  -- 短期危险区域记忆
 
 --- ★ 火把燃料账（与游戏原生数值保持一致）：
@@ -837,36 +852,50 @@ local function reflex_sanity(p)
     return false
 end
 
---- 温度异常保命
-local function temperature_need(p)
+--- 温度异常：过冷→找**点燃的**热源靠近；过热→**绝不向火堆移动**（只上报，不做危险猜测）。
+local function temperature_reading(p)
     local comp = p ~= nil and p.components ~= nil and p.components.temperature or nil
     if comp == nil then return nil end
     local ok, t = pcall(function() return comp:GetCurrent() end)
     if not ok or type(t) ~= "number" then return nil end
-    local cold = t < 5
-    local hot = t > 65
-    if not cold and not hot then return nil end
-    local fire = U.find_nearest(p, 20, { "fire" }, nil, function(e)
+    return t
+end
+local function lit_fire_near(p, radius)
+    return U.find_nearest(p, radius or 20, { "fire" }, nil, function(e)
         local fueled = e.components ~= nil and e.components.fueled or nil
-        return fueled == nil or not fueled:IsEmpty()
+        return fueled ~= nil and not fueled:IsEmpty()
     end)
-    if fire == nil then
-        diag("temperature", { "too_" .. (cold and "cold" or "hot") .. "=true", "fire=none" })
-        return nil
+end
+local function temperature_need(p)
+    local t = temperature_reading(p)
+    if t == nil then return nil end
+    -- 过冷：滞回进入
+    if t < CFG.temp_cold_act then
+        temp_state = "cold"
+        local fire = lit_fire_near(p, 20)
+        if fire == nil then
+            diag("temperature", { "too_cold=true", "fire=none" })
+            return { reason = "temperature_cold", can_run = false, report = "too_cold_no_fire" }
+        end
+        return {
+            reason = "temperature_cold", can_run = true,
+            run = function()
+                local started = A.Start("move_to", { target = fire }, REFLEX_ID)
+                if started then mark("temperature"); say(p, "temperature", "太冷了，先靠火堆暖暖"); return true end
+                return false
+            end,
+        }
     end
-    return {
-        reason = cold and "temperature_cold" or "temperature_hot",
-        can_run = true,
-        run = function()
-            local started = A.Start("move_to", { target = fire }, REFLEX_ID)
-            if started then
-                mark("temperature")
-                say(p, "temperature", cold and "太冷了，先靠火堆暖暖" or "太热了，离火堆远点")
-                return true
-            end
-            return false
-        end,
-    }
+    -- 过热：绝不靠近火堆，只上报（安全能力不足时不移动）
+    if t > CFG.temp_hot_act then
+        temp_state = "hot"
+        diag("temperature", { "too_hot=true", "fire_move=forbidden" })
+        return { reason = "temperature_hot", can_run = false, report = "too_hot_report_only", hot = true }
+    end
+    -- 滞回：回到恢复阈值内才清状态
+    if temp_state == "cold" and t >= CFG.temp_cold_ok then temp_state = nil end
+    if temp_state == "hot" and t <= CFG.temp_hot_ok then temp_state = nil end
+    return nil
 end
 
 -- ─────────────────────────── 动作调度与状态核对 ───────────────────────────
@@ -1054,6 +1083,22 @@ local function confirm_pending(p)
             "result=" .. (ok and "succeeded" or "failed"),
             "hand_empty=" .. bool_str(ok),
         })
+    elseif pending.kind == "fuel" then
+        local fire = pending.fire
+        local fueled = (fire ~= nil and fire:IsValid() and fire.components ~= nil) and fire.components.fueled or nil
+        local after = fueled ~= nil and fueled:GetPercent() or nil
+        local ok = (after ~= nil and pending.fuel_before ~= nil and after > pending.fuel_before + 0.01)
+        diag("fuel_result", {
+            "result=" .. (ok and "succeeded" or "unconfirmed"),
+            "before=" .. (pending.fuel_before ~= nil and string.format("%.2f", pending.fuel_before) or "?"),
+            "after=" .. (after ~= nil and string.format("%.2f", after) or "?"),
+        })
+        if not ok then mark_fail("fuel", 6) end   -- 燃料未更新：冷却 6s，禁止连续重复加
+    elseif pending.kind == "sanity" then
+        local now = sanity_percent(p)
+        local ok = (now ~= nil and pending.san_before ~= nil and now > pending.san_before + 0.005)
+        diag("sanity_result", { "result=" .. (ok and "succeeded" or "unconfirmed") })
+        mark_fail("sanity_pick", ok and 1 or 8)   -- 成功短冷却；未确认长冷却，避免重复
     end
     pending = nil
 end
@@ -1063,6 +1108,7 @@ local function reset_state(reason)
     pending = nil
     last = {}
     fail_until = {}
+    temp_state = nil
     diag("reset", { "reason=" .. tostring(reason) })
     pcall(function() print("[Reflex][RESET] 状态已重置: reason=" .. tostring(reason)) end)
 end
@@ -1072,6 +1118,73 @@ local function is_critical_hunger(p, hunger)
     local limit = (p ~= nil and p.prefab == "wolfgang") and 0.40 or 0.30
     if hunger > limit then return false end
     return true
+end
+
+-- ─────────── R8.1：日常生存维护（本地确定性；复用 Whale.actions 唯一状态机；P2 只空闲执行） ───────────
+local function has_fuel_item(p)
+    if A == nil or A.count_item == nil then return false end
+    local ok, v = pcall(function()
+        return (A.count_item(p, "log") + A.count_item(p, "twigs") + A.count_item(p, "cutgrass")
+            + A.count_item(p, "charcoal") + A.count_item(p, "pinecone")) > 0
+    end)
+    return ok and v == true
+end
+
+local function maintain_fuel(p, phase)
+    if A == nil then return false end
+    local fire = U.find_nearest(p, CFG.fuel_radius, { "fire" }, nil, function(e)
+        local fueled = e.components ~= nil and e.components.fueled or nil
+        return fueled ~= nil
+    end)
+    if fire == nil then return false end
+    local fueled = fire.components ~= nil and fire.components.fueled or nil
+    if fueled == nil then return false end
+    local okp, pct = pcall(function() return fueled:GetPercent() end)
+    if not okp or type(pct) ~= "number" then return false end
+    local night = (phase == "night")
+    local threshold = night and CFG.fuel_night_min or CFG.fuel_day_min
+    if pct >= threshold then return false end
+    if not has_fuel_item(p) then
+        report_need("fuel", "no_fuel_item", { pct = pct })
+        return false
+    end
+    local prio = night and P1 or P2
+    return try_action(p, "fuel", prio, night and "fuel_night_low" or "fuel_day_low", function()
+        local started = A.Start("add_fuel", { radius = CFG.fuel_radius }, REFLEX_ID, {})
+        if started then pending = { kind = "fuel", fire = fire, fuel_before = pct } end
+        return started
+    end)
+end
+
+local function maintain_food(p)
+    if A == nil then return false end
+    local hunger = hunger_percent(p)
+    if hunger == nil or hunger >= CFG.food_prevent then return false end
+    if is_critical_hunger(p, hunger) then return false end   -- 严重饥饿由 P1 分支处理
+    if not food_available(p) then return false end
+    return try_action(p, "eat", P2, "food_preventive", function() return reflex_eat(p) end,
+                      function() return food_available(p) end)
+end
+
+local function maintain_sanity(p)
+    if A == nil then return false end
+    local sanity = sanity_percent(p)
+    if sanity == nil or sanity >= CFG.sanity_maint then clear_need("sanity"); return false end
+    report_need("sanity", "sanity_low", { sanity = sanity })
+    if Whale.job ~= nil then return false end   -- 只在完全空闲时维护
+    local flower = U.find_nearest(p, CFG.sanity_flower_radius, nil, nil, function(e)
+        return e ~= nil and tostring(e.prefab) == "flower"
+    end)
+    if flower == nil then
+        report_need("sanity", "sanity_no_flower", { radius = CFG.sanity_flower_radius })
+        return false
+    end
+    local san_before = sanity
+    return try_action(p, "sanity_pick", P2, "sanity_maintenance", function()
+        local started = A.Start("gather", { target = flower }, REFLEX_ID, { target = flower })
+        if started then pending = { kind = "sanity", san_before = san_before } end
+        return started
+    end)
 end
 
 function R.Priority(p)
@@ -1204,8 +1317,9 @@ local function run(p)
                       function() return heal_available(p) end) then return end
     end
 
-    -- 温度异常
+    -- 温度异常（过冷靠近热源；过热只上报、绝不向火堆移动）
     local temp = temperature_need(p)
+    if temp ~= nil and temp.report ~= nil then report_need("temperature", temp.report, {}) end
     if temp ~= nil and temp.can_run == true then
         if try_action(p, "temperature", P1, temp.reason, temp.run) then return end
     end
@@ -1222,8 +1336,17 @@ local function run(p)
         if reflex_stow_light(p, rep) then return end
     end
 
-    -- ★ 彻底去除 P2/P3 帧循环：不在后台自动采草、采树枝、添柴、搜食、采花！
-    --   所有家务完全交给 chores.lua 受控调度！
+    -- ── R8.1：日常生存维护（燃料/进食/理智）。夜间低燃料=P1 可抢占；其余 P2 仅空闲执行。
+    if phase == "night" then
+        if maintain_fuel(p, phase) then return end
+    end
+    if Whale.job == nil then
+        if maintain_fuel(p, phase) then return end
+        if maintain_food(p) then return end
+        if maintain_sanity(p) then return end
+    end
+
+    -- ★ 其余 P3 家务（采草、砍树等）仍交给模型/Plan，不在 Reflex 帧循环里做。
 end
 
 local tick = 0
@@ -1231,11 +1354,11 @@ function R.Tick()
     local enabled, why = R.Enabled()
     if not enabled then
         tick = tick + 1
-        if tick % 5 == 0 then diag("enabled", { "enabled=false", "reason=" .. tostring(why) }) end
+        if tick % (CFG.every or 5) == 0 then diag("enabled", { "enabled=false", "reason=" .. tostring(why) }) end
         return
     end
     tick = tick + 1
-    if tick % 5 ~= 0 then return end       -- ≈1 秒一次
+    if tick % (CFG.every or 5) ~= 0 then return end       -- ≈1 秒一次（集中配置）
 
     local p = U.player()
     if p == nil then
