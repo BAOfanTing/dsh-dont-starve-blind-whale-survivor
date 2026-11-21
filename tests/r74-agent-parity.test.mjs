@@ -23,43 +23,29 @@ test('R74-D1: 三种执行模式下，F8 与 DSH 的工具集合完全一致，�
     const runner = new AiRunner({ toolList: () => toolsForExecutionMode({ executionMode: mode }) })
     assert.deepEqual(namesOf(runner.toolList()), dsh, `${mode}: F8 与 DSH 工具集合必须一致`)
 
-    if (mode === 'autopilot') {
-      assert.ok(dsh.includes('advance_task'))
-      assert.ok(!dsh.includes('chop'), 'autopilot 不能暴露底层动作 chop')
-      assert.ok(!dsh.includes('run_skill'), 'autopilot 不能暴露 run_skill')
-    }
-    if (mode === 'manual') {
-      assert.ok(!dsh.includes('advance_task'), 'manual 必须隐藏 advance_task')
-      assert.ok(dsh.includes('chop') && dsh.includes('run_skill'), 'manual 必须暴露原子动作与技能')
-    }
-    if (mode === 'assisted') {
-      assert.ok(dsh.includes('advance_task') && dsh.includes('chop') && dsh.includes('run_skill'))
-    }
+    // 三模式工具集完全一致：完整原子动作 + run_skill + advance_task
+    assert.ok(dsh.includes('advance_task') && dsh.includes('chop') && dsh.includes('run_skill'), `${mode}: 必须暴露完整工具集`)
   }
 })
 
-test('R74-D3: Autopilot 系统提示必须讲清"只能用 advance_task 行动"，且与工具列表一致', () => {
+test('R74-D3: 三模式都用完整动作手册；Autopilot 额外强调“持续自主”，Manual 强调单次', () => {
   const auto = buildInstructions({ main: '主攻略' }, 'autopilot')
   assert.match(auto, /Autopilot/, 'Autopilot 提示要写明模式')
-  assert.match(auto, /advance_task/, '必须告诉模型用 advance_task 行动')
-  assert.match(auto, /必须至少调用一个工具|只能通过调用工具/, '必须强调要调用工具')
-  assert.doesNotMatch(auto, /能用的动作共\s*\d+\s*个/, 'Autopilot 不应再展示"40 个原子动作"清单（本模式没开放）')
-  // Assisted/Manual 仍用完整原子动作手册
+  assert.match(auto, /能用的动作共\s*\d+\s*个/, 'Autopilot 也要展示完整动作清单（现在是完整工具集）')
+  assert.match(auto, /持续自主|自己规划|连续自主/, 'Autopilot 要强调持续自主')
   const assisted = buildInstructions({ main: '主攻略' }, 'assisted')
-  assert.match(assisted, /能用的动作共\s*\d+\s*个/, 'Assisted/Manual 应保留完整动作清单')
-  assert.match(assisted, /harvest_nearest/, 'Assisted/Manual 应说明原子动作')
-  // 缺省（未传 mode）走完整手册，保持向后兼容
+  assert.match(assisted, /能用的动作共\s*\d+\s*个/, 'Assisted 应保留完整动作清单')
+  assert.match(assisted, /harvest_nearest/, 'Assisted 应说明原子动作')
+  const manual = buildInstructions({ main: 'x' }, 'manual')
+  assert.match(manual, /手动|只执行用户当下/, 'Manual 要强调单次指令')
   assert.equal(buildInstructions({ main: 'x' }), buildInstructions({ main: 'x' }, 'assisted'))
 })
 
-test('R74-D2: 回归守卫 —— index.js 不能把裸 toolList 直接传给 AiRunner（那会永远用 autopilot）', () => {
+test('R74-D2: 回归守卫 —— index.js 用动态工具表闭包（跟随当前 executionMode），不是裸 toolList', () => {
   const src = readFileSync(join(ROOT, 'lib', 'index.js'), 'utf8')
   assert.match(src, /toolList:\s*\(\)\s*=>\s*toolsForExecutionMode\(config\)/,
     'F8 必须用动态工具表闭包，跟随当前 executionMode')
-  assert.doesNotMatch(src, /\n\s{4}toolList,\n/, '不能再把裸函数 toolList 交给 AiRunner')
-  // 旧 bug 行为演示：裸 toolList 无参调用 = autopilot，在 manual 下会看不到 chop
-  const buggy = new AiRunner({ toolList })
-  assert.ok(!namesOf(buggy.toolList()).includes('chop'), '裸 toolList 会退回 autopilot —— 正是必须用闭包的原因')
+  assert.doesNotMatch(src, /\n\s{4}toolList,\n/, '不能把裸函数 toolList 交给 AiRunner')
 })
 
 const F8_RAW_STATE = {

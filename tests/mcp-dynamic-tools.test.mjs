@@ -89,8 +89,8 @@ test('MCP-01 ~ MCP-04: SSE 连接、listChanged 声明、模式切换通知与 t
       method: 'tools/list',
     })
     const toolNames1 = listRes1.body.result.tools.map((t) => t.name)
-    assert.ok(toolNames1.includes('advance_task'), 'autopilot 模式必须暴露 advance_task')
-    assert.ok(!toolNames1.includes('chop'), 'autopilot 模式严禁暴露底层动作 chop')
+    assert.ok(toolNames1.includes('advance_task'), 'autopilot 暴露 advance_task')
+    assert.ok(toolNames1.includes('chop'), 'autopilot 也暴露完整原子动作（模式不再裁剪工具）')
 
     // 3. 建立 SSE 连接
     const sseEvents = []
@@ -139,9 +139,9 @@ test('MCP-01 ~ MCP-04: SSE 连接、listChanged 声明、模式切换通知与 t
       method: 'tools/list',
     })
     const toolNames2 = listRes2.body.result.tools.map((t) => t.name)
-    assert.ok(!toolNames2.includes('advance_task'), 'manual 模式必须隐藏 advance_task')
-    assert.ok(toolNames2.includes('chop'), 'manual 模式必须暴露底层动作 chop')
-    assert.ok(toolNames2.includes('run_skill'), 'manual 模式必须暴露 run_skill')
+    assert.ok(toolNames2.includes('advance_task'), 'manual 也包含 advance_task（三模式统一工具集）')
+    assert.ok(toolNames2.includes('chop'), 'manual 暴露底层动作 chop')
+    assert.ok(toolNames2.includes('run_skill'), 'manual 暴露 run_skill')
 
     sseReq.destroy()
   } finally {
@@ -149,23 +149,14 @@ test('MCP-01 ~ MCP-04: SSE 连接、listChanged 声明、模式切换通知与 t
   }
 })
 
-test('MCP-05: 模式服务端权限硬校验：autopilot 拒绝原子动作，manual 拒绝 advance_task', async () => {
-  const ctxAutopilot = {
-    executionMode: 'autopilot',
-    log: () => {},
+test('MCP-05: 模式不再按 executionMode 拦截工具（三模式同一工具集，仅驱动不同）', async () => {
+  const call = async (name, args, mode) => {
+    try { return String(await executeTool(name, args, { executionMode: mode, log: () => {} })) }
+    catch (e) { return 'THREW:' + String(e?.message ?? e) }
   }
-  const ctxManual = {
-    executionMode: 'manual',
-    log: () => {},
-  }
-
-  // autopilot 模式调用底层动作 chop -> 返回权限拒绝提示
-  const resAutopilot = await executeTool('chop', { target_ref: '#1', snapshot_id: 's1' }, ctxAutopilot)
-  assert.ok(resAutopilot.includes('禁止直接调用底层原子动作【chop】'))
-
-  // manual 模式调用 advance_task -> 返回权限拒绝提示
-  const resManual = await executeTool('advance_task', {}, ctxManual)
-  assert.ok(resManual.includes('禁止调用【advance_task】'))
+  // autopilot 调用 chop / manual 调用 advance_task：都不应被“权限”拦截
+  assert.ok(!(await call('chop', { target_ref: '#1', snapshot_id: 's1' }, 'autopilot')).includes('禁止直接调用底层原子动作'))
+  assert.ok(!(await call('advance_task', {}, 'manual')).includes('禁止调用【advance_task】'))
 })
 
 test('MCP-06: SSE 客户端断开后安全注销，防止内存泄漏', async () => {

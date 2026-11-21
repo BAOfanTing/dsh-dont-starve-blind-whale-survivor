@@ -82,57 +82,30 @@ test('RUNTIME-02: 并发互斥锁生效，两个并发请求串行执行不冲�
   assert.equal(maxConcurrent, 1, '临界区内并发数最大只能为 1，确保世界互斥')
 })
 
-test('AUTOPILOT-01: tools/list 在不同模式下正确过滤工具暴露', () => {
+test('AUTOPILOT-01: 三种模式暴露完全相同的完整工具集（模式只影响驱动，不裁剪工具）', () => {
   const autopilotTools = toolList('autopilot').map((t) => t.name)
   const assistedTools = toolList('assisted').map((t) => t.name)
   const manualTools = toolList('manual').map((t) => t.name)
   const unknownModeTools = toolList('unknown_mode_xyz').map((t) => t.name)
 
-  // Autopilot: 应该有 advance_task, get_state, get_guide, update_notes, stop，严禁暴露 run_skill 与普通原子工具
-  assert.ok(autopilotTools.includes('advance_task'), 'Autopilot 必须暴露 advance_task')
-  assert.ok(autopilotTools.includes('get_state'), 'Autopilot 必须暴露 get_state')
-  assert.ok(autopilotTools.includes('get_guide'), 'Autopilot 必须暴露 get_guide')
-  assert.ok(autopilotTools.includes('stop'), 'Autopilot 必须暴露 stop')
-  assert.ok(!autopilotTools.includes('run_skill'), 'Autopilot 必须隐藏 run_skill 防止模型绕过任务看板')
-  assert.ok(!autopilotTools.includes('move_to'), 'Autopilot 禁止暴露 move_to')
-  assert.ok(!autopilotTools.includes('pickup_nearest'), 'Autopilot 禁止暴露 pickup_nearest')
-
-  // 未知模式：安全回退为 autopilot
-  assert.deepEqual(unknownModeTools, autopilotTools, '未知模式必须严格安全回退为 autopilot')
-
-  // Assisted: 暴露全部动作、技能与高层推进
-  assert.ok(assistedTools.includes('advance_task'))
-  assert.ok(assistedTools.includes('run_skill'))
-  assert.ok(assistedTools.includes('move_to'))
-  assert.ok(assistedTools.includes('pickup_nearest'))
-
-  // Manual: 隐藏 advance_task，暴露全部原子工具与技能
-  assert.ok(!manualTools.includes('advance_task'), 'Manual 模式必须隐藏 advance_task')
-  assert.ok(manualTools.includes('run_skill'), 'Manual 模式允许 run_skill')
-  assert.ok(manualTools.includes('move_to'), 'Manual 模式必须暴露 move_to')
-  assert.ok(manualTools.includes('pickup_nearest'), 'Manual 模式必须暴露 pickup_nearest')
+  assert.deepEqual(autopilotTools, assistedTools, 'Autopilot 与 Assisted 工具集必须一致')
+  assert.deepEqual(autopilotTools, manualTools, 'Autopilot 与 Manual 工具集必须一致')
+  assert.deepEqual(unknownModeTools, autopilotTools, '未知模式也返回完整工具集（不裁剪）')
+  for (const n of ['advance_task', 'run_skill', 'get_state', 'get_guide', 'update_notes', 'stop', 'move_to', 'pickup_nearest', 'harvest_nearest', 'craft', 'build', 'attack']) {
+    assert.ok(autopilotTools.includes(n), `Autopilot 也必须暴露 ${n}`)
+  }
 })
 
-test('AUTOPILOT-02: executeTool 服务端严格执行 executionMode 权限限制', async () => {
-  const ctxAutopilot = { executionMode: 'autopilot', bridge: null }
-  const ctxManual = { executionMode: 'manual', bridge: null }
-  const ctxUnknown = { executionMode: 'some_bad_mode', bridge: null }
-
-  // Autopilot 下调用原子动作直接被服务端拒绝
-  const deniedAtom = await executeTool('move_to', { x: 10, z: 10 }, ctxAutopilot)
-  assert.match(deniedAtom, /禁止直接调用底层原子动作/, 'Autopilot 模式下直接调用原子动作必须被服务端拦截')
-
-  // Autopilot 下调用 run_skill 被服务端拒绝（防止模型绕开看板直接指定技能）
-  const deniedSkill = await executeTool('run_skill', { skill_id: 'survival_stabilize' }, ctxAutopilot)
-  assert.match(deniedSkill, /禁止通过【run_skill】绕过任务看板/, 'Autopilot 模式下调用 run_skill 必须被服务端拦截')
-
-  // 未知模式安全回退为 Autopilot 拦截
-  const deniedUnknown = await executeTool('move_to', { x: 10, z: 10 }, ctxUnknown)
-  assert.match(deniedUnknown, /禁止直接调用底层原子动作/, '未知模式必须回退为 Autopilot 并拦截')
-
-  // Manual 下调用 advance_task 被服务端拒绝
-  const deniedAdvance = await executeTool('advance_task', {}, ctxManual)
-  assert.match(deniedAdvance, /当前处于手动模式.*禁止调用.*advance_task/, 'Manual 模式下调用 advance_task 必须被拦截')
+test('AUTOPILOT-02: executeTool 不再按 executionMode 拦截任何工具（模式只影响驱动）', async () => {
+  const call = async (name, args, mode) => {
+    try { return String(await executeTool(name, args, { executionMode: mode, bridge: null, log: () => {} })) }
+    catch (e) { return 'THREW:' + String(e?.message ?? e) }
+  }
+  // Autopilot 下调用原子动作 / run_skill：允许（可能因无游戏/无 bridge 失败，但**不是**权限拒绝）
+  assert.ok(!(await call('move_to', { x: 10, z: 10 }, 'autopilot')).includes('禁止直接调用底层原子动作'), 'Autopilot 不再按模式拦截 move_to')
+  assert.ok(!(await call('run_skill', { skill_id: 'survival_stabilize' }, 'autopilot')).includes('禁止通过【run_skill】'), 'Autopilot 不再按模式拦截 run_skill')
+  // Manual 下调用 advance_task：允许（不再禁用）
+  assert.ok(!(await call('advance_task', {}, 'manual')).includes('禁止调用【advance_task】'), 'Manual 不再禁用 advance_task')
 })
 
 test('AUTOPILOT-03: advance_task 能够根据任务看板连续执行多个原子动作并返回结构化报告', async () => {
