@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { AiRunner } from '../lib/agent.js'
 import { toolList } from '../lib/tools.js'
-import { toolsForExecutionMode } from '../lib/index.js'
+import { toolsForExecutionMode, buildInstructions } from '../lib/index.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -36,6 +36,20 @@ test('R74-D1: 三种执行模式下，F8 与 DSH 的工具集合完全一致，�
       assert.ok(dsh.includes('advance_task') && dsh.includes('chop') && dsh.includes('run_skill'))
     }
   }
+})
+
+test('R74-D3: Autopilot 系统提示必须讲清"只能用 advance_task 行动"，且与工具列表一致', () => {
+  const auto = buildInstructions({ main: '主攻略' }, 'autopilot')
+  assert.match(auto, /Autopilot/, 'Autopilot 提示要写明模式')
+  assert.match(auto, /advance_task/, '必须告诉模型用 advance_task 行动')
+  assert.match(auto, /必须至少调用一个工具|只能通过调用工具/, '必须强调要调用工具')
+  assert.doesNotMatch(auto, /能用的动作共\s*\d+\s*个/, 'Autopilot 不应再展示"40 个原子动作"清单（本模式没开放）')
+  // Assisted/Manual 仍用完整原子动作手册
+  const assisted = buildInstructions({ main: '主攻略' }, 'assisted')
+  assert.match(assisted, /能用的动作共\s*\d+\s*个/, 'Assisted/Manual 应保留完整动作清单')
+  assert.match(assisted, /harvest_nearest/, 'Assisted/Manual 应说明原子动作')
+  // 缺省（未传 mode）走完整手册，保持向后兼容
+  assert.equal(buildInstructions({ main: 'x' }), buildInstructions({ main: 'x' }, 'assisted'))
 })
 
 test('R74-D2: 回归守卫 —— index.js 不能把裸 toolList 直接传给 AiRunner（那会永远用 autopilot）', () => {
@@ -74,6 +88,7 @@ test('R74-E1: F8 只回自然语言、不调工具时，不误报执行、不绕
   const logs = []
   const notes = []
   const toolCalls = []
+  const sentMessages = []
   let chatCalls = 0
   const fakeSessionLog = {
     note: (m) => notes.push(String(m)),
@@ -87,8 +102,9 @@ test('R74-E1: F8 只回自然语言、不调工具时，不误报执行、不绕
     settings: () => ({ apiKey: 'k', baseUrl: 'http://127.0.0.1:1', model: 'fake', maxTokens: 64 }),
     instructions: () => '你是大肥鱼',
     toolList: () => toolsForExecutionMode({ executionMode: 'autopilot' }),
-    chatFn: async () => {
+    chatFn: async (config, messages) => {
       chatCalls++
+      sentMessages.push(JSON.parse(JSON.stringify(messages)))
       return { content: '我准备移动到附近的草丛。', thought: null, toolCalls: [], rawToolCalls: undefined, usage: null }
     },
     callTool: async (name, args) => {
@@ -106,6 +122,9 @@ test('R74-E1: F8 只回自然语言、不调工具时，不误报执行、不绕
   await sleep(50)
 
   assert.ok(chatCalls >= 2, '模型应被多次请求（有界重试）')
+  // 空转时必须给过一次"没有调用工具/当前可用工具"的接口层纠偏
+  const nudged = sentMessages.some((msgs) => msgs.some((m) => m.role === 'user' && /没有调用任何工具/.test(String(m.content ?? '')) && /advance_task/.test(String(m.content ?? ''))))
+  assert.ok(nudged, '模型空转时应提示"没有调用任何工具 + 可用工具 + 用 advance_task"')
   // 关键：只允许只读 get_state；绝不能因为"模型说要移动"就自行派发 move_to / advance_task
   const mutating = toolCalls.filter((c) => c.name !== 'get_state')
   assert.deepEqual(mutating, [], `模型没有 tool call 时不得自行派发游戏动作（实际：${JSON.stringify(mutating)}）`)

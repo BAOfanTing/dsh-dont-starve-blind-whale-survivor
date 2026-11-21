@@ -4,6 +4,17 @@
 
 ---
 
+## [Phase R.7.4.2] - 2026-11-21
+
+### 内置 AI 无动作：Autopilot 提示词与工具列表不一致 (Autopilot Prompt Parity)
+- 真机日志 `latestLogs/session.txt`：F8 内置 AI 每轮 `THINK ... 动作数=0`、`toolCalls: []`，只回自然语言，6 次后 `idle_give_up`，角色没有任何动作；
+- 根因：Autopilot 模式下 F8 实际只暴露 `advance_task / get_state / get_guide / update_notes / stop`，但系统提示词仍是"直接调用 `move_to / harvest_nearest` 等 40 个原子动作"的手册 → 模型按提示去调**本模式未开放**的动作，一个都调不出来；
+- 修复：`lib/index.js` 新增模式感知的 `buildInstructions(guides, mode)` 与 `AUTOPILOT_RULES`：Autopilot 明确"**只能通过调用工具行动**、用 `advance_task` 推进任务、不要调底层原子动作"，可用工具清单从 `toolList('autopilot')` 动态生成；Assisted/Manual 仍保留完整动作手册；F8 与 DSH 都按当前 `executionMode` 生成提示词（提示词 / 工具列表 / 服务端权限三者一致）；
+- `lib/agent.js`：模型首次"无 tool call"时给出一次**接口层纠偏**（列出当前可用工具并要求调用 `advance_task`），不自动执行游戏动作、不绕过 `runTool()`；
+- 更新测试 `tests/r74-agent-parity.test.mjs`（新增 D3：Autopilot 提示词一致性；强化 E1：空转纠偏提示）；Node 侧改动，不涉及模组 Lua，模组版本保持 0.41.1。
+
+---
+
 ## [Phase R.7.4.1] - 2026-11-21
 
 ### 游戏内小窗（HUD）位置与 F8 文案治理 (HUD Placement & F8 Feedback)
