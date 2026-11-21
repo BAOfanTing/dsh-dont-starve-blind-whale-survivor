@@ -150,3 +150,43 @@ test('基础状态机：初始 idle / stopping 判定 / getStatus 形状', () =>
   assert.equal(s.quarantined, false)
   assert.equal(typeof s.diagnostics, 'object')
 })
+
+test('隔离中再次停止：仍会停 Agent（修复 F8 停不下来）', async () => {
+  let agentStops = 0
+  let released = false
+  const co = new StopCoordinator({
+    readAuthority: () => ({ generation: 9 }),
+    getAgent: () => ({ stop: () => { agentStops++ }, waitIdle: async () => true }),
+    getRuntime: () => ({}),
+    runtimeStop: () => new Promise(() => {}), // 首次永不确认 → 隔离
+    releaseLease: async () => {},
+    isLockReleased: () => released,
+    defaultTimeoutMs: 50,
+  })
+  const r1 = await co.requestStop({ source: 'f8' })
+  assert.equal(r1.quarantined, true)
+  const before = agentStops
+  const r2 = await co.requestStop({ source: 'f8' })
+  assert.ok(agentStops > before, '隔离中再次 stop 仍必须调用 Agent.stop（不能 no-op）')
+  assert.equal(r2.quarantined, true)
+})
+
+test('隔离中若旧执行链已释放锁 → 再次停止自动解除隔离并完成', async () => {
+  let released = false
+  let calls = 0
+  const co = new StopCoordinator({
+    readAuthority: () => ({ generation: 10 }),
+    getAgent: () => ({ stop: () => {}, waitIdle: async () => true }),
+    getRuntime: () => ({}),
+    runtimeStop: () => (++calls === 1 ? new Promise(() => {}) : Promise.resolve({ status: 'succeeded', lock_released: true, command_id: 'c2' })),
+    releaseLease: async () => {},
+    isLockReleased: () => released,
+    defaultTimeoutMs: 50,
+  })
+  const r1 = await co.requestStop({ source: 'f8' })
+  assert.equal(r1.quarantined, true)
+  released = true // 旧执行链已退出
+  const r2 = await co.requestStop({ source: 'f8' })
+  assert.notEqual(r2.quarantined, true, '锁释放后应解除隔离')
+  assert.equal(co.isQuarantined(), false)
+})

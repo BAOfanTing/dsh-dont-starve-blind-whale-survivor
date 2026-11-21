@@ -172,8 +172,9 @@ test('QUARANTINE-04（D7）：stop 命令失败（且无锁）不能被当成成
   })
   const res = await runtime.stop({ timeoutMs: 1000 })
   assert.equal(res.status, 'unknown')
-  assert.equal(res.ok, false)
-  assert.equal(runtime.quarantined, true, '命令失败不能清掉隔离（D7）')
-  assert.equal(runtime.cancelRequested, true)
-  assert.equal(runtime.isBusy(), true)
+  assert.equal(res.ok, false, '不能伪造成功')
+  // 关键修正（D7）：没有持有锁时不应永久隔离，否则会永久 cancel、角色再也不动
+  assert.equal(runtime.quarantined, false, '无锁时不应永久隔离')
+  assert.equal(runtime.cancelRequested, false, '没有活动执行需要保护 → 恢复可用')
+  assert.equal(runtime.isBusy(), false)
 })
