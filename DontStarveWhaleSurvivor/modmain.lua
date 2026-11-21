@@ -108,8 +108,6 @@ modimport("scripts/whale/actions.lua")
 modimport("scripts/whale/battle.lua")
 -- 宏（任务级接口）：采集到够数 / 砍到够木头 / 锅做饭 / 守夜（依赖动作模块，放它之后）
 modimport("scripts/whale/macros.lua")
--- 家务宏（Chores：日常生存、备料、添柴、搜食、采花，完全由 Plan 调度，绝不在 Reflex 帧循环自作主张）
-modimport("scripts/whale/chores.lua")
 -- 保命反射层（极简高危保命）：仅限 3 秒必死危险（天黑无光即时点火、被怪贴脸反向走位、饥饿见底且背包有现成食物啃一口）
 modimport("scripts/whale/reflex.lua")
 modimport("scripts/whale/bridge.lua")

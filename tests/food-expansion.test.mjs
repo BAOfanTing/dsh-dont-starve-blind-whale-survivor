@@ -74,7 +74,7 @@ function createLuaEnv() {
   `)
 
   // 加载模块
-  for (const mod of ['util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'native', 'actions', 'chores', 'reflex']) {
+  for (const mod of ['util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'native', 'actions', 'reflex']) {
     if (mod === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'work', 'combat', 'survival', 'crafting', 'interaction']) {
         const subSrc = readFileSync(join(MOD, `scripts/whale/actions/${sub}.lua`), 'utf8')
@@ -88,16 +88,7 @@ function createLuaEnv() {
   return { run, get }
 }
 
-test('FE-1 chores 源码静态检查：push_harvest 必须下发 GLOBAL.ACTIONS.PICK', () => {
-  const choreSrc = readFileSync(join(MOD, 'scripts/whale/chores.lua'), 'utf8')
-  const start = choreSrc.indexOf('local function push_harvest(p, ent)')
-  assert.ok(start > 0, '必须定义 push_harvest')
-  const end = choreSrc.indexOf('local function push_pickup', start)
-  assert.ok(end > start, '必须定义 push_pickup')
-  const fnBody = choreSrc.slice(start, end)
-  assert.match(fnBody, /GLOBAL\.ACTIONS\.PICK\b/, 'push_harvest 必须使用 ACTIONS.PICK')
-  assert.doesNotMatch(fnBody, /GLOBAL\.ACTIONS\.HARVEST\b/, 'push_harvest 绝不能使用 ACTIONS.HARVEST')
-})
+
 
 test('FE-2 harvestrules 必须放行 carrot_planted、berrybush_juicy 与蘑菇', () => {
   const env = createLuaEnv()
@@ -155,100 +146,7 @@ test('FE-3 pickuprules 必须放行所有基础与熟食食物（肉/蛙腿/鱼/
   }
 })
 
-test('FE-4 chores 搜食宏在周围只有成熟 carrot_planted 时，forage 能正确采集', () => {
-  const env = createLuaEnv()
-  env.run(`
-    Whale.reflex_on = true
-    Whale.reflex_force_off = false
-    Whale.config = { Get = function(k) return true end }
-    Whale.bridge = { Report = function() end, WriteState = function() end }
 
-    LAST_PUSHED = nil
-    Whale.actions.push = function(p, ba)
-      LAST_PUSHED = ba
-      return true
-    end
-
-    local fake_carrot = {
-      prefab = "carrot_planted",
-      valid = true,
-      Transform = {
-        GetWorldPosition = function() return 2, 0, 2 end
-      },
-      IsValid = function() return true end,
-      IsInLimbo = function() return false end,
-      HasTag = function() return false end,
-      components = {
-        pickable = {
-          canbepicked = true,
-          caninteractwith = true,
-          CanBePicked = function() return true end,
-          IsStuck = function() return false end,
-          IsBarren = function() return false end,
-          product = "carrot",
-        }
-      }
-    }
-
-    GLOBAL.TheSim = {
-      FindEntities = function(self, x, y, z, radius)
-        return { fake_carrot }
-      end
-    }
-
-    GLOBAL.TheWorld = { state = { phase = "day" } }
-    Whale.craftrules = {
-      NeededIngredients = function() return { cutgrass = 2, twigs = 2 } end,
-      Counts = function() return { torch = 1, cutgrass = 10, twigs = 10 } end,
-      HasIngredients = function() return true end,
-    }
-    local fake_torch = {
-      prefab = "torch",
-      valid = true,
-      IsValid = function() return true end,
-      components = {
-        fueled = { IsEmpty = function() return false end, GetPercent = function() return 1 end }
-      }
-    }
-    local player = {
-      valid = true,
-      IsValid = function() return true end,
-      HasTag = function() return false end,
-      IsInLight = function() return true end,
-      GetBufferedAction = function() return nil end,
-      Transform = {
-        GetWorldPosition = function() return 0, 0, 0 end
-      },
-      components = {
-        hunger = { GetPercent = function() return 0.4 end },
-        health = { GetPercent = function() return 1 end, IsDead = function() return false end },
-        locomotor = {
-          PushAction = function(self, ba)
-            LAST_PUSHED = ba
-          end
-        },
-        inventory = {
-          GetEquippedItem = function(self, slot) return nil end,
-          ForEachItem = function(self, fn)
-            local cb = type(fn) == "function" and fn or (type(self) == "function" and self or nil)
-            if cb then cb(fake_torch) end
-          end,
-          FindItems = function(self, fn) return { fake_torch } end,
-        }
-      }
-    }
-    GLOBAL.AllPlayers = { [1] = player }
-    GLOBAL.ThePlayer = player
-
-    -- 调度 chores forage
-    Whale.chores.forage_food(player)
-
-    ACT_ID = (LAST_PUSHED and LAST_PUSHED.action and LAST_PUSHED.action.id) or "none"
-    TGT_PREFAB = (LAST_PUSHED and LAST_PUSHED.target and LAST_PUSHED.target.prefab) or "none"
-  `)
-  assert.equal(env.get('ACT_ID'), 'PICK', '反射采集必须下发 ACTIONS.PICK')
-  assert.equal(env.get('TGT_PREFAB'), 'carrot_planted', '反射采集目标必须是 carrot_planted')
-})
 
 test('FE-5 plan.js 能够在 harvestables 中识别并推荐采摘 carrot_planted', () => {
   const raw = {

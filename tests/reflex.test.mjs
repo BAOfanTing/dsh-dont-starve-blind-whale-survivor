@@ -303,9 +303,9 @@ function loadReflex(fengari, variant) {
     REPORTS = {}
   `, '文件桥桩')
   const mods = variant === 'noActions'
-    ? ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules', 'equiprules', 'config', 'native', 'chores', 'reflex']
+    ? ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules', 'equiprules', 'config', 'native', 'reflex']
     : ['json', 'util', 'pickuprules', 'harvestrules', 'gatherrules', 'eatrules', 'craftrules',
-       'equiprules', 'config', 'native', 'actions', 'chores', 'reflex']
+       'equiprules', 'config', 'native', 'actions', 'reflex']
   for (const name of mods) {
     if (name === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'work', 'combat', 'survival', 'crafting', 'interaction']) {
@@ -757,32 +757,7 @@ test('RF-15（要求18）：变成鬼魂（playerghost 标签）也重置', asyn
   assert.equal(global('JOB'), 'nil')
 })
 
-test('RF-17（职责收窄）：Reflex 帧循环不擅自采料，家务由 chores 显式调度采树苗', async () => {
-  const fengari = await import('fengari')
-  const { run, runFile, global } = loadReflex(fengari)
-  run(`
-    local sapling = newent("sapling", 2 * 4, 0, { "pickable" }, {
-        pickable = { CanBePicked = function() return true end },
-    })
-    NEARBY = { sapling }        -- 故意不放 grass
-  `, '附近只有树苗，没有草')
-  runFile(`
-    Whale.reflex_on = true
-    Whale.reflex_force_off = false
-    ${eachTick(5)}
-    REFLEX_PUSHED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
 
-    -- 采备料由 chores 显式调度
-    local ok, reason = Whale.chores.stock_light_materials(PLAYER)
-    CHORE_OK = tostring(ok)
-    PUSH_PREFAB = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
-    ACTION = PUSHED ~= nil and PUSHED.action ~= nil and PUSHED.action.id or "nil"
-  `)
-  assert.equal(global('REFLEX_PUSHED'), 'nil', 'Reflex 帧循环不擅自抢占采材料')
-  assert.equal(global('CHORE_OK'), 'true')
-  assert.equal(global('PUSH_PREFAB'), 'sapling', '附近没有草时 chores 采树苗')
-  assert.equal(global('ACTION'), 'PICK')
-})
 
 test('RF-18（真机 bug）：诊断日志限频，且不把诊断塞进 get_state 的「最近做过的事」', async () => {
   const fengari = await import('fengari')
@@ -1066,33 +1041,7 @@ test('RF-25（破局）：天黑没光、没草但有 log+rocks —— 反射走
   assert.equal(global('CMD'), 'reflex')
 })
 
-test('RF-26（职责收窄）：Reflex 帧循环绝不漫游寻路，远距离寻料由 chores 有界走过去', async () => {
-  const fengari = await import('fengari')
-  const { run, runFile, global } = loadReflex(fengari)
-  run(`
-    GLOBAL.TheWorld.state.phase = "day"
-    -- 20 格外有一丛可采的草；16 格内什么都没有
-    local grass = newent("grass", 20 * 4, 0, { "pickable" }, {
-        pickable = { CanBePicked = function() return true end },
-    })
-    NEARBY = { grass }
-  `, '白天 + 只有远处的草')
-  runFile(`
-    Whale.reflex_on = true
-    Whale.reflex_force_off = false
-    ${eachTick(5)}
-    ${eachTick(5)}
-    REFLEX_JOB = Whale.job ~= nil and Whale.job.name or "nil"
-    PUSHED_NEAR = PUSHED ~= nil and "yes" or "no"
 
-    -- 由 chores 执行有界靠近
-    local ok, reason = Whale.chores.stock_light_materials(PLAYER)
-    CHORE_JOB = Whale.job ~= nil and Whale.job.name or "nil"
-  `)
-  assert.equal(global('PUSHED_NEAR'), 'no', '16 格内没目标时不该硬推采集')
-  assert.equal(global('REFLEX_JOB'), 'nil', 'Reflex 帧循环绝不在白天擅自 move_to 漫游寻路')
-  assert.equal(global('CHORE_JOB'), 'move_to', '备料由 chores 有界靠近远处目标')
-})
 
 test('RF-27（边界）：夜里 / 有敌人 / 目标太远 —— 都不许主动走远', async () => {
   for (const scenario of ['night', 'enemy', 'too_far']) {
@@ -1125,11 +1074,7 @@ test('RF-27（边界）：夜里 / 有敌人 / 目标太远 —— 都不许主�
   }
 })
 
-test('RF-28：家务宏 SEEK_MAX_TILES 有明确上限，不是无目的乱走', () => {
-  const src = readFileSync(join(MOD, 'scripts', 'whale', 'chores.lua'), 'utf8')
-  assert.match(src, /SEEK_MAX_TILES\s*=\s*22/, '单步移动距离有上限')
-  assert.match(src, /tiles\s*>\s*16\s*and\s*tiles\s*<=\s*limit_tiles/, '必须同时满足"16格外 + 不超过上限"')
-})
+
 
 test('RF-29（真机 bug：蜘蛛巢把火把卡在手上）：固定巢穴不该阻止白天收火把', async () => {
   const fengari = await import('fengari')
@@ -1160,34 +1105,7 @@ test('RF-29（真机 bug：蜘蛛巢把火把卡在手上）：固定巢穴不�
   assert.equal(global('HAND'), 'nil', '火把必须收进背包，不能举着烧光')
 })
 
-test('RF-30（职责收窄）：Reflex 不在后台自动捡草，由 chores 优先捡地上现成的 cutgrass', async () => {
-  const fengari = await import('fengari')
-  const { run, runFile, global } = loadReflex(fengari)
-  run(`
-    GLOBAL.TheWorld.state.phase = "day"
-    -- 9 格处有 3 份「采下的草」，附近没有可采的草丛
-    local dropped = newent("cutgrass", 9 * 4, 0, {}, {
-        inventoryitem = { owner = nil },
-    })
-    NEARBY = { dropped }
-  `, '白天 + 地上有现成的草')
-  runFile(`
-    Whale.reflex_on = true
-    Whale.reflex_force_off = false
-    ${eachTick(5)}
-    REFLEX_PICKED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
 
-    -- 由 chores 执行捡拾
-    local ok, reason = Whale.chores.stock_light_materials(PLAYER)
-    CHORE_OK = tostring(ok)
-    PICKED = PUSHED ~= nil and PUSHED.target ~= nil and PUSHED.target.prefab or "nil"
-    ACTION = PUSHED ~= nil and PUSHED.action ~= nil and PUSHED.action.id or "nil"
-  `)
-  assert.equal(global('REFLEX_PICKED'), 'nil', 'Reflex 帧循环不擅自捡草')
-  assert.equal(global('CHORE_OK'), 'true')
-  assert.equal(global('PICKED'), 'cutgrass', '地上的现成材料由 chores 优先捡')
-  assert.equal(global('ACTION'), 'PICKUP')
-})
 
 test('RF-31（安全不放宽）：真正贴脸的活怪仍阻止白天收火把', async () => {
   const fengari = await import('fengari')
