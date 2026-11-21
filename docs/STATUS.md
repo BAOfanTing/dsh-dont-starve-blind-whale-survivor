@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.0)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)｜**完成统一任务执行核心可靠性与 F8/DSH 接入一致性治理 (Phase R.7.4)**｜全量自动化测试 **1083/1083 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.1)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)｜**完成统一任务执行核心可靠性与 F8/DSH 接入一致性治理 (Phase R.7.4)**｜全量自动化测试 **1083/1083 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -57,7 +57,7 @@ DSH MCP:     模型 → MCP Client → executeTool() → runTool() → executeTo
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.41.0** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.41.1** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
 | `package.json` | **0.12.0** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号描述两个交付物：模组装进游戏 `mods/`，插件装进 DSH。给 AI 报告的状态以模组版本为准。

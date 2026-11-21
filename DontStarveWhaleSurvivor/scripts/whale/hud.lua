@@ -30,6 +30,12 @@ local TOGGLE_IO_FILE = "whale_io_toggle.json"
 local WIDTH = 330
 local FONT_SIZE = 19
 local LINE_H = 24
+-- 右上角面板：距离屏幕右/上边缘的内边距
+local MARGIN = 12
+local PANEL_MIN_H = LINE_H * 3 + 18
+-- F8 切换后的一小段时间窗：以"本地刚按下的意图"为准，避免用插件旧的 HUD 文本把
+-- 状态/提示语又改回去（真机 bug：按 F8 想开始，却显示"先停下"）。
+local OPTIMISTIC_WINDOW = 2
 
 local root = nil
 local bg = nil
@@ -43,6 +49,8 @@ local last_render = ""
 local ai_wanted = false
 local hud_visible = true       -- F7 只控制这个：隐藏后照常刷新，下次显示就是最新的
 local attach_fail_logged = false
+-- F8 乐观切换截止时间（os.time 秒）。在此之前，refresh 不采纳插件回写的旧 ai 状态。
+local optimistic_until = 0
 
 -- ─────────────────── 文件读写（io 优先，退回持久化字符串） ───────────────────
 
@@ -112,18 +120,19 @@ local function ensure_widget(owner)
     failed = false
     local ok = pcall(function()
         root = Widget("whale_hud_root")
-        root:SetHAnchor(GLOBAL.ANCHOR_LEFT)
-        root:SetVAnchor(GLOBAL.ANCHOR_MIDDLE)
+        -- ★ 放到屏幕**右上角**：左侧是游戏原生 UI（背包/状态/出生点徽标）的地盘，
+        --   小窗压在左边会被原生控件盖住，表现为"文字看不见/左半截被吃掉"。
+        root:SetHAnchor(GLOBAL.ANCHOR_RIGHT)
+        root:SetVAnchor(GLOBAL.ANCHOR_TOP)
         root:SetScaleMode(GLOBAL.SCALEMODE_PROPORTIONAL)
-        -- ★ 真机 bug：root 锚在屏幕左边缘（x=28），但下面 bg / label 又按"以 root 为中心"
-        --   来摆（label x = -WIDTH/2 + 14）。结果文字被推到 x≈-123，整个跑到屏幕外，
-        --   只剩背景右半截贴在左边缘 —— 看上去就是"没有小窗"。
-        --   把 root 往右挪半个宽度，整块面板就落在 [28, 28+WIDTH] 里。
-        root:SetPosition(28 + WIDTH / 2, 10, 0)
+        -- 子控件（bg / label）都以 root 原点为中心摆放；root 原点放在
+        -- "右边缘左移 MARGIN+WIDTH/2、上边缘下移 MARGIN+PANEL_H/2" 处，
+        -- 整块面板就落在 [右-MARGIN-WIDTH, 右-MARGIN] × [上+MARGIN, 上+MARGIN+PANEL_H]。
+        root:SetPosition(-(MARGIN + WIDTH / 2), -(MARGIN + PANEL_MIN_H / 2), 0)
 
         bg = root:AddChild(Image("images/global.xml", "square.tex"))
         bg:SetTint(0, 0, 0, 0.62)
-        bg:SetSize(WIDTH, LINE_H * 3 + 18)
+        bg:SetSize(WIDTH, PANEL_MIN_H)
 
         local font = GLOBAL.DEFAULTFONT
         label = root:AddChild(Text(font, FONT_SIZE))
@@ -136,6 +145,9 @@ local function ensure_widget(owner)
         label:SetColour(1, 1, 1, 1)
         label:SetString("")
         label:SetPosition(0, 0, 0)
+        -- 新控件是空的：把上次的渲染缓存清掉，否则 render 会以为"没变化"直接跳过，
+        -- 出现"新建了 HUD 但小窗一片空白"。
+        last_render = ""
     end)
     if not ok then
         failed = true
@@ -171,6 +183,8 @@ local function render(lines, title)
     last_render = text
     local height = LINE_H * #parts + 16
     pcall(function()
+        -- 面板高度随行数变化：重新把 root 原点居中到"右上角那块面板"的中心。
+        root:SetPosition(-(MARGIN + WIDTH / 2), -(MARGIN + height / 2), 0)
         label:SetString(text)
         label:SetRegionSize(WIDTH - 28, height - 20)
         label:SetHAlign(GLOBAL.ANCHOR_LEFT)
@@ -183,22 +197,31 @@ end
 local function refresh()
     if root == nil then return end
     poll_hud()
+    local pending = os.time() < optimistic_until
     local text = read_hud_text()
-    if text == nil then
-        render(default_lines())
-        return
+    local ok, data = false, nil
+    if text ~= nil then
+        ok, data = pcall(Whale.json.decode, Whale.util.strip_header(text))
     end
-    local ok, data = pcall(Whale.json.decode, Whale.util.strip_header(text))
-    if not ok or type(data) ~= "table" then
-        render(default_lines())
-        return
+    -- ★ 只在"解码成功且不处于刚按 F8 的乐观窗口"时采纳插件回写的 ai 状态，
+    --   否则按 F8 的瞬间会被插件旧文本改回去（真机：想开始却显示"先停下"）。
+    if ok and type(data) == "table" and data.ai ~= nil and not pending then
+        ai_wanted = data.ai and true or false
     end
-    if data.ai ~= nil then ai_wanted = data.ai and true or false end
-    local title = "大肥鱼"
-    if data.ai then
-        title = "大肥鱼 ● 在玩" .. (data.step ~= nil and ("（第 " .. tostring(data.step) .. " 步）") or "")
+    local step = (ok and type(data) == "table") and data.step or nil
+    local title
+    if ai_wanted then
+        title = "大肥鱼 ● 在玩" .. (step ~= nil and ("（第 " .. tostring(step) .. " 步）") or "")
     else
         title = "大肥鱼 ○ 停着"
+    end
+    if pending then
+        render({ ai_wanted and "正在启动…" or "正在停下…" }, title)
+        return
+    end
+    if not ok or type(data) ~= "table" then
+        render(default_lines(), title)
+        return
     end
     render(data.lines, title)
 end
@@ -206,12 +229,17 @@ end
 -- ─────────────────── 快捷键 ───────────────────
 
 local function toggle_ai()
-    write_toggle(not ai_wanted, false)
+    local want = not ai_wanted
+    -- 先按本地意图落状态并进入短乐观窗口，再写开关、重绘、提示——
+    -- 提示语与实际意图严格对应（want=true 说"开始"，want=false 说"先停下"）。
+    ai_wanted = want
+    optimistic_until = os.time() + OPTIMISTIC_WINDOW
+    write_toggle(want, false)
     refresh()
     if GLOBAL.ThePlayer ~= nil and GLOBAL.ThePlayer.components ~= nil
             and GLOBAL.ThePlayer.components.talker ~= nil then
         pcall(function()
-            GLOBAL.ThePlayer.components.talker:Say(ai_wanted and "开始自己玩了" or "先停下", 2)
+            GLOBAL.ThePlayer.components.talker:Say(want and "开始自己玩了" or "先停下", 2)
         end)
     end
 end
@@ -380,7 +408,7 @@ function H.Attach(screen, player)
             if hud_visible then root:Show() else root:Hide() end
         end)
     end
-    Whale.util.log("HUD 已挂上（画面左侧）")
+    Whale.util.log("HUD 已挂上（画面右上角）")
     pcall(function()
         p:DoPeriodicTask(0.5, function()
             local ok, err = pcall(refresh)

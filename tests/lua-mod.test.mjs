@@ -1142,7 +1142,8 @@ test('HUD 模块能在沙箱里加载，F8 会写出开关', async () => {
     }
   }
   const prelude = `
-GLOBAL = { KEY_F7 = 288, KEY_F8 = 289, ANCHOR_LEFT = 0, ANCHOR_MIDDLE = 2, ANCHOR_TOP = 3,
+GLOBAL = { KEY_F7 = 288, KEY_F8 = 289, ANCHOR_LEFT = 0, ANCHOR_RIGHT = 1, ANCHOR_MIDDLE = 2,
+           ANCHOR_TOP = 3, ANCHOR_BOTTOM = 4,
            DEFAULTFONT = "opensans", SCALEMODE_PROPORTIONAL = 1 }
 GLOBAL.pcall = pcall
 GLOBAL.tonumber = tonumber
@@ -1167,8 +1168,8 @@ local function fakewidget()
     widget.SetVAlign = function() end
     widget.SetRegionSize = function(self, w, h) self._region = { w, h } end
     widget.SetColour = function() end
-    widget.SetHAnchor = function() end
-    widget.SetVAnchor = function() end
+    widget.SetHAnchor = function(self, a) self._hAnchor = a end
+    widget.SetVAnchor = function(self, a) self._vAnchor = a end
     widget.SetScaleMode = function() end
     widget.AddChild = function(self, child) self.child = child return child end
     widget.Kill = function() end
@@ -1229,8 +1230,8 @@ Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(ms
     assert(Whale.hud.anim_for(8, false) == "run_loop", "服务端在挪我，应该自己播跑步")
     assert(Whale.hud.anim_for(0.1, false) == "idle_loop", "停下了就应该回 idle")
     assert(Whale.hud.anim_for(nil, false) == "idle_loop", "还测不出速度时按停着算")
-    -- 挂上去之后根节点的 x 必须在屏幕内：x=28 是"锚点位置"，不是面板中心；
-    -- 面板宽度 330，中心至少要到 165，否则文字会被推到屏幕左边外面。
+    -- 挂上去之后必须落在**屏幕右上角**：锚在右/上边，root 原点在右边缘左侧。
+    -- 面板宽度 330，中心距右边缘 MARGIN+165；面板右边缘 = 右边界 - MARGIN 仍在屏内。
     local screen = { AddChild = function(self, child) self.child = child end, owner = nil }
     local player = { DoPeriodicTask = function() end }
     screen.owner = player
@@ -1248,7 +1249,10 @@ Whale = { files = {}, util = { log = function(msg) LOGS[#LOGS + 1] = tostring(ms
     assert(screen.child.child._region ~= nil and screen.child.child._region[1] > 0,
         "文字必须设置 region size，否则 SetHAlign(LEFT) 不生效，左半截会被裁掉")
     local root_x = screen.child._pos[1]
-    assert(root_x >= 165, "HUD 位置太靠左，面板会被推出屏幕：x=" .. tostring(root_x))
+    assert(screen.child._hAnchor == GLOBAL.ANCHOR_RIGHT, "HUD 必须锚在屏幕右侧（右上角布局）")
+    assert(screen.child._vAnchor == GLOBAL.ANCHOR_TOP, "HUD 必须锚在屏幕顶部（右上角布局）")
+    assert(root_x < 0, "右上角布局下 root 原点应在右边缘左侧（x 为负），x=" .. tostring(root_x))
+    assert(root_x + 165 <= 0, "面板右边缘不能超出屏幕右边缘：x=" .. tostring(root_x))
     assert(screen.child._visible == true, "挂上后小窗默认应该可见")
     KEYHANDLERS[1](GLOBAL.KEY_F7, true)
     assert(screen.child._visible == false, "F7 应该真的隐藏 HUD 根节点")
