@@ -393,8 +393,11 @@ function G.validate(cmd)
     local authority, why_auth = G.read_authority()
     if authority == nil then return false, why_auth or "authority_unavailable", nil end
     if authority.status == "revoking" then
-        -- 观察换手：安全停掉旧动作并写确认（确认由 bridge.lua 提供，复用既有 A.Abort）
+        -- 观察换手：先真正中止当前游戏动作（R8.0 D9：之前只写 ack 不 Abort，换手时旧 job 继续跑），再写确认。
         pcall(function()
+            if Whale ~= nil and Whale.actions ~= nil and Whale.actions.Abort ~= nil then
+                Whale.actions.Abort("lease_handover")
+            end
             if Whale ~= nil and Whale.bridge ~= nil and Whale.bridge.WriteLeaseAck ~= nil then
                 Whale.bridge.WriteLeaseAck(authority)
             end

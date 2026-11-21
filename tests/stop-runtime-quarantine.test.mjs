@@ -127,3 +127,53 @@ test('QUARANTINE-02: 当持有锁的任务在 stop 超时内正常退出时，�
   const nextRes = await runtime.withLock(async () => 'next_allowed')
   assert.equal(nextRes, 'next_allowed')
 })
+
+test('QUARANTINE-03（D6）：stop 以「当前租约持有者」身份下发，而不是请求者', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'bws-holder-'))
+  const memoryStore = createWorldMemoryStore({ dir: join(tempDir, 'mem') })
+  const seen = {}
+  const mockDispatcher = {
+    specs: {},
+    describe: () => 'ok',
+    dispatch: async (req) => {
+      if (req.tool === 'stop') { seen.owner = req.owner; seen.instance = req.ownerInstanceId; return { status: 'succeeded', commandId: 'c-holder' } }
+      return { status: 'succeeded' }
+    },
+  }
+  const runtime = new WorldRuntime({
+    worldKey: 'world-holder-1',
+    store: memoryStore,
+    dispatcher: mockDispatcher,
+    readSnapshot: () => ({ identity: { worldKey: 'world-holder-1' }, actor: {} }),
+    readAuthority: () => ({ owner_type: 'f8_agent', owner_instance_id: 'inst-A', generation: 5 }),
+  })
+  const res = await runtime.stop({ owner: 'mcp_client', ownerInstanceId: 'inst-M', timeoutMs: 1000 })
+  assert.equal(seen.owner, 'f8_agent', 'stop 必须以租约持有者身份下发（否则被 control_denied）')
+  assert.equal(seen.instance, 'inst-A')
+  assert.equal(res.status, 'succeeded')
+})
+
+test('QUARANTINE-04（D7）：stop 命令失败（且无锁）不能被当成成功清标志，必须进入隔离', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'bws-d7-'))
+  const memoryStore = createWorldMemoryStore({ dir: join(tempDir, 'mem') })
+  const mockDispatcher = {
+    specs: {},
+    describe: () => 'ok',
+    dispatch: async (req) => {
+      if (req.tool === 'stop') return { status: 'failed', reason: 'dispatch_error' }
+      return { status: 'succeeded' }
+    },
+  }
+  const runtime = new WorldRuntime({
+    worldKey: 'world-d7-1',
+    store: memoryStore,
+    dispatcher: mockDispatcher,
+    readSnapshot: () => ({ identity: { worldKey: 'world-d7-1' }, actor: {} }),
+  })
+  const res = await runtime.stop({ timeoutMs: 1000 })
+  assert.equal(res.status, 'unknown')
+  assert.equal(res.ok, false)
+  assert.equal(runtime.quarantined, true, '命令失败不能清掉隔离（D7）')
+  assert.equal(runtime.cancelRequested, true)
+  assert.equal(runtime.isBusy(), true)
+})

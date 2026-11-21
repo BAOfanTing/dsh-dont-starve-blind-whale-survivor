@@ -118,7 +118,7 @@ function loadMod(fengari) {
   run(FILES, '文件名')
   for (const name of [
     'json', 'util', 'pickuprules', 'harvestrules', 'eatrules', 'craftrules', 'equiprules',
-    'config', 'actor', 'nearby', 'observe', 'native', 'actions', 'bridge',
+    'config', 'actor', 'nearby', 'observe', 'native', 'actions', 'guard_specs', 'guard', 'bridge',
   ]) {
     if (name === 'actions') {
       for (const sub of ['core', 'movement', 'gathering', 'work', 'combat', 'survival', 'crafting', 'interaction']) {
@@ -200,4 +200,25 @@ test('STOP-LUA-02: 当处于 Reflex 保命状态时，stop 指令被拒绝，Ref
     assert(Whale.job ~= nil and Whale.job.cmd_id == "reflex", "当前在行动作依然是 Reflex")
     assert(#REPORTS == 0, "被拒绝的 stop 绝不能上报打断原有任务")
   `)
+})
+
+test('STOP-LUA-03（D9）：换手(revoking)时必须真正 Abort 当前游戏动作，而不只是写 ack', async () => {
+  const fengari = await import('fengari')
+  const { run, global } = loadMod(fengari)
+  run(`
+    REPORTS = {}
+    ACKED = false
+    Whale.bridge.Report = function(ok, text, cmd_id) table.insert(REPORTS, { ok = ok, text = text, cmd_id = cmd_id }) end
+    Whale.bridge.WriteLeaseAck = function() ACKED = true end
+    assert(Whale.actions.Start("move_to", { x = 20, z = 20 }, "cmd_prev"), "启动 move_to")
+    Whale.guard.read_authority = function() return { status = "revoking", authority_epoch = "e1", generation = 2, lease_id = "l1", runtime_id = "r1", expires_at = (os.time() * 1000.0) + 60000 } end
+    local ok, why = Whale.guard.validate({ protocol_version = 1, command_id = "cmd_new", action = "move_to", args = { x = 1, z = 1 }, expires_at = (os.time() * 1000.0) + 60000 })
+    RET_OK = tostring(ok)
+    RET_WHY = tostring(why)
+  `)
+  assert.equal(global('RET_OK'), 'false')
+  assert.match(global('RET_WHY'), /authority_revoking/)
+  run('assert(Whale.job == nil, "换手时必须已 Abort 掉旧 job")')
+  run('assert(ACKED == true, "换手仍要写 lease ack")')
+  run('assert(#REPORTS >= 1, "Abort 应为旧 cmd 报一条被打断回执")')
 })
