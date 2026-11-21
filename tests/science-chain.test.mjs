@@ -388,9 +388,10 @@ test('SM-8：prefab 名允许数字 —— 石头真名就是 rock1 / rock2（�
 
 test('SM-10：科学机器的材料是**原木 log**，不是木板 boards —— 说明书不能写错', () => {
   // 原版 recipes.lua: Recipe2("researchlab", {goldnugget 1, log 4, rocks 4}, TECH.NONE)
-  // 之前 Lua 注释和 tools.js 的说明都写成"4 木板"，模型照这个去准备会做一堆 boards，
+  // 之前 Lua 注释和工具定义的说明都写成"4 木板"，模型照这个去准备会做一堆 boards，
   // 而 boards 本身要 TECH.SCIENCE_ONE（得先有机器）—— 死循环。
-  const tools = readFileSync(join('lib', 'tools.js'), 'utf8')
+  // 工具定义已从 tools.js 抽到 lib/actions/tool-defs.js（纯搬移）。
+  const tools = readFileSync(join('lib', 'actions', 'tool-defs.js'), 'utf8')
   // build 在 cook 之后，所以要从 build 起始位置切到下一个工具定义
   const start = tools.indexOf("name: 'build'")
   assert.ok(start > 0, '找不到 build 工具定义')

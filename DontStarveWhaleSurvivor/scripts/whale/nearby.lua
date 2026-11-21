@@ -328,7 +328,7 @@ end
 --- 高精度计时（毫秒）。用于 measure 单次扫描耗时。
 --- 优先级：
 ---   1) os.clock()  —— CPU 时间，亚毫秒精度（测"这段函数花了多久"最合适）
----   2) TheSim:GetRealTime() —— 引擎真实时间，单位**毫秒**（见 scripts/mainfunctions.lua:608/612）
+---   2) TheSim:GetRealTime() —— 引擎真实时间，单位**毫秒**（见 docs/reference/mainfunctions.lua:608/612，原版源码参考副本）
 ---   两个都拿不到就返回 nil（调用方写 null，不伪装成 0）
 --- 返回：(毫秒 | nil, 来源字符串)
 local function clock_ms()
