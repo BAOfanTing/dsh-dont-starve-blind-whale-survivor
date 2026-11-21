@@ -576,7 +576,7 @@ function G.validate(cmd)
             if ax == nil or ex == nil then return false, "target_not_pickable", nil end
             local dx, dz = ax - ex, az - ez
             local tiles = math.sqrt(dx * dx + dz * dz) / U.TILE
-            if tiles > G.PICKUP_MAX_TILES then return false, "out_of_range", nil end
+            if tiles > G.PICKUP_MAX_TILES then return false, "out_of_range", { hint = (function() local _x,_y,_z = U.pos(near_ent); local _tx,_tz = U.tile_of(_x,_z); local _d = U.dist(actor, near_ent)/U.TILE; return string.format("目标在 (%d,%d)（approach_x=%d,approach_z=%d，距 %.1f 格）；先 move_to 靠近再采", _tx,_tz,_tx,_tz,_d) end)() } end
         elseif action == "harvest_nearest" then
             local hr = Whale ~= nil and Whale.harvestrules or nil
             if hr == nil then return false, "harvest_rules_missing", nil end
@@ -585,7 +585,7 @@ function G.validate(cmd)
             -- ★ 成熟度必须在执行前再判一次：Candidate != Ready（未成熟不许采）
             local ok_ready, why_ready = hr.IsReady(near_ent)
             if not ok_ready then return false, why_ready or "not_ready", nil end
-            if not hr.InNativeRange(actor, near_ent) then return false, "out_of_range", nil end
+            if not hr.InNativeRange(actor, near_ent) then return false, "out_of_range", { hint = (function() local _x,_y,_z = U.pos(near_ent); local _tx,_tz = U.tile_of(_x,_z); local _d = U.dist(actor, near_ent)/U.TILE; return string.format("目标在 (%d,%d)（approach_x=%d,approach_z=%d，距 %.1f 格）；先 move_to 靠近再采", _tx,_tz,_tx,_tz,_d) end)() } end
         else
             local want_action = (action == "chop_nearest") and "CHOP" or "MINE"
             local w = near_ent.components ~= nil and near_ent.components.workable or nil
@@ -595,7 +595,7 @@ function G.validate(cmd)
                 return false, "wrong_work_action", nil
             end
             local d = U.dist(actor, near_ent)
-            if d ~= nil and d > 6 * 4 then return false, "out_of_range", nil end
+            if d ~= nil and d > 6 * 4 then return false, "out_of_range", { hint = (function() local _x,_y,_z = U.pos(near_ent); local _tx,_tz = U.tile_of(_x,_z); local _d = U.dist(actor, near_ent)/U.TILE; return string.format("目标在 (%d,%d)（approach_x=%d,approach_z=%d，距 %.1f 格）；先 move_to 靠近再采", _tx,_tz,_tx,_tz,_d) end)() } end
         end
         target = near_ent
     end
@@ -619,7 +619,7 @@ function G.validate(cmd)
         if not ok_ready then return false, why_ready or "not_ready", nil end
 
         -- ★ 距离照抄原生 PickRangeCheck
-        if not gr.InNativeRange(actor, ent) then return false, "out_of_range", nil end
+        if not gr.InNativeRange(actor, ent) then return false, "out_of_range", { hint = (function() local _x,_y,_z = U.pos(ent); local _tx,_tz = U.tile_of(_x,_z); local _d = U.dist(actor, ent)/U.TILE; return string.format("目标在 (%d,%d)（approach_x=%d,approach_z=%d，距 %.1f 格）；先 move_to 靠近再采", _tx,_tz,_tx,_tz,_d) end)() } end
 
         target = ent
     end

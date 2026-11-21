@@ -142,8 +142,9 @@ test('SEEK-05: Non-seek 动作默认超时不被 seek budget 意外覆盖', asyn
   })
 
   assert.ok(calledBridgeEnvelope)
-  assert.equal(calledBridgeTimeout, 105000, '普通动作保持默认 timeoutMs (105s)')
-  assert.equal(calledBridgeEnvelope.budget_s, 90, '普通动作按默认超时计算 budget_s (105 - 15 = 90s)')
+  // R8.x A：普通动作现在按“分级超时上限”截断（chop=30s），不再沿用超长默认；仍与 seek 的独立预算无关。
+  assert.equal(calledBridgeTimeout, 30000, '普通动作按分级上限 chop=30s')
+  assert.equal(calledBridgeEnvelope.budget_s, 15, 'budget_s 由分级超时算出 (30 - 15 = 15s)')
 })
 
 test('SEEK-06: seek 动作在 abort 时立刻 reject 且不挂起等待', async () => {

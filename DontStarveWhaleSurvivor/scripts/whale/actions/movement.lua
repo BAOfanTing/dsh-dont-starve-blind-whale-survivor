@@ -279,89 +279,48 @@ JOBS.seek = function(j, p)
     if j.step == "start" then
         j.data.want = tostring(ctx.prefab or "")
         if j.data.want == "" then return "fail", "seek 要传 prefab" end
-        j.data.max_tiles = math.max(4, tonumber(ctx.max_tiles) or 40)
-        j.data.step_tiles = math.min(j.data.max_tiles, math.max(4, tonumber(ctx.step) or 10))
-        j.data.look = math.max(8, tonumber(ctx.look) or 16)
+        j.data.max_tiles = math.min(60, math.max(4, tonumber(ctx.max_tiles) or 40))
         local px, _, pz = U.pos(p)
         if px == nil then return "fail", "读不到自己的位置" end
         j.data.origin = { px, pz }
-        local dirs = {
-            { 1, 0 }, { 0.7071, 0.7071 }, { 0, 1 }, { -0.7071, 0.7071 },
-            { -1, 0 }, { -0.7071, -0.7071 }, { 0, -1 }, { 0.7071, -0.7071 },
-        }
-        j.data.plan = {}
-        local rings = math.max(1, math.floor(j.data.max_tiles / j.data.step_tiles))
-        for ring = 1, rings do
-            for _, d in ipairs(dirs) do
-                local wx = px + d[1] * ring * j.data.step_tiles * TILE
-                local wz = pz + d[2] * ring * j.data.step_tiles * TILE
-                local tx, tz = U.tile_of(wx, wz)
-                local ok_water, water = pcall(function() return TheWorld.Map:IsOceanAtPoint(wx, 0, wz, false) end)
-                if not (ok_water and water == true) then
-                    j.data.plan[#j.data.plan + 1] = { wx, wz, tx, tz }
+        j.step = "scan"
+    end
+    if j.step == "scan" then
+        -- R8.x：**原地有限扫描**，不再逐个路点走过去（旧实现 8 向×多圈 GoToPoint 会绕圈、贴海岸卡住）。
+        local want = j.data.want
+        local maxT = j.data.max_tiles
+        local radii = { math.min(16, maxT) }
+        if maxT > 16 then radii[#radii + 1] = maxT end
+        local seen, hits = {}, {}
+        for _, r in ipairs(radii) do
+            local list = U.find_all(p, r, nil, nil, function(e)
+                if e == nil or e == p or e.prefab == nil then return false end
+                return tostring(e.prefab) == want
+            end)
+            for _, entry in ipairs(list or {}) do
+                local e = entry.ent or entry
+                if e ~= nil and e:IsValid() then
+                    local key = e.GUID or tostring(e)
+                    if not seen[key] then
+                        seen[key] = true
+                        local wx, wy, wz = e.Transform:GetWorldPosition()
+                        local tx, tz = U.tile_of(wx, wz)
+                        hits[#hits + 1] = { ent = e, tx = tx, tz = tz, dist = U.dist(p, e) }
+                    end
                 end
             end
-        end
-        j.data.index = 0
-        j.data.t0 = U.now()
-        j.data.budget = math.max(10, (tonumber(ctx.budget_s) or 50) - 5)
-        j.step = "look"
-    end
-
-    if j.step == "look" then
-        local hits = {}
-        local list = U.find_all(p, j.data.look, nil, nil, function(e)
-            if e == nil or e == p or e.prefab == nil then return false end
-            if tostring(e.prefab) ~= j.data.want then return false end
-            return true
-        end)
-        for _, entry in ipairs(list or {}) do
-            local e = entry.ent or entry
-            if e ~= nil and e:IsValid() then
-                local wx, wy, wz = e.Transform:GetWorldPosition()
-                local tx, tz = U.tile_of(wx, wz)
-                hits[#hits + 1] = { ent = e, tx = tx, tz = tz, dist = U.dist(p, e) }
-            end
+            if #hits > 0 then break end
         end
         table.sort(hits, function(a, b) return (a.dist or 999) < (b.dist or 999) end)
         if #hits > 0 then
             local names = {}
             for i = 1, math.min(#hits, 5) do
-                names[#names + 1] = string.format("%s(%d,%d)%.0f格",
-                    U.pretty(hits[i].ent), hits[i].tx, hits[i].tz, (hits[i].dist or 0) / TILE)
+                names[#names + 1] = string.format("%s(%d,%d)%.0f格", U.pretty(hits[i].ent), hits[i].tx, hits[i].tz, (hits[i].dist or 0) / TILE)
             end
-            return "done", string.format("找到了 %d 个 %s：%s。先用 move_to 走过去（或直接对它用动作）",
-                #hits, j.data.want, table.concat(names, "、"))
+            return "done", string.format("找到了 %d 个 %s：%s。先用 move_to 走过去（或直接对它用动作）", #hits, want, table.concat(names, "、"))
         end
-        j.data.index = j.data.index + 1
-        if j.data.index > #j.data.plan or U.now() - j.data.t0 > (j.data.budget or 45) then
-            local tx, tz = U.tile_of(j.data.origin[1], j.data.origin[2])
-            return "fail", string.format("从 (%d,%d) 往外搜索 %g 格范围也没看到 %s（换个方向再 seek，或者改找别的）",
-                tx, tz, j.data.max_tiles, j.data.want)
-        end
-        local target = j.data.plan[j.data.index]
-        j.data.cur = target
-        p.components.locomotor:GoToPoint(Vector3(target[1], 0, target[2]))
-        j.data.walk_start = U.now()
-        j.step = "walk"
-        return "run"
-    end
-
-    if j.step == "walk" then
-        local tgt = j.data.cur
-        local px, _, pz = U.pos(p)
-        if px == nil then return "fail", "读不到自己的位置" end
-        local dx, dz = tgt[1] - px, tgt[2] - pz
-        local far = math.sqrt(dx * dx + dz * dz)
-        if far <= TILE * 1.5 then
-            j.step = "look"
-            return "run"
-        end
-        if U.now() - j.data.walk_start > 25 then
-            j.step = "look"
-            return "run"
-        end
-        return "run"
+        local tx, tz = U.tile_of(j.data.origin[1], j.data.origin[2])
+        return "fail", string.format("从 (%d,%d) 起 %g 格内没看到 %s（原地扫描，不绕圈；换方向/加大范围再 seek，或改找别的）", tx, tz, maxT, want)
     end
     return "run"
 end

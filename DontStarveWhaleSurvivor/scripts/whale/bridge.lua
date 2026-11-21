@@ -190,6 +190,14 @@ end
 
 function B.Report(ok, text, cmd_id, reason)
     local id = cmd_id or last_cmd_id
+    -- R8.x：本地反射(reflex)回执走独立文件，**绝不占用模型指令的结果槽**。
+    -- 否则反射动作完成会覆盖 pending_result，把模型的 result 挤掉 → Node 等不到匹配 command_id → 罚站到超时判 unknown。
+    if tostring(id) == "reflex" then
+        local rtext = Whale.json.encode({ v = 1, id = "reflex", ok = ok and true or false, reason = reason, text = tostring(text or ""), t = os.time() })
+        pcall(function() write_both("whale_reflex_result.json", "whale_io_reflex_result.json", rtext) end)
+        log("反射结果 " .. tostring(ok) .. "：" .. tostring(text))
+        return
+    end
     pending_result_data = {
         v = 1,
         id = id,

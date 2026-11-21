@@ -1582,14 +1582,14 @@ for (const cancel of ['abort', 'replace', 'stop', 'budget']) {
     const env = loadReflex(await import('fengari'))
     env.run(LOGIC_SETUP)
     env.run(`
-      Whale.actions.Start("seek", {}, "old", { survival_seek = true, prefab = "flint", budget_s = 1 })
+      Whale.actions.Start("wait", { seconds = 30 }, "old")
       Whale.actions.Tick()
       PLAYER.components.locomotor.bufferedaction = { action = GLOBAL.ACTIONS.PICK }
       BUFFERED = { action = GLOBAL.ACTIONS.PICK }
       ${cancel === 'abort' ? 'Whale.actions.Abort("cancel")' : cancel === 'replace'
         ? 'Whale.actions.Start("wait", { seconds = 10 }, "new")' : cancel === 'stop'
           ? 'Whale.actions.Start("stop", {}, "stop"); Whale.actions.Tick()'
-          : 'NOW = NOW + 2; Whale.actions.Tick()'}
+          : 'Whale.job.t0 = NOW - 999; Whale.actions.Tick()'}
       assert(PLAYER:GetBufferedAction() == nil, "玩家队列必须清空")
       assert(PLAYER.components.locomotor.bufferedaction == nil, "移动组件队列必须清空")
       assert(PLAYER.components.locomotor.dest == nil, "服务端移动必须停止")
@@ -1654,40 +1654,42 @@ test('LOGIC-5：耗尽的提灯不阻止制作火把', async () => {
   `)
 })
 
-for (const ending of ['budget', 'exhausted']) {
-  test(`LOGIC-6：seek ${ending} 正常返回找不到并停止移动`, async () => {
-    const env = loadReflex(await import('fengari'))
-    env.run(LOGIC_SETUP)
-    env.run(`
-      PLAYER._x = 12; PLAYER._z = 20
-      Whale.actions.Start("seek", {}, "seek-end", { survival_seek = true, prefab = "flint", budget_s = 30 })
-      Whale.actions.Tick()
-      ${ending === 'budget' ? 'NOW = NOW + 26; Whale.actions.Tick()' : 'Whale.job.step = "look"; Whale.job.data.index = #Whale.job.data.plan'}
-      Whale.actions.Tick()
-      assert(#REPORTS == 1 and REPORTS[1].ok == false)
-      assert(string.find(REPORTS[1].text, "从 (3,5)", 1, true), REPORTS[1].text)
-      assert(string.find(REPORTS[1].text, "没看到 flint", 1, true))
-      assert(PLAYER.components.locomotor.dest == nil)
-    `)
-  })
-}
+test('LOGIC-6：seek 原地扫描找不到时正常返回、不移动', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    PLAYER._x = 0; PLAYER._z = 0
+    NEARBY = {}
+    MOVED_TO = nil
+    Whale.actions.Start("seek", {}, "seek-end", { survival_seek = true, prefab = "flint", max_tiles = 10 })
+    Whale.actions.Tick()
+    assert(#REPORTS == 1 and REPORTS[1].ok == false)
+    assert(string.find(REPORTS[1].text, "没看到 flint", 1, true), REPORTS[1].text)
+    assert(MOVED_TO == nil, "seek 不应再绕圈走动")
+    assert(PLAYER.components.locomotor.dest == nil)
+  `)
+})
 
-for (const step of [undefined, 4, 30]) {
-  test(`LOGIC-7：seek max_tiles=4 不被 step=${step ?? 'default'} 扩大`, async () => {
-    const env = loadReflex(await import('fengari'))
-    env.run(LOGIC_SETUP)
-    env.run(`
-      Whale.actions.Start("seek", {}, "seek-bound", { survival_seek = true, prefab = "flint",
-          max_tiles = 4, ${step === undefined ? '' : `step = ${step},`} })
-      Whale.actions.Tick()
-      assert(Whale.job.data.max_tiles == 4)
-      for _, point in ipairs(Whale.job.data.plan) do
-          assert(math.sqrt(point[1]^2 + point[2]^2) <= 16.001, "落点超过指定最大范围")
-      end
-      assert(math.sqrt(MOVED_TO.x^2 + MOVED_TO.z^2) <= 16.001)
-    `)
-  })
-}
+test('LOGIC-7：seek 原地扫描遵守 max_tiles（4 格找不到、40 格能找到），且不移动', async () => {
+  const env = loadReflex(await import('fengari'))
+  env.run(LOGIC_SETUP)
+  env.run(`
+    PLAYER._x = 0; PLAYER._z = 0
+    NEARBY = { newent("flint", 80, 0, {}) }  -- 80 世界单位 = 20 格
+    MOVED_TO = nil
+    REPORTS = {}
+    Whale.actions.Start("seek", {}, "s4", { survival_seek = true, prefab = "flint", max_tiles = 4 })
+    Whale.actions.Tick()
+    assert(REPORTS[1] ~= nil and REPORTS[1].ok == false, "4 格内不应找到 20 格外的 flint")
+    REPORTS = {}
+    Whale.actions.Start("seek", {}, "s40", { survival_seek = true, prefab = "flint", max_tiles = 40 })
+    Whale.actions.Tick()
+    assert(REPORTS[1] ~= nil and REPORTS[1].ok == true, "40 格内应找到")
+    assert(string.find(REPORTS[1].text, "flint", 1, true))
+    assert(MOVED_TO == nil, "seek 不应走动")
+    assert(PLAYER.components.locomotor.dest == nil)
+  `)
+})
 
 // ─────────────────────────── REFLEX-FIX-02 专项验证（12 项测试）───────────────────────────
 
