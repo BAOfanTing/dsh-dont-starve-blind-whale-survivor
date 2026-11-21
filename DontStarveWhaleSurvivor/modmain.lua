@@ -78,6 +78,13 @@ modimport("scripts/whale/config.lua")
 -- 观察对象唯一入口（Actor Provider）：谁来当"我"由它回答（M1.1）
 modimport("scripts/whale/actor.lua")
 
+-- R8.2：角色 Profile（温蒂首发）。所有角色共用 Reflex/Survival/Battle/Actions；Profile 只提供差异化规则。
+-- 必须在 nearby/guard/battle/reflex 之前加载（它们会读 Whale.character）。
+modimport("scripts/whale/character/base-profile.lua")
+modimport("scripts/whale/character/profiles/wendy.lua")
+modimport("scripts/whale/character/profile-registry.lua")
+modimport("scripts/whale/character/companion.lua")
+
 -- 把 modinfo 的配置真正绑到行为上（值会夹取；读不到就用默认值并记进 problems）
 if Whale.config ~= nil and Whale.config.build ~= nil then
     Whale.config.build(function(key)

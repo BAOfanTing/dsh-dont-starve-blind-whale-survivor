@@ -355,6 +355,18 @@ function B.StepJob(j, p)
 
     -- 首次启动：初始化会话
     if j.step == "start" or session == nil then
+        -- R8.2：角色战斗策略。温蒂（requires_companion_for_hunt）必须阿比盖尔可协助才主动狩猎；
+        -- 阿比盖尔不在/死亡/无法协助时降低主动战斗意愿，不白送。非温蒂 base 不受影响。
+        local _prof = (Whale ~= nil and Whale.character ~= nil and Whale.character.Resolve ~= nil) and Whale.character.Resolve(p) or nil
+        if _prof ~= nil and _prof.GetCombatPolicy ~= nil then
+            local _okp, _cp = pcall(function() return _prof.GetCombatPolicy(p) end)
+            if _okp and _cp ~= nil and _cp.requires_companion_for_hunt == true then
+                local _okc, _comp = pcall(function() return Whale.character.GetCompanionState(p) end)
+                if not (_okc and _comp ~= nil and _comp.can_assist == true) then
+                    return "fail", "companion_not_ready: 阿比盖尔不在场/无法协助，暂不主动狩猎（先召唤或评估风险）"
+                end
+            end
+        end
         local target = j.ctx ~= nil and j.ctx.target or nil
         if target == nil and j.args ~= nil and j.args.target ~= nil then
             target = j.args.target

@@ -422,6 +422,34 @@ function O.Render(data)
     end
     lines[#lines + 1] = "你：" .. table.concat(pieces, "  ")
 
+    -- R8.2：角色 / 阿比盖尔 / 战斗策略（来自真实状态；未知就明确 unknown）
+    if data.character ~= nil then
+        local c = data.character
+        lines[#lines + 1] = "角色：" .. tostring(c.display_name or c.id or "?") .. "（profile " .. tostring(c.id or "?") .. "，prefab " .. tostring(c.prefab or "?") .. "）"
+    end
+    if data.companion ~= nil and (data.companion.present == true or (data.character ~= nil and data.character.id == "wendy")) then
+        local m = data.companion
+        if m.unknown == true then
+            lines[#lines + 1] = "阿比盖尔：状态未知（读不到 ghostlybond）"
+        elseif m.present ~= true then
+            lines[#lines + 1] = "阿比盖尔：不在场（满足条件可用 abigail_flower 召唤，注意别重复召唤）"
+        else
+            local bits = { m.alive == true and "存活" or "已死亡" }
+            if m.health_percent ~= nil then bits[#bits + 1] = string.format("血量%d%%", math.floor(m.health_percent * 100)) end
+            if m.distance ~= nil then bits[#bits + 1] = string.format("距%.1f格", m.distance / 4) end
+            bits[#bits + 1] = (m.can_assist == true) and "可协助战斗" or "暂不能协助"
+            lines[#lines + 1] = "阿比盖尔：" .. table.concat(bits, "，")
+        end
+    end
+    if data.combat ~= nil then
+        local cb = data.combat
+        lines[#lines + 1] = "战斗策略：" .. tostring(cb.preferred_strategy or "generic")
+            .. ((cb.active_target ~= nil) and ("，目标 " .. tostring(cb.active_target)) or "，当前无目标")
+    end
+    if data.character ~= nil and data.character.id == "wendy" then
+        lines[#lines + 1] = "【温蒂要点】优先让阿比盖尔进攻，别把温蒂当普通近战硬砍（本体伤害×0.75）；阿比盖尔不在/死亡时降低主动战斗意愿；第一阶段只安全猎普通蜘蛛，蜘蛛战士/女王/未知高威胁先评估或避开；生存与交火风险永远高于主动战斗。"
+    end
+
     if actor.tile_x ~= nil and actor.tile_z ~= nil then
         lines[#lines + 1] = "位置：(" .. actor.tile_x .. "," .. actor.tile_z .. ")"
     else
@@ -693,6 +721,24 @@ function O.BuildData(actor, opts)
         data.player = player_block(actor, info, unavailable)
         data.world = world_block(actor, unavailable)
         data.nearby = nearby_block(actor, info, now, unavailable, data.identity)
+        -- R8.2：角色 Profile + 阿比盖尔伴生 + 战斗策略（来自真实组件；读不到就保持 null/unknown，不伪造）
+        if Whale ~= nil and Whale.character ~= nil then
+            local okc, prof = pcall(function() return Whale.character.Resolve(actor) end)
+            if okc and prof ~= nil then
+                data.character = { id = prof.id, prefab = tostring(actor.prefab or ""), display_name = prof.display_name }
+                local okcomp, comp = pcall(function() return Whale.character.GetCompanionState(actor) end)
+                if okcomp and type(comp) == "table" then data.companion = comp end
+                local okcp, cp = pcall(function() return prof.GetCombatPolicy(actor) end)
+                if okcp and type(cp) == "table" then
+                    data.combat = { preferred_strategy = cp.preferred_strategy, requires_companion_for_hunt = cp.requires_companion_for_hunt }
+                    local bt = Whale ~= nil and Whale.battle or nil
+                    if bt ~= nil and bt.GetTarget ~= nil then
+                        local okay, tgt = pcall(function() return bt.GetTarget() end)
+                        if okay and tgt ~= nil then data.combat.active_target = tostring(tgt.prefab or "target") end
+                    end
+                end
+            end
+        end
         data.warnings = warnings(actor, data.player, data.world)
         local reflex = Whale ~= nil and Whale.reflex or nil
         if reflex ~= nil and reflex.DangerZones ~= nil then

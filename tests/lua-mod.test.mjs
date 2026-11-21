@@ -785,6 +785,11 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         "scripts/whale/guard_specs.lua",
         -- M2.0：动作安全底座（Lua 侧最终授权者）
         "scripts/whale/guard.lua",
+        -- R8.2：角色 Profile（温蒂首发）
+        "scripts/whale/character/base-profile.lua",
+        "scripts/whale/character/profiles/wendy.lua",
+        "scripts/whale/character/profile-registry.lua",
+        "scripts/whale/character/companion.lua",
     }) do
         assert(idx(name) ~= nil, "少了 modimport：" .. name)
     end
@@ -794,7 +799,7 @@ function AddClassPostConstruct(name, fn) CPOSTS[#CPOSTS + 1] = name end
         assert(not string.find(name, "scripts/main/", 1, true), "A 栈模块又进了运行链：" .. name)
         assert(name ~= "bws_config.lua", "bws_config.lua（A 栈的 token 文件）不该再加载")
     end
-    assert(#MODIMPORTS == 22, "只该 modimport 22 个 B 栈模块，实际 " .. #MODIMPORTS)
+    assert(#MODIMPORTS == 26, "只该 modimport 26 个 B 栈模块（R8.2 +4 角色模块），实际 " .. #MODIMPORTS)
     assert(idx("scripts/whale/util.lua") < idx("scripts/whale/config.lua"), "config 要在 util 之后")
 assert(idx("scripts/whale/util.lua") < idx("scripts/whale/pickuprules.lua"), "pickuprules 要在 util 之后")
 assert(idx("scripts/whale/pickuprules.lua") < idx("scripts/whale/nearby.lua"), "pickuprules 必须在 nearby 之前（观察侧要用）")
@@ -810,6 +815,12 @@ assert(idx("scripts/whale/targetrules.lua") < idx("scripts/whale/nearby.lua"), "
 assert(idx("scripts/whale/targetrules.lua") < idx("scripts/whale/guard.lua"), "targetrules 必须在 guard 之前（实时选目标）")
     assert(idx("scripts/whale/config.lua") < idx("scripts/whale/actor.lua"), "actor 要在 config 之后")
     assert(idx("scripts/whale/actor.lua") < idx("scripts/whale/observe.lua"), "观察器要在 Actor Provider 之后")
+    assert(idx("scripts/whale/actor.lua") < idx("scripts/whale/character/base-profile.lua"), "角色 Profile 要在 actor 之后")
+    assert(idx("scripts/whale/character/base-profile.lua") < idx("scripts/whale/character/profiles/wendy.lua"), "wendy 要在 base 之后")
+    assert(idx("scripts/whale/character/profiles/wendy.lua") < idx("scripts/whale/character/profile-registry.lua"), "registry 要在 wendy 之后")
+    assert(idx("scripts/whale/character/profile-registry.lua") < idx("scripts/whale/character/companion.lua"), "companion 要在 registry 之后")
+    assert(idx("scripts/whale/character/companion.lua") < idx("scripts/whale/nearby.lua"), "角色模块要在 nearby 之前")
+    assert(idx("scripts/whale/character/companion.lua") < idx("scripts/whale/battle.lua"), "角色模块要在 battle 之前")
     assert(idx("scripts/whale/nearby.lua") < idx("scripts/whale/observe.lua"), "附近实体模块要在观察器之前")
     assert(idx("scripts/whale/nearby.lua") < idx("scripts/whale/guard.lua"), "guard 要用 nearby")
     assert(idx("scripts/whale/guard.lua") < idx("scripts/whale/bridge.lua"), "文件桥要用 guard")
