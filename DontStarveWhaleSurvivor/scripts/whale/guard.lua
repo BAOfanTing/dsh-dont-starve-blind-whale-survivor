@@ -73,7 +73,7 @@ G.parse_authority = parse_authority
 --- 缓存必须"新鲜"：超过 5 秒没刷新就判不可用（fail-closed），绝不拿旧权威放行。
 G.AUTHORITY_CACHE_MAX_AGE = 5
 
-function cached_authority()
+local function cached_authority()
     local cache = Whale ~= nil and Whale.authority_cache or nil
     if cache == nil or type(cache.data) ~= "table" then return nil end
     local age = os.time() - (cache.at or 0)
@@ -595,7 +595,7 @@ function G.validate(cmd)
                 return false, "wrong_work_action", nil
             end
             local d = U.dist(actor, near_ent)
-            if d ~= nil and d > 6 * 4 then return false, "out_of_range", { hint = (function() local _x,_y,_z = U.pos(near_ent); local _tx,_tz = U.tile_of(_x,_z); local _d = U.dist(actor, near_ent)/U.TILE; return string.format("目标在 (%d,%d)（approach_x=%d,approach_z=%d，距 %.1f 格）；先 move_to 靠近再采", _tx,_tz,_tx,_tz,_d) end)() } end
+            if d ~= nil and d > 2.5 * 4 then return false, "out_of_range", { hint = (function() local _x,_y,_z = U.pos(near_ent); local _tx,_tz = U.tile_of(_x,_z); local _d = U.dist(actor, near_ent)/U.TILE; return string.format("目标在 (%d,%d)（approach_x=%d,approach_z=%d，距 %.1f 格）；先 move_to 靠近再采", _tx,_tz,_tx,_tz,_d) end)() } end
         end
         target = near_ent
     end

@@ -35,7 +35,6 @@ end
 
 local seq = 0
 local tick_count = 0
-local last_cmd_id = nil
 local reading = false
 local last_state_text = nil
 local last_state_at = 0

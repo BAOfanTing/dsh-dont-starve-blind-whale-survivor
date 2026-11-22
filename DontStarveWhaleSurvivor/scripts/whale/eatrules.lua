@@ -32,6 +32,8 @@ E.FOODS = {
     red_cap = "红蘑菇",
     blue_cap = "蓝蘑菇",
     green_cap = "绿蘑菇",
+    green_cap_cooked = "烤绿蘑菇",
+    blue_cap_cooked = "烤蓝蘑菇",
     honey = "蜂蜜",
     meat = "肉",
     smallmeat = "小肉",
@@ -78,6 +80,8 @@ E.AUTO_SAFE = {
     pumpkin_cooked = true,
     eggplant_cooked = true,
     acorn_cooked = true,
+    green_cap_cooked = true,
+    blue_cap_cooked = true,
     petals = true,
 }
 
