@@ -48,6 +48,7 @@ local last_ack_data = nil
 local http_cfg = { enabled = false, port = nil, token = nil, url = nil }
 local http_last_ok = 0
 local http_inflight = false
+local http_inflight_since = 0
 local http_next_exchange_at = 0
 local booted = false
 local pc_ok = nil
@@ -529,6 +530,7 @@ send_http_exchange = function(immediate_state)
     end
 
     http_inflight = true
+    http_inflight_since = U.now()
     local st = immediate_state or build_state()
     local shard_id = (st.data ~= nil and st.data.identity ~= nil and st.data.identity.shard_id) or nil
     local payload = {
@@ -558,6 +560,13 @@ send_http_exchange = function(immediate_state)
                     local a = Whale.guard.parse_authority(data.authority)
                     if a ~= nil then
                         Whale.authority_cache = { data = a, at = os.time() }
+                        -- P1-3：HTTP 更新权威时也要同步冻结/解冻（与 poll_authority 一致），否则换手期 Reflex 不受控
+                        if a.status == "revoking" then
+                            B.FreezeLocalActions("lease_revoking")
+                            if B.WriteLeaseAck ~= nil then B.WriteLeaseAck(a) end
+                        else
+                            B.UnfreezeLocalActions()
+                        end
                     end
                 end
                 if type(data.commands) == "table" and #data.commands > 0 then
@@ -617,6 +626,13 @@ end
 local function server_tick()
     tick_count = tick_count + 1
     server_last_tick_at = bridge_now()
+    -- P1-3：http_inflight 看门狗——Node 重启/丢回调时防止 HTTP 通道永久锁死
+    step("HTTP看门狗", function()
+        if http_inflight and (U.now() - http_inflight_since) > 8 then
+            http_inflight = false
+            pcall(function() log("HTTP 通道 http_inflight 超时，已复位（防永久锁死）") end)
+        end
+    end)
     step("HTTP交换", function()
         if check_http_config() then
             local now = U.now()

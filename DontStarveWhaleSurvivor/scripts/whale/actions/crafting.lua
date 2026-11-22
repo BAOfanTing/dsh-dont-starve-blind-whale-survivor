@@ -324,6 +324,8 @@ JOBS.craft = function(j, p)
             --   只比较背包数量会把"做成功且已拿在手里"误判成"成品没进背包"，
             --   模型因此以为材料被扣、成品消失，转头去做别的，天黑前没光。
             j.data.hand_before = hand_prefab(p)
+            j.data.equipped_before = (Whale ~= nil and Whale.equiprules ~= nil and Whale.equiprules.EquippedItem ~= nil)
+                and Whale.equiprules.EquippedItem(p, j.data.name) ~= nil or false
             j.data.phase_start = U.now()
             -- ★ 不能用 BufferedAction：它的签名是 (doer, target, action, invobject, pos, recipe, ...)，
             --   第 4 个参数是 invobject，构造时会读 invobject.replica —— 把 recipe 传进去会崩
@@ -344,7 +346,10 @@ JOBS.craft = function(j, p)
         local after = snapshot_counts(p)
         local made = (after[j.data.name] or 0) - (j.data.before[j.data.name] or 0)
         local hand_after = hand_prefab(p)
-        local auto_equipped = hand_after == j.data.name and j.data.hand_before ~= j.data.name
+        local equipped_after = (Whale ~= nil and Whale.equiprules ~= nil and Whale.equiprules.EquippedItem ~= nil)
+            and Whale.equiprules.EquippedItem(p, j.data.name) ~= nil or false
+        local auto_equipped = (hand_after == j.data.name and j.data.hand_before ~= j.data.name)
+            or (equipped_after and not j.data.equipped_before)
         if made > 0 or auto_equipped then
             -- 顺便报告材料消耗
             local used = {}
