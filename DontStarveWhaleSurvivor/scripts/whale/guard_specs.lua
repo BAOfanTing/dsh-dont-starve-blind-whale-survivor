@@ -302,7 +302,7 @@ Whale.guard_action_specs = {
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
-            action = { type = "string", pattern = "^[A-Z_]+$", max_len = 16 },
+            action = { type = "string", pattern = "^[A-Z_]+$", max_len = 24 },
         },
     },
     inspect = {

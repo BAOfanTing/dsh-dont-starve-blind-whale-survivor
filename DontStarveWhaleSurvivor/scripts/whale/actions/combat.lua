@@ -6,6 +6,7 @@ local tostring = tostring or (GLOBAL and GLOBAL.tostring)
 
 local ACTIONS = GLOBAL.ACTIONS
 local BufferedAction = GLOBAL.BufferedAction
+local EQUIPSLOTS = GLOBAL.EQUIPSLOTS
 
 local U = Whale.util
 

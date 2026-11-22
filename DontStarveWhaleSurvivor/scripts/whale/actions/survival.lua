@@ -305,7 +305,7 @@ JOBS.fuel = function(j, p)
             item = U.find_item(p, want)
             if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(want) end
         else
-            item = best_fuel(p, 3)
+            item = best_fuel(p, nil)
             if item == nil then return "fail", "no_fuel: 背包里没有能烧的东西（木头、草、树枝都行）" end
         end
         j.data.fuel = item
@@ -371,10 +371,15 @@ JOBS.add_fuel = function(j, p)
 end
 
 JOBS.make_fire = function(j, p)
-    -- 先试营火，再试火坑（火坑要石头，材料不够就退回营火）
-    local status, text = JOBS.build({ args = { recipe = "campfire", radius = j.args.radius } }, p)
+    -- 先试营火，再试火坑（火坑要石头，材料不够就退回营火）。
+    -- P0-6：必须在同一个 j 上复用状态机（j.args.recipe + j.step + j.data），否则每 tick 新建残缺表会在 job_build 里 nil 索引崩溃。
+    if j.data == nil then j.data = {} end
+    j.args.recipe = "campfire"
+    local status, text = JOBS.build(j, p)
     if status == "fail" then
-        status, text = JOBS.craft({ args = { recipe = "campfire" } }, p)
+        -- 退回营火 craft：重置同一 job 的状态机再走 craft
+        j.step = "start"; j.data = {}; j.args.recipe = "campfire"
+        status, text = JOBS.craft(j, p)
     end
     return status, text
 end

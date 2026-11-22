@@ -295,7 +295,15 @@ JOBS.seek = function(j, p)
         for _, r in ipairs(radii) do
             local list = U.find_all(p, r, nil, nil, function(e)
                 if e == nil or e == p or e.prefab == nil then return false end
-                return tostring(e.prefab) == want
+                local pf = string.lower(tostring(e.prefab or ""))
+                if pf == want then return true end
+                if want == "tree" then
+                    return pf == "evergreen" or pf == "deciduoustree" or pf == "twiggytree"
+                        or pf == "marsh_tree" or string.find(pf, "tree", 1, true) ~= nil
+                end
+                if want == "rock" then return string.sub(pf, 1, 4) == "rock" or pf == "boulder" end
+                if want == "berrybush" then return string.find(pf, "berrybush", 1, true) ~= nil end
+                return false
             end)
             for _, entry in ipairs(list or {}) do
                 local e = entry.ent or entry

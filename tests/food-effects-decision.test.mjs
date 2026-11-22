@@ -20,7 +20,7 @@ test('FOOD-EFFECT-01: 解决饥饿需求时排除花瓣 (petals hunger = 0)', ()
 
   const plan = foodAction(snapshot, { data: {} }, { need: 'hunger' })
   assert.equal(plan.tool, 'eat')
-  assert.equal(plan.args.item, 'berries')
+  assert.equal(plan.args.food, 'berries')
 })
 
 test('FOOD-EFFECT-02: 生命值低时允许选择花瓣 (petals health = 1)', () => {
@@ -40,7 +40,7 @@ test('FOOD-EFFECT-02: 生命值低时允许选择花瓣 (petals health = 1)', ()
 
   const plan = foodAction(snapshot, { data: {} }, { need: 'health' })
   assert.equal(plan.tool, 'eat')
-  assert.equal(plan.args.item, 'petals')
+  assert.equal(plan.args.food, 'petals')
 })
 
 test('FOOD-EFFECT-03: 饥饿危急时优先高饱食度食物', () => {
