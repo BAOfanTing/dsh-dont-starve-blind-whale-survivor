@@ -768,9 +768,9 @@ local function build(actor, info, now, opts, identity)
             scan = { reused = false, timestamp = now, age_ms = 0,
                      duration_ms = nil, duration_source = "unavailable",
                      scan_seconds = opts.scan_seconds },
-            buckets = { threats = {}, pickupables = {}, harvestables = {}, food = {}, resources = {}, containers = {}, structures = {}, creatures = {}, other = {} }, -- 出错时为空，读端按"没有数据"处理
+            buckets = { threats = arr({}), pickupables = arr({}), harvestables = arr({}), food = arr({}), resources = arr({}), containers = arr({}), structures = arr({}), creatures = arr({}), other = arr({}) }, -- 出错时为空数组（P1.5）
             delta = { status = "reset", added_count = 0, removed_count = 0, changed_count = 0,
-                      added = {}, removed = {}, changed = {} },
+                      added = arr({}), removed = arr({}), changed = arr({}) },
         }
     end
 

@@ -813,6 +813,16 @@ function O.BuildData(actor, opts)
         schema = O.SCHEMA,
     }
 
+    -- P1.5：warnings / errors / unavailable_fields 空时也要序列化成 []（否则 Lua 侧变 {}，Node 到处写兼容兜底）
+    local jarr2 = Whale ~= nil and Whale.json ~= nil and Whale.json.arr or nil
+    if jarr2 ~= nil then
+        pcall(function()
+            jarr2(data.warnings)
+            jarr2(data.observer.errors)
+            jarr2(data.observer.unavailable_fields)
+        end)
+    end
+
     return data
 end
 
