@@ -492,6 +492,13 @@ JOBS.cook = function(j, p)
         j.data.label = U.pretty(pot)
         j.data.before = snapshot_counts(p)
         j.data.phase_start = U.now()
+        -- P1-2：把任意堆叠拆成单个单元（下锅每个槽只放 1 个）。
+        local function one_unit(item)
+            if item == nil then return nil end
+            local st = item.components ~= nil and item.components.stackable or nil
+            if st ~= nil and st.StackSize ~= nil and st.StackSize() > 1 then return st:Get(1) end
+            return item
+        end
         -- ① 已经煮好 → 拿出来
         if stewer ~= nil then
             local done = false
@@ -515,9 +522,18 @@ JOBS.cook = function(j, p)
         local want = ctx.cook_items
         local list = {}
         if want ~= nil and tostring(want) ~= "" then
+            local used_nonstack = {}
             for name in string.gmatch(tostring(want), "[^,%s]+") do
                 local item = U.find_item(p, name)
-                if item ~= nil then list[#list + 1] = item end
+                if item ~= nil then
+                    local unit = one_unit(item)
+                    if unit ~= nil and unit == item and used_nonstack[tostring(item)] then
+                        -- 非堆叠物品重复名（同一件）：跳过，避免重复引用
+                    elseif unit ~= nil then
+                        if unit == item then used_nonstack[tostring(item)] = true end
+                        list[#list + 1] = unit
+                    end
+                end
                 if #list >= 4 then break end
             end
         else
@@ -540,8 +556,13 @@ JOBS.cook = function(j, p)
         if #list == 0 then return "fail", "no_ingredients: 背包里没有能下锅的材料" end
         local added = 0
         for _, item in ipairs(list) do
-            if item:IsValid() and container ~= nil then
-                local ok = pcall(function() container:GiveItem(item, nil, pot:GetPosition()) end)
+            local unit = one_unit(item)
+            if unit ~= nil and unit:IsValid() and container ~= nil then
+                local ok = pcall(function()
+                    local ii = unit.components ~= nil and unit.components.inventoryitem or nil
+                    if ii ~= nil and ii.RemoveFromOwner ~= nil then ii:RemoveFromOwner() end
+                    container:GiveItem(unit, nil, pot:GetPosition())
+                end)
                 if ok then added = added + 1 end
             end
         end

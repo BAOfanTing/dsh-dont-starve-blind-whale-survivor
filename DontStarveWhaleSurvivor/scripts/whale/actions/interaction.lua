@@ -188,8 +188,14 @@ local function container_by_ref(j, p, box, take, item_name, count)
             local want = math.min(tonumber(count) or picked.count, picked.count)
             j.data.want = want
             local ok = pcall(function()
-                container:RemoveItem(picked.item, true)
-                inv:GiveItem(picked.item, nil, p:GetPosition())
+                -- P1-2：按 count 拆分，别无论传几都整组拿走（wholestack=true）。
+                if want < picked.count and picked.item.components ~= nil and picked.item.components.stackable ~= nil then
+                    local take = picked.item.components.stackable:Get(want)
+                    if take ~= nil then inv:GiveItem(take, nil, p:GetPosition()) end
+                else
+                    container:RemoveItem(picked.item, true)
+                    inv:GiveItem(picked.item, nil, p:GetPosition())
+                end
             end)
             if not ok then return "fail", "container_take_failed" end
             j.step = "acting"
@@ -200,7 +206,12 @@ local function container_by_ref(j, p, box, take, item_name, count)
         local item = U.find_item(p, item_name)
         if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(item_name) end
         j.data.prefab = tostring(item.prefab)
-        local ok = pcall(function() container:GiveItem(item, nil, p:GetPosition()) end)
+        local ok = pcall(function()
+            -- P1-2：放进容器前先从玩家背包移除，避免归属异常/双持有。
+            local ii = item.components ~= nil and item.components.inventoryitem or nil
+            if ii ~= nil and ii.RemoveFromOwner ~= nil then ii:RemoveFromOwner() end
+            container:GiveItem(item, nil, p:GetPosition())
+        end)
         if not ok then return "fail", "container_put_failed" end
         j.step = "acting"
         return "run"
