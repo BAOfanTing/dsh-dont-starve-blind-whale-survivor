@@ -369,9 +369,10 @@ end
 function T.ExplainMiss(kind, why, detail)
     local action = T.KIND_ACTION[kind] or "?"
     if why == "out_of_range" and detail ~= nil and detail.nearest ~= nil then
-        return string.format("最近的一处 %s（%s）在 %s 格外 (%s,%s)：先 move_to 过去再试",
+        return string.format("最近的一处 %s（%s）在 %s 格外 (%s,%s)：先 move_to 过去再试（approach_x=%s,approach_z=%s）",
             kind, tostring(detail.nearest.label or detail.nearest.prefab),
             tostring(math.floor((detail.distance or 0) * 10 + 0.5) / 10),
+            tostring(detail.nearest.x), tostring(detail.nearest.z),
             tostring(detail.nearest.x), tostring(detail.nearest.z))
     end
     if why == "no_target" then
