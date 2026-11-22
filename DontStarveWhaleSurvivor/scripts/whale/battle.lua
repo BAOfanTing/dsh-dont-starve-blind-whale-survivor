@@ -115,6 +115,17 @@ local function blog(tag, fields)
 end
 B.Log = blog
 
+-- P1-6：走路 RPC 节流——APPROACH/LURE/RETREAT/LOOT 每 0.2s tick 都无条件 walk_to 会反复触发 GoToPoint/walkto RPC。
+local WALK_THROTTLE_S = 0.5
+local function walk_throttled(p, tx, tz)
+    local now = U.now()
+    if session ~= nil then
+        if session._last_walk_at ~= nil and (now - session._last_walk_at) < WALK_THROTTLE_S then return end
+        session._last_walk_at = now
+    end
+    pcall(function() A.walk_to(p, tx, tz, true) end)
+end
+
 -- ─────────────── 小工具函数 ───────────────
 local function get_health_percent(inst)
     if inst == nil or inst.components == nil or inst.components.health == nil then return nil end
@@ -476,11 +487,15 @@ function B.StepJob(j, p)
     -- [PREPARE] 检查武器防具与环境
     if st == STATES.PREPARE then
         -- 尝试自动装备最佳武器（如果当前空手且背包有武器）
-        if A.best_weapon ~= nil and A.equip_if_needed ~= nil then
-            local bw = A.best_weapon(p)
-            if bw ~= nil then
-                pcall(A.equip_if_needed, p, bw)
-                session.weapon = current_weapon_name(p)
+        local hand_now = (A.hand_prefab ~= nil) and A.hand_prefab(p) or nil
+        local LIGHT_HAND = { torch = true, lantern = true, minerhat = true }
+        if not (hand_now ~= nil and LIGHT_HAND[hand_now]) then
+            if A.best_weapon ~= nil and A.equip_if_needed ~= nil then
+                local bw = A.best_weapon(p)
+                if bw ~= nil then
+                    pcall(A.equip_if_needed, p, bw)
+                    session.weapon = current_weapon_name(p)
+                end
             end
         end
         transition(STATES.APPROACH, "prepared")
@@ -513,7 +528,7 @@ function B.StepJob(j, p)
             local ox, _, oz = U.pos(target)
             if ox ~= nil then
                 local tx, tz = U.tile_of(ox, oz)
-                pcall(A.walk_to, p, tx, tz, true)
+                walk_throttled(p, tx, tz)
             end
             return "run"
         end
@@ -540,7 +555,7 @@ function B.StepJob(j, p)
             local dest_x = px + (dx / len) * 3 * U.TILE
             local dest_z = pz + (dz / len) * 3 * U.TILE
             local dtx, dtz = U.tile_of(dest_x, dest_z)
-            pcall(A.walk_to, p, dtx, dtz, true)
+            walk_throttled(p, dtx, dtz)
         end
         -- 引诱等待 1 秒后重新进入交战
         if now - session.state_entered_at >= 1.0 then
@@ -678,7 +693,7 @@ function B.StepJob(j, p)
 
         if rx ~= nil and rz ~= nil then
             local rtx, rtz = U.tile_of(rx, rz)
-            pcall(A.walk_to, p, rtx, rtz, true)
+            walk_throttled(p, rtx, rtz)
         end
 
         -- 判定后撤是否完成：距离拉开到安全线，或后撤时间到达
@@ -731,6 +746,18 @@ function B.StepJob(j, p)
             blog("LOOT", { found = #session.loot_queue })
         end
 
+        -- P1-6：先结算上一次拾取是否真的完成（被中断/背包满不能直接跳过漏捡）
+        if session.loot_pending ~= nil then
+            local lp = session.loot_pending
+            local still = (lp.item ~= nil and lp.item:IsValid())
+            local picked = not still
+            if picked or (now - lp.at > 3) then
+                session.loot_index = (lp.idx or 0) + 1
+                session.loot_pending = nil
+            else
+                return "run"
+            end
+        end
         local queue = session.loot_queue
         local idx = session.loot_index or 1
 
@@ -752,12 +779,13 @@ function B.StepJob(j, p)
                 local ix, _, iz = U.pos(item)
                 if ix ~= nil then
                     local itx, itz = U.tile_of(ix, iz)
-                    pcall(A.walk_to, p, itx, itz, true)
+                    walk_throttled(p, itx, itz)
                 end
             else
                 local ba = BufferedAction(p, item, ACTIONS.PICKUP, nil)
                 A.push(p, ba)
-                session.loot_index = idx + 1
+                -- P1-6：不立即 ++，记 pending，下一 tick 核对是否真的被捡走
+                session.loot_pending = { idx = idx, item = item, at = now }
             end
         end
         return "run"
