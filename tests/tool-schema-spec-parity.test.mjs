@@ -32,11 +32,14 @@ test('TS-2：工具的 required === ACTION_SPECS 里 required=true 的参数', (
   const bad = []
   for (const [name, spec] of Object.entries(ACTION_SPECS)) {
     const tool = toolByName.get(name)
+    // target_ref / snapshot_id 是"条件必填"（target_handle 与 #N 二选一），由 validateArgs 强制，
+    // 不计入 schema.required 的对比。
+    const COND = new Set(['target_ref', 'snapshot_id'])
     const specReq = Object.entries(spec.args ?? {})
-      .filter(([, a]) => a.required)
+      .filter(([k, a]) => a.required && !COND.has(k))
       .map(([k]) => k)
       .sort()
-    const toolReq = (tool.inputSchema?.required ?? []).slice().sort()
+    const toolReq = (tool.inputSchema?.required ?? []).filter((k) => !COND.has(k)).slice().sort()
     if (specReq.join(',') !== toolReq.join(',')) bad.push(`${name}: spec[${specReq.join(',')}] ≠ tool[${toolReq.join(',')}]`)
   }
   assert.deepEqual(bad, [], 'required 不一致：\n' + bad.join('\n'))

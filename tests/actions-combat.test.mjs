@@ -73,7 +73,7 @@ test('combat-6：attack / kill 工具描述包含引用与快照说明', () => {
   for (const name of ['attack', 'kill']) {
     assert.match(byName[name].description, /#N/, `${name} 要说明用 #N 引用`)
     assert.match(byName[name].description, /快照 ID|snapshot/, `${name} 要提醒带快照 ID`)
-    assert.ok(byName[name].inputSchema.required.includes('snapshot_id'), `${name} 的 snapshot_id 必填`)
+    assert.ok(!byName[name].inputSchema.required.includes('snapshot_id'), `${name} 的 snapshot_id 在 schema 不再必填（由 validateArgs 二选一强制）`)
   }
 })
 

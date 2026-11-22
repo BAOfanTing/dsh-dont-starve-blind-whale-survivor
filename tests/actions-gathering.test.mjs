@@ -186,6 +186,6 @@ test('work-7：作业工具的描述必须讲清"要 #N + 快照 ID"或用途', 
   for (const name of ['chop', 'mine', 'dig', 'hammer']) {
     assert.match(byName[name].description, /#N/, `${name} 要说明用 #N 引用`)
     assert.match(byName[name].description, /快照 ID|snapshot/, `${name} 要提醒带快照 ID`)
-    assert.ok(byName[name].inputSchema.required.includes('snapshot_id'), `${name} 的 snapshot_id 必填`)
+    assert.ok(!byName[name].inputSchema.required.includes('snapshot_id'), `${name} 的 snapshot_id 在 schema 不再必填（由 validateArgs 二选一强制）`)
   }
 })

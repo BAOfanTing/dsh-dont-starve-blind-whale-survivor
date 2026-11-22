@@ -922,7 +922,7 @@ test('P1-6：pickup 的 snapshot_id 说明必须点明"不是状态序列号"', 
   assert.ok(desc.includes('Nearby 快照 ID'), '要说明填的是 Nearby 快照 ID')
   assert.ok(desc.includes('状态快照序列号'), '要提醒别填状态快照序列号')
   assert.ok(/stale_snapshot/.test(desc), '要说明填错的后果')
-  assert.deepEqual(tool.inputSchema.required, ['target_ref', 'snapshot_id'], '必填项不变')
+  assert.deepEqual(tool.inputSchema.required, [], 'schema 不再把 target_ref/snapshot_id 设为 required（由 validateArgs 二选一强制）')
 })
 
 test('P1-7：harvest 的 snapshot_id 说明必须点明"不是状态序列号"', () => {
@@ -932,7 +932,7 @@ test('P1-7：harvest 的 snapshot_id 说明必须点明"不是状态序列号"',
   assert.ok(desc.includes('Nearby 快照 ID'), '要说明填的是 Nearby 快照 ID')
   assert.ok(desc.includes('状态快照序列号'), '要提醒别填状态快照序列号')
   assert.ok(/stale_snapshot/.test(desc), '要说明填错的后果')
-  assert.deepEqual(tool.inputSchema.required, ['target_ref', 'snapshot_id'], '必填项不变')
+  assert.deepEqual(tool.inputSchema.required, [], 'schema 不再把 target_ref/snapshot_id 设为 required（由 validateArgs 二选一强制）')
 })
 
 test('P1-8：旧的状态序列号不能被当成 nearby.snapshot_id（JSON 里两个字段分开）', () => {

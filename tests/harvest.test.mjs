@@ -501,7 +501,7 @@ test('harvest-21 Node 工具：harvest 已注册，参数只有 target_ref + sna
   assert.ok(OPEN_ACTIONS.includes('harvest'))
   assert.ok(ACTION_NAMES.has('harvest'), 'F8/MCP 共用同一份工具表')
   const tool = TOOLS.find((t) => t.name === 'harvest')
-  assert.deepEqual(tool.inputSchema.required, ['target_ref', 'snapshot_id'])
+  assert.deepEqual(tool.inputSchema.required, [], 'schema 不再把 target_ref/snapshot_id 设为 required（由 validateArgs 二选一强制）')
   assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['snapshot_id', 'target_handle', 'target_ref'])
   assert.equal(ACTION_SPECS.harvest.riskLevel, 'R2')
   for (const w of ['浆果丛', '成熟', 'snapshot_id', 'out_of_range', 'not_ready', '不会', 'pickup']) {

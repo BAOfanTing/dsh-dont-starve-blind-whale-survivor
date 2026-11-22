@@ -78,7 +78,7 @@ test('pickup-1 工具注册：pickup 在工具表里、必填 target_ref + snaps
   assert.ok(ACTION_NAMES.has('pickup'), 'tools.js 动作集合要有 pickup')
   const tool = TOOLS.find((t) => t.name === 'pickup')
   assert.ok(tool, 'TOOLS 里要有 pickup')
-  assert.deepEqual(tool.inputSchema.required, ['target_ref', 'snapshot_id'])
+  assert.deepEqual(tool.inputSchema.required, [], 'schema 不再把 target_ref/snapshot_id 设为 required（由 validateArgs 二选一强制）')
   assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['snapshot_id', 'target_handle', 'target_ref'])
   // 描述必须写清"不许当树/建筑/容器/生物"，否则模型会乱试
   assert.match(tool.description, /树枝|twigs/)
