@@ -228,7 +228,7 @@ test('survival-12：工具表里的四个新工具描述必须讲清白名单/�
   assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum,
     ['axe', 'pickaxe', 'torch', 'flowerhat', 'rope', 'boards', 'backpack', 'spear', 'armorwood', 'cutstone', 'transistor'],
     'TARGET-REFRESH：craft 的 enum 必须和 Node/Lua 白名单逐条一致（TENT 多了 cutstone / transistor）')
-  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat', 'flowerhat'])
+  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat', 'flowerhat', 'spear'])
 })
 
 
