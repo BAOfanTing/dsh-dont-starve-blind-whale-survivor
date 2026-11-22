@@ -537,6 +537,7 @@ local function entry_view(entry)
         health = b.health,
         stack_size = b.stack_size,
         is_harvestable = b.is_harvestable,
+        harvest_ready = b.harvest_ready,
         work_action = b.work_action,
     }
 end
@@ -592,6 +593,10 @@ local function compute_delta(full, kept_set, key)
             if before.is_harvestable ~= nil and now.is_harvestable ~= nil
                 and before.is_harvestable ~= now.is_harvestable then
                 fields.is_harvestable = { from = before.is_harvestable, to = now.is_harvestable }
+            end
+            if before.harvest_ready ~= nil and now.harvest_ready ~= nil
+                and before.harvest_ready ~= now.harvest_ready then
+                fields.harvest_ready = { from = before.harvest_ready, to = now.harvest_ready }
             end
             if before.work_action ~= nil and now.work_action ~= nil
                 and before.work_action ~= now.work_action then

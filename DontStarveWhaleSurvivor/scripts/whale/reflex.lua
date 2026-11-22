@@ -337,7 +337,7 @@ local function nearby_light(p)
             if ok and type(radius) == "number" then r = radius end
         end
         if r <= 0 then return false end
-        if U.dist(p, e) > r * r then return false end
+        if U.dist(p, e) > r then return false end
 
         if is_fire then
             local fueled = e.components ~= nil and e.components.fueled or nil
@@ -357,8 +357,8 @@ local function has_light(p)
         if ok and type(lit) == "boolean" then return lit end
     end
     local native = Whale ~= nil and Whale.native or nil
-    if native ~= nil and native.IsInLight ~= nil then
-        return native.IsInLight(p) == true
+    if native ~= nil and native.IsLit ~= nil then
+        return native.IsLit(p) == true
     end
     local phase = current_phase()
     if phase ~= "night" then return true end
@@ -387,7 +387,8 @@ local function light_report(p)
     local twigs_ok = (counts["twigs"] or 0) >= (2 * RESERVE_TORCHES)
     local reserve_ok = grass_ok and twigs_ok
 
-    local has_usable = (hand ~= nil) or (near ~= nil) or native_light
+    -- P0-2：以引擎权威光照(native_light=p:IsInLight)为准；附近有火但引擎判定不在光里，不算"有光"。
+    local has_usable = (hand ~= nil) or native_light
     return {
         phase = phase,
         hand = hand,
@@ -557,7 +558,12 @@ local function evaluate_flee_target(p, foe, threats)
     end
 
     local native = Whale ~= nil and Whale.native or nil
-    local base_angle = (native ~= nil and native.FleeAngle ~= nil and native.FleeAngle(p, foe, 9))
+    local base_angle = nil
+    if native ~= nil and native.FleeAngle ~= nil then
+        local a = native.FleeAngle(p, foe, 9)
+        -- P0-1：FleeAngle 返回的是【角度(0~360)】，必须转成弧度再参与 cos/sin
+        if type(a) == "number" then base_angle = a * (GLOBAL.DEGREES or (math.pi / 180)) end
+    end
     if base_angle == nil then
         local dx, dz = px - fx, pz - fz
         base_angle = safe_atan2(-dz, dx)
@@ -880,7 +886,10 @@ local function temperature_need(p)
         return {
             reason = "temperature_cold", can_run = true,
             run = function()
-                local started = A.Start("move_to", { target = fire }, REFLEX_ID)
+                local fx, _, fz = U.pos(fire)
+                if fx == nil then return false end
+                local tx, tz = U.tile_of(fx, fz)
+                local started = A.Start("move_to", { x = tx, z = tz, timeout = 10 }, REFLEX_ID)
                 if started then mark("temperature"); say(p, "temperature", "太冷了，先靠火堆暖暖"); return true end
                 return false
             end,
@@ -1029,7 +1038,7 @@ local function confirm_pending(p)
     elseif pending.kind == "eat" then
         local now = hunger_percent(p)
         local delta = (now ~= nil and pending.hunger_before ~= nil) and (now - pending.hunger_before) or nil
-        local ok = (delta ~= nil and delta > 0.005) or (now ~= nil and now > pending.hunger_before + 0.02)
+        local ok = (delta ~= nil and delta > 0.005) or (now ~= nil and pending.hunger_before ~= nil and now > pending.hunger_before + 0.02)
         diag("eat", {
             "result=" .. (ok and "succeeded" or "unconfirmed"),
             "hunger_delta=" .. (delta ~= nil and string.format("%.1f", delta) or "?"),
@@ -1050,7 +1059,7 @@ local function confirm_pending(p)
             end)
         end
         local dist_now = threat ~= nil and U.dist(p, threat) or 999
-        local ok = (dist_now >= pending.dist_before + 1.5 * U.TILE) or (threat == nil)
+        local ok = (pending.dist_before ~= nil and dist_now >= pending.dist_before + 1.5 * U.TILE) or (threat == nil)
         diag("flee_result", {
             "result=" .. (ok and "succeeded" or "failed"),
             "dist=" .. string.format("%.1f", dist_now),
@@ -1388,7 +1397,12 @@ function R.Tick()
     end
 
     sync_inflight()
-    confirm_pending(p)
+    -- P0-4：confirm_pending 出错不能把 pending 永久卡住（否则每 tick 都在这儿抛错、保命反射停摆）
+    local ok_cp, err_cp = pcall(confirm_pending, p)
+    if not ok_cp then
+        pending = nil
+        pcall(function() diag("error", { "confirm_pending=" .. tostring(err_cp) }) end)
+    end
 
     local ok, err = pcall(function() run(p) end)
     if not ok then

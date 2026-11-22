@@ -54,7 +54,7 @@ T.MAX_RADIUS = 40
 T.REACH_TILES = {
     pickup = 2.5,   -- = G.PICKUP_MAX_TILES
     food = 2.5,
-    harvest = 4,    -- harvestrules.InNativeRange 兜底值（物理半径 + 4 世界单位）；实际另有精算
+    harvest = 1.0,  -- P0-6：原生臂展约 1 格（旧值 4 把 4 世界单位当 4 格）
     -- ★ 砍树/挖矿：原生 CHOP/MINE 的 `arrivedist` 允许引擎自己走最后一小步，
     --   所以"够得着"不等于"贴脸"。1.6 太紧：真机里玩家站在矿旁边 1.8 格就被拒，
     --   而且角色稍微一动（被推开/自己走）就错过。2.5 格是原生动作能自己补上的范围。
@@ -325,10 +325,11 @@ function T.FindNearest(kind, actor, radius)
                     if T.KIND_ACTION[kind] == "harvest" and hr ~= nil and hr.InNativeRange ~= nil then
                         -- pcall(hr.InNativeRange, actor, e) → true, ok, limit(世界单位), dist
                         local ok_c, r_ok, r_limit = pcall(hr.InNativeRange, actor, e)
-                        if ok_c and r_ok == true and type(r_limit) == "number" then
+                        -- P0-6：只要拿到原生可及距离(r_limit，世界单位)就用它；r_ok=false 表示此刻够不着，
+                        -- 但 limit 仍是真实可达距离，下面 tiles<=limit 会正确判否。真正算不出才用兜底(已修成 1 格)。
+                        if ok_c and type(r_limit) == "number" and r_limit > 0 then
                             limit = r_limit / U.TILE
                         else
-                            -- 距离判定失败：按兜底值走，别把"算不出来"当"够得着"
                             limit = T.REACH_TILES.harvest
                         end
                     else

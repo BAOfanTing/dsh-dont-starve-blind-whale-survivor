@@ -110,6 +110,24 @@ local function inventory_block(p, unavailable)
         if block ~= nil then used[#used + 1] = block end
     end
 
+    -- P0-5：必须把背在身上的背包（Overflow Container）里的物品也统计进来，
+    -- 否则背包格物品在 get_state 隐身、Node verify 看不到新增→误判 unverified、is_full 误报。
+    local overflow = nil
+    if inv.GetOverflowContainer ~= nil then pcall(function() overflow = inv:GetOverflowContainer() end) end
+    if overflow ~= nil then
+        local o_slots = 0
+        pcall(function() o_slots = overflow:GetNumSlots() or 0 end)
+        if type(o_slots) == "number" and o_slots > 0 then
+            slots = slots + o_slots
+            for slot = 1, o_slots do
+                local item = nil
+                pcall(function() item = overflow:GetItemInSlot(slot) end)
+                local block = item_block(item, slot)
+                if block ~= nil then block.in_container = true; used[#used + 1] = block end
+            end
+        end
+    end
+
     local equipment = {}
     local equips = {}
     local slot_names = {
@@ -542,16 +560,15 @@ function O.Render(data)
                         end
                         if item.stack_size ~= nil and item.stack_size > 1 then text = text .. " ×" .. tostring(item.stack_size) end
                         if item.work_action ~= nil then text = text .. " 可" .. tostring(WORK_LABELS[item.work_action] or item.work_action) end
-                        if item.is_harvestable == true then
-                            -- SURVIVAL-01：告诉模型该用哪个动作（浆果丛 harvest / 草与树苗 gather）
+                        if item.harvest_ready == false then
+                            -- P0-7：优先看真实成熟度；已采空/未成熟的植株绝不能显示成"可采/可收"
+                            text = text .. " 未成熟（现在不能采）"
+                        elseif item.is_harvestable == true then
                             if item.use_action == "gather" then
                                 text = text .. " 可采(gather)"
                             else
                                 text = text .. " 可收(harvest)"
                             end
-                        elseif item.is_harvestable == false then
-                            -- TARGET-REFRESH：未成熟的**不是目标**，写清楚免得模型反复试
-                            text = text .. " 未成熟（现在不能采）"
                         end
                         -- TARGET-REFRESH：稳定句柄。它跨扫描有效（#N 只在这一帧有效），
                         -- 目标没了就作废；模型可以直接把它填进 target_handle。
