@@ -403,6 +403,11 @@ function H.Attach(screen, player)
         return false
     end
     attached = true
+    -- P0：无洞穴单机监听服(ismastersim 且客户端)下 bridge.start_client 可能不触发，这里幂等补绑一次快捷键
+    if not H._keys_bound then
+        H._keys_bound = true
+        pcall(H.BindKeys)
+    end
     if root ~= nil then
         pcall(function()
             if hud_visible then root:Show() else root:Hide() end
