@@ -371,17 +371,11 @@ JOBS.add_fuel = function(j, p)
 end
 
 JOBS.make_fire = function(j, p)
-    -- 先试营火，再试火坑（火坑要石头，材料不够就退回营火）。
-    -- P0-6：必须在同一个 j 上复用状态机（j.args.recipe + j.step + j.data），否则每 tick 新建残缺表会在 job_build 里 nil 索引崩溃。
+    -- 复用同一 j 的状态机直接 build（campfire/firepit 都是 placer 建筑，build 才正确；
+    -- 不要再退回 JOBS.craft —— 对 placer 建筑 craft 会立刻转发回 job_build，造成重复尝试）。
     if j.data == nil then j.data = {} end
-    j.args.recipe = "campfire"
-    local status, text = JOBS.build(j, p)
-    if status == "fail" then
-        -- 退回营火 craft：重置同一 job 的状态机再走 craft
-        j.step = "start"; j.data = {}; j.args.recipe = "campfire"
-        status, text = JOBS.craft(j, p)
-    end
-    return status, text
+    if j.args.recipe == nil then j.args.recipe = "campfire" end
+    return JOBS.build(j, p)
 end
 
 JOBS.wait = function(j, p)

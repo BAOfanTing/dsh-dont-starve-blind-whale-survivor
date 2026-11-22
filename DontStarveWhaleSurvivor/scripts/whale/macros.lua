@@ -204,7 +204,7 @@ A.register("cook_meal", function(j, p)
     local container = pot.components ~= nil and pot.components.container or nil
     local unit = item
     local st = item.components ~= nil and item.components.stackable or nil
-    if st ~= nil and st.StackSize ~= nil and st.StackSize() > 1 then unit = st:Get(1) end
+    if st ~= nil and st.StackSize ~= nil and st:StackSize() > 1 then unit = st:Get(1) end
     if unit.components ~= nil and unit.components.inventoryitem ~= nil and unit.components.inventoryitem.RemoveFromOwner ~= nil then
         unit.components.inventoryitem:RemoveFromOwner()
     end

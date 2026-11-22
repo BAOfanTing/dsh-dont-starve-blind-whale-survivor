@@ -224,7 +224,7 @@ function R.Needs()
     local now = U.now()
     for k, v in pairs(pending_needs) do
         if now - v.at < 60 then
-            out[#out + 1] = { kind = v.kind, reason = v.reason, detail = v.detail }
+            out[#out + 1] = { kind = v.kind, reason = v.reason, detail = v.detail, missing = v.missing }
         else
             pending_needs[k] = nil
         end

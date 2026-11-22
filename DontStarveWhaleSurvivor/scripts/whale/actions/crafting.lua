@@ -496,7 +496,7 @@ JOBS.cook = function(j, p)
         local function one_unit(item)
             if item == nil then return nil end
             local st = item.components ~= nil and item.components.stackable or nil
-            if st ~= nil and st.StackSize ~= nil and st.StackSize() > 1 then return st:Get(1) end
+            if st ~= nil and st.StackSize ~= nil and st:StackSize() > 1 then return st:Get(1) end
             return item
         end
         -- ① 已经煮好 → 拿出来

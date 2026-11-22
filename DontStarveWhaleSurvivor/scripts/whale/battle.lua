@@ -750,7 +750,10 @@ function B.StepJob(j, p)
         if session.loot_pending ~= nil then
             local lp = session.loot_pending
             local still = (lp.item ~= nil and lp.item:IsValid())
-            local picked = not still
+            local picked = (not still)
+                or (lp.item ~= nil and lp.item.IsInLimbo ~= nil and lp.item:IsInLimbo())
+                or (lp.item ~= nil and lp.item.components ~= nil and lp.item.components.inventoryitem ~= nil
+                    and lp.item.components.inventoryitem.owner == p)
             if picked or (now - lp.at > 3) then
                 session.loot_index = (lp.idx or 0) + 1
                 session.loot_pending = nil
