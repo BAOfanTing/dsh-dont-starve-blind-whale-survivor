@@ -1005,6 +1005,9 @@ function N.Reset()
     prev = { key = nil, by_guid = nil }
     refs = {}
     scan_seq = 0
+    -- P1：重置时也要清指纹缓存，否则可能错误复用上一次的编号
+    last_fingerprint = nil
+    last_snapshot_id = nil
 end
 
 Whale = Whale or {}

@@ -56,6 +56,18 @@ local EAT_CRITICAL = CFG.food_critical
 local EAT_NOTIFY = CFG.food_prevent
 local HEAL_EMERGENCY = CFG.heal_emergency
 local SANITY_LOW = CFG.sanity_maint
+-- P1：按角色 Profile 取理智阈值（温蒂 GetSanityPolicy().warn=0.50），未知角色回退 SANITY_LOW
+local function sanity_threshold(p)
+    local ch = Whale ~= nil and Whale.character or nil
+    if ch ~= nil and ch.Resolve ~= nil then
+        local ok, prof = pcall(function() return ch.Resolve(p) end)
+        if ok and prof ~= nil and prof.GetSanityPolicy ~= nil then
+            local ok2, pol = pcall(function() return prof.GetSanityPolicy(p) end)
+            if ok2 and pol ~= nil and type(pol.warn) == "number" then return pol.warn end
+        end
+    end
+    return SANITY_LOW
+end
 
 local last = {}          -- 上一次执行时间（防抖）
 local recent = {}        -- 最近做过的事
@@ -192,12 +204,12 @@ local function report_need(kind, reason, detail)
     if prev ~= nil and prev.reason == reason and (now - prev.at < 30) then
         return
     end
-    pending_needs[kind] = {
-        kind = kind,
-        reason = reason,
-        detail = detail,
-        at = now,
-    }
+    local rec = { kind = kind, reason = reason, detail = detail, at = now }
+    -- P1：把 detail 的字段（missing/radius 等）提到顶层，observe.need_text 才读得到（缺料明细否则永远空）
+    if type(detail) == "table" then
+        for k, v in pairs(detail) do if rec[k] == nil then rec[k] = v end end
+    end
+    pending_needs[kind] = rec
     pcall(function()
         print(string.format("[Reflex][EVENT] 生存需求上报: kind=%s reason=%s", tostring(kind), tostring(reason)))
     end)
@@ -293,20 +305,43 @@ local function hand_light(p)
     return nil
 end
 
+local function equipped_head_light(p)
+    local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
+    local head_slot = GLOBAL.EQUIPSLOTS and GLOBAL.EQUIPSLOTS.HEAD
+    if inv == nil or head_slot == nil or inv.GetEquippedItem == nil then return nil end
+    local head = nil
+    pcall(function() head = inv:GetEquippedItem(head_slot) end)
+    if head ~= nil and LIGHT_PREFABS[head.prefab] and item_usable(head) then return head end
+    return nil
+end
+
 local function inventory_light(p)
     local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
     if inv == nil then return nil end
+    local function usable(item)
+        if item == nil then return nil end
+        if not (LIGHT_PREFABS[item.prefab] and item_usable(item)) then return nil end
+        local in_limbo = false
+        if item.HasTag ~= nil then
+            local ok, tag = pcall(function() return item:HasTag("INLIMBO") end)
+            if ok and tag then in_limbo = true end
+        end
+        if not in_limbo or (item.components ~= nil and item.components.inventoryitem ~= nil) then return item end
+        return nil
+    end
     local items = inv.itemslots or inv._items or {}
-    for _, item in pairs(items) do
-        if item ~= nil and LIGHT_PREFABS[item.prefab] and item_usable(item) then
-            local in_limbo = false
-            if item.HasTag ~= nil then
-                local ok, tag = pcall(function() return item:HasTag("INLIMBO") end)
-                if ok and tag then in_limbo = true end
-            end
-            if not in_limbo or (item.components ~= nil and item.components.inventoryitem ~= nil) then
-                return item
-            end
+    for _, item in pairs(items) do local got = usable(item); if got ~= nil then return got end end
+    -- P1：背包容器(Overflow Container)里的火把/提灯也要能搜到
+    local overflow = nil
+    if inv.GetOverflowContainer ~= nil then pcall(function() overflow = inv:GetOverflowContainer() end) end
+    if overflow ~= nil then
+        local o_slots = 0
+        pcall(function() o_slots = overflow:GetNumSlots() or 0 end)
+        for slot = 1, o_slots do
+            local it = nil
+            pcall(function() it = overflow:GetItemInSlot(slot) end)
+            local got = usable(it)
+            if got ~= nil then return got end
         end
     end
     return nil
@@ -371,6 +406,7 @@ local function light_report(p)
     local hand = hand_light(p)
     local bag = inventory_light(p)
     local near = nearby_light(p)
+    local head = equipped_head_light(p)
     local native_light = has_light(p)
 
     local cr = Whale ~= nil and Whale.craftrules or nil
@@ -388,7 +424,9 @@ local function light_report(p)
     local reserve_ok = grass_ok and twigs_ok
 
     -- P0-2：以引擎权威光照(native_light=p:IsInLight)为准；附近有火但引擎判定不在光里，不算"有光"。
-    local has_usable = (hand ~= nil) or native_light
+    -- P0-2/NR-25：has_usable 完全以引擎权威光照(native_light=p:IsInLight)为准；
+    -- 手持火把但引擎判定没被照亮时也必须算“无光”（否则夜里举着照不到的火把还以为安全）。
+    local has_usable = native_light == true
     return {
         phase = phase,
         hand = hand,
@@ -398,7 +436,7 @@ local function light_report(p)
         can_craft = can_craft,
         missing = missing,
         reserve_ok = reserve_ok,
-        portable = (hand ~= nil) or (bag ~= nil),
+        portable = (hand ~= nil) or (head ~= nil) or (bag ~= nil),
     }
 end
 
@@ -853,7 +891,7 @@ end
 --- 理智监测与上报（绝不擅自在 Reflex 帧循环里跑去采花，避免见缝插针抢占）
 local function reflex_sanity(p)
     local sanity = sanity_percent(p)
-    if sanity == nil or sanity >= SANITY_LOW then return false end
+    if sanity == nil or sanity >= sanity_threshold(p) then return false end
     report_need("sanity", "sanity_low", { sanity = sanity })
     return false
 end
@@ -875,8 +913,8 @@ end
 local function temperature_need(p)
     local t = temperature_reading(p)
     if t == nil then return nil end
-    -- 过冷：滞回进入
-    if t < CFG.temp_cold_act then
+    -- P1：过冷滞回——在 cold_act..cold_ok(5~8℃) 维持"靠火"动作，避免阈值附近反复抖
+    if t < CFG.temp_cold_act or (temp_state == "cold" and t < CFG.temp_cold_ok) then
         temp_state = "cold"
         local fire = lit_fire_near(p, 20)
         if fire == nil then
@@ -895,13 +933,12 @@ local function temperature_need(p)
             end,
         }
     end
-    -- 过热：绝不靠近火堆，只上报（安全能力不足时不移动）
-    if t > CFG.temp_hot_act then
+    -- P1：过热滞回——在 hot_ok..hot_act(60~65℃) 维持避险；绝不靠近火堆，只上报
+    if t > CFG.temp_hot_act or (temp_state == "hot" and t > CFG.temp_hot_ok) then
         temp_state = "hot"
         diag("temperature", { "too_hot=true", "fire_move=forbidden" })
         return { reason = "temperature_hot", can_run = false, report = "too_hot_report_only", hot = true }
     end
-    -- 滞回：回到恢复阈值内才清状态
     if temp_state == "cold" and t >= CFG.temp_cold_ok then temp_state = nil end
     if temp_state == "hot" and t <= CFG.temp_hot_ok then temp_state = nil end
     return nil
@@ -1181,7 +1218,7 @@ end
 local function maintain_sanity(p)
     if A == nil then return false end
     local sanity = sanity_percent(p)
-    if sanity == nil or sanity >= CFG.sanity_maint then clear_need("sanity"); return false end
+    if sanity == nil or sanity >= sanity_threshold(p) then clear_need("sanity"); return false end
     report_need("sanity", "sanity_low", { sanity = sanity })
     if Whale.job ~= nil then return false end   -- 只在完全空闲时维护
     local flower = U.find_nearest(p, CFG.sanity_flower_radius, nil, nil, function(e)
@@ -1221,7 +1258,7 @@ function R.Priority(p)
 
     local temp = temperature_need(p)
     if temp ~= nil then return P1, temp.reason end
-    if sanity ~= nil and sanity < SANITY_LOW then return P3, "sanity_low" end
+    if sanity ~= nil and sanity < sanity_threshold(p) then return P3, "sanity_low" end
     return P3, "idle"
 end
 
@@ -1337,7 +1374,7 @@ local function run(p)
     end
 
     -- 理智异常监测报警
-    if sanity ~= nil and sanity < SANITY_LOW then
+    if sanity ~= nil and sanity < sanity_threshold(p) then
         reflex_sanity(p)
     end
 

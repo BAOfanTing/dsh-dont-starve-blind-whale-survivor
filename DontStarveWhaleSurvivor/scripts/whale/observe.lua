@@ -149,6 +149,9 @@ local function inventory_block(p, unavailable)
         end
     end
 
+    -- P1：空列表也要序列化成 []（json.arr 打数组标记），否则 Node 到处写对象/数组兜底
+    local jarr = Whale ~= nil and Whale.json ~= nil and Whale.json.arr or nil
+    if jarr ~= nil then pcall(function() jarr(used); jarr(equips) end) end
     local inventory = {
         slots = slots,
         used = #used,
@@ -301,6 +304,8 @@ local function need_text(need)
     local detail = ""
     if type(missing) == "table" and #missing > 0 then
         detail = "（缺：" .. table.concat(missing, "、") .. "）"
+    elseif type(missing) == "string" and missing ~= "" then
+        detail = "（缺：" .. missing .. "）"
     end
     if kind == "light" then
         return "⚠ 保命反射做不出光源、天已经黑了" .. detail

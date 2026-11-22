@@ -23,7 +23,7 @@ local M = {}
 local PRODUCT = {
     berrybush = "berries",
     berrybush2 = "berries",
-    berrybush_juicy = "berries",
+    berrybush_juicy = "berries_juicy",
     grass = "cutgrass",
     sapling = "twigs",
     reeds = "cutreeds",
@@ -121,6 +121,7 @@ A.register("chop_until", function(j, p)
         j.data.trees = 0
         j.step = "loop"
         j.data.sub = nil
+        j.data.phase = "pickup"
     end
 
     local have = A.count_item(p, j.data.product)
@@ -138,13 +139,17 @@ A.register("chop_until", function(j, p)
     if A.busy(p) then return "run" end
 
     -- 先捡地上的木头（砍下来的不会自己进背包），捡不到就忽略
-    local status = A.run_sub(j.data, "pickup", { item = j.data.product, count = 3, radius = j.data.radius })
-    if status ~= "fail" then return "run" end
-
-    -- 再去砍一棵
-    status = A.run_sub(j.data, "chop", { count = 1, radius = j.data.radius, until_gone = true })
+    -- P1：pickup / chop 分阶段（不要共用 sub 互相截胡），并正确接住 run_sub 的第二个返回值 text
+    if j.data.phase == nil then j.data.phase = "pickup" end
+    if j.data.phase == "pickup" then
+        local status, text = A.run_sub(j.data, "pickup", { item = j.data.product, count = 3, radius = j.data.radius })
+        if status == "done" or status == "fail" then j.data.phase = "chop"; j.data.sub = nil; return "run" end
+        return "run"
+    end
+    local status, text = A.run_sub(j.data, "chop", { count = 1, radius = j.data.radius, until_gone = true })
     if status == "done" then
         j.data.trees = j.data.trees + 1
+        j.data.phase = "pickup"; j.data.sub = nil
         return "run"
     elseif status == "fail" then
         return "fail", "砍不动：" .. tostring(text)
@@ -195,7 +200,16 @@ A.register("cook_meal", function(j, p)
         if j.data.filled > 0 then return "run" end
         return "fail", "背包里没有能煮的食材"
     end
-    A.push(p, GLOBAL.BufferedAction(p, pot, GLOBAL.ACTIONS.COOK, item))
+    -- P1：烹饪锅应 container:GiveItem + stewer:StartCooking；ACTIONS.COOK 是营火烤食材用的，锅不接受
+    local container = pot.components ~= nil and pot.components.container or nil
+    local unit = item
+    local st = item.components ~= nil and item.components.stackable or nil
+    if st ~= nil and st.StackSize ~= nil and st.StackSize() > 1 then unit = st:Get(1) end
+    if unit.components ~= nil and unit.components.inventoryitem ~= nil and unit.components.inventoryitem.RemoveFromOwner ~= nil then
+        unit.components.inventoryitem:RemoveFromOwner()
+    end
+    if container ~= nil then pcall(function() container:GiveItem(unit, nil, pot:GetPosition()) end) end
+    if stewer ~= nil then pcall(function() stewer:StartCooking(p) end) end
     j.data.filled = j.data.filled + 1
     return "run"
 end)
