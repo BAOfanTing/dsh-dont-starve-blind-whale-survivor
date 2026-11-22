@@ -1036,7 +1036,7 @@ test('RF-25（破局）：天黑没光、没草但有 log+rocks —— 反射走
     RECIPE = Whale.job ~= nil and Whale.job.args ~= nil and tostring(Whale.job.args.recipe) or "nil"
     CMD = Whale.job ~= nil and tostring(Whale.job.cmd_id) or "nil"
   `)
-  assert.equal(global('JOB'), 'make_fire', '没草时必须改走"不用草"的固定光源')
+  assert.equal(global('JOB'), 'build', '没草时必须改走"不用草"的固定光源（build firepit）')
   assert.equal(global('RECIPE'), 'firepit')
   assert.equal(global('CMD'), 'reflex')
 })

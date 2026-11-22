@@ -333,9 +333,13 @@ local function warnings(p, player, world)
 
     local phase = world.phase
     if phase == "dusk" or phase == "night" then
-        local hands = player.equipment ~= nil and player.equipment.slots ~= nil and player.equipment.slots.hands or nil
-        local lit = hands ~= nil and hands.prefab ~= nil
-            and (hands.prefab == "torch" or hands.prefab == "lantern" or hands.prefab == "minerhat")
+        local eqslots = player.equipment ~= nil and player.equipment.slots or nil
+        local hands = eqslots and eqslots.hands or nil
+        local head = eqslots and eqslots.head or nil
+        local LIGHTSET = { torch = true, lantern = true, minerhat = true }
+        -- P1：矿工帽戴在 head 槽，之前只查 hands 会误报“天黑没光”
+        local lit = (hands ~= nil and hands.prefab ~= nil and LIGHTSET[hands.prefab] == true)
+            or (head ~= nil and head.prefab ~= nil and LIGHTSET[head.prefab] == true)
         local fire = U.find_nearest(p, 8, { "fire" }, nil, function(e)
             local fueled = e.components ~= nil and e.components.fueled or nil
             return fueled == nil or not fueled:IsEmpty()
@@ -737,7 +741,7 @@ function O.BuildData(actor, opts)
     if info ~= nil then
         data.player = player_block(actor, info, unavailable)
         data.world = world_block(actor, unavailable)
-        data.nearby = nearby_block(actor, info, now, unavailable, data.identity)
+        data.nearby = nearby_block(actor, info, now, unavailable, data.identity, opts.force)
         -- R8.2：角色 Profile + 阿比盖尔伴生 + 战斗策略（来自真实组件；读不到就保持 null/unknown，不伪造）
         if Whale ~= nil and Whale.character ~= nil then
             local okc, prof = pcall(function() return Whale.character.Resolve(actor) end)

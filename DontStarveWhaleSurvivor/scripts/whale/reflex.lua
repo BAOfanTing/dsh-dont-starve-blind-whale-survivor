@@ -253,7 +253,7 @@ function R.Enabled()
         return false, "forced_off"
     end
     local cfg = Whale.config
-    if cfg ~= nil and cfg.get ~= nil and cfg.get("enable_reflex") == false then
+    if cfg ~= nil and cfg.get ~= nil and cfg.get("reflex") == false then
         return false, "config_disabled"
     end
     if Whale.reflex_on == false then
@@ -772,7 +772,7 @@ local function reflex_light(p)
 
     -- 3. 没草时的火坑兜底
     if firepit_ready(p) then
-        local started = A.Start("make_fire", { recipe = "firepit" }, REFLEX_ID)
+        local started = A.Start("build", { recipe = "firepit" }, REFLEX_ID, { survival_build = true, build_recipe = "firepit" })
         if started then
             say(p, "light", "没草做不了火把，先垒个火坑（不用草）")
             diag("light_build", { "recipe=firepit", "reason=no_cutgrass" })
@@ -1143,7 +1143,10 @@ local function maintain_fuel(p, phase)
     if A == nil then return false end
     local fire = U.find_nearest(p, CFG.fuel_radius, { "fire" }, nil, function(e)
         local fueled = e.components ~= nil and e.components.fueled or nil
-        return fueled ~= nil
+        if fueled == nil then return false end
+        -- P1：排除已熄灭的火（JOBS.add_fuel 不给灭的火添柴，否则每 6 秒空失败）
+        local ok_empty, empty = pcall(function() return fueled:IsEmpty() end)
+        return not (ok_empty and empty == true)
     end)
     if fire == nil then return false end
     local fueled = fire.components ~= nil and fire.components.fueled or nil

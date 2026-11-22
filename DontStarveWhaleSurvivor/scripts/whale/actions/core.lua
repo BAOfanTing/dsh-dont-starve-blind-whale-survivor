@@ -454,7 +454,7 @@ function A.count_item(p, prefab)
     local total = 0
     inv:ForEachItem(function(item)
         local name = string.lower(tostring(item.prefab or ""))
-        if string.find(name, want, 1, true) ~= nil then
+        if name == want then   -- P1：精确匹配，避免 count_item("log") 把 livinglog 也算进去
             total = total + U.count(item)
         end
     end)
