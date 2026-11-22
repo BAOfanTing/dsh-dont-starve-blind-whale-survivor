@@ -237,14 +237,21 @@ local function build_by_ctx(j, p)
             local px, _, pz = U.pos(p)
             if px == nil then return "fail", "no_position" end
             if j.data.spots == nil then
+                -- P2：落点离角色太近会被自身碰撞半径挡住；改用更大间距，并先用 can_deploy 预检，
+                -- 避免每个坏点都要空等一次放置失败（8 秒）。
                 local offsets = {
-                    { 0, 1.6 }, { 1.6, 0 }, { -1.6, 0 }, { 0, -1.6 },
-                    { 1.2, 1.2 }, { -1.2, 1.2 }, { 1.2, -1.2 }, { -1.2, -1.2 }, { 0, 0 },
+                    { 0, 6 }, { 6, 0 }, { -6, 0 }, { 0, -6 },
+                    { 4.5, 4.5 }, { -4.5, 4.5 }, { 4.5, -4.5 }, { -4.5, -4.5 },
+                    { 0, 10 }, { 10, 0 }, { -10, 0 }, { 0, -10 },
                 }
                 j.data.spots = {}
                 for _, o in ipairs(offsets) do
-                    j.data.spots[#j.data.spots + 1] = { px + o[1] * 4 * 0.4, pz + o[2] * 4 * 0.4 }
+                    local sx, sz = px + o[1], pz + o[2]
+                    if can_deploy(j.data.recipe, sx, sz) then
+                        j.data.spots[#j.data.spots + 1] = { sx, sz }
+                    end
                 end
+                if #j.data.spots == 0 then j.data.spots[1] = { px, pz } end
             end
             j.data.tried = (j.data.tried or 0) + 1
             if j.data.tried > #j.data.spots then
