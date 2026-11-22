@@ -17,8 +17,9 @@ test('SEEK-01: foodAction 在远距离目标时生成带 budget_s: 15 的 seek p
   }
   const inst = { data: {} }
   const plan = foodAction(snapshot, inst, { need: 'hunger' })
-  assert.equal(plan.tool, 'seek')
-  assert.equal(plan.budget_s, 15, '寻食计划必须包含明确的 budget_s: 15')
+  // P1：找不到食物时不再原地 seek，而是朝迷雾定向开图（exploreFrontier 给出 move_to）
+  assert.equal(plan.tool, 'move_to', '找不到食物应改走 exploreFrontier 的 move_to 开图')
+  assert.ok(typeof plan.args?.x === 'number' && typeof plan.args?.z === 'number')
 })
 
 test('SEEK-02: SkillExecutor.run() 将 plan 中的 budget_s 与 timeoutMs 正确传递给 dispatch', async () => {

@@ -64,7 +64,7 @@
 
 ## 自动装模组
 
-插件每 60 秒检查一次：`<游戏>/mods/DontStarveWhaleSurvivor` 在不在、版本一样不一样，不一样就整个复制过去；同时保证 `mods/modsettings.lua` 里有 `ModManager:AddMod("DontStarveWhaleSurvivor")`（只追加，不覆盖你自己写的内容）。游戏开着时文件被占用，会等关掉后再装。
+插件每 60 秒检查一次：`<游戏>/mods/DontStarveWhaleSurvivor` 在不在、版本一样不一样，不一样就整个复制过去；同时保证 `mods/modsettings.lua` 里有 `ModManager:ForceEnableMod("DontStarveWhaleSurvivor")`（确保启用；只追加，不覆盖你自己写的内容）。游戏开着时文件被占用，会等关掉后再装。
 
 ## 模型回复坏了自动续玩
 

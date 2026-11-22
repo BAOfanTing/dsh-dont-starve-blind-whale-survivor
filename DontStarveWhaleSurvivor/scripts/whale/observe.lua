@@ -624,6 +624,7 @@ function O.Render(data)
                 if fields.distance ~= nil then what[#what + 1] = "距离变化" end
                 if fields.stack_size ~= nil then what[#what + 1] = "数量变化" end
                 if fields.is_harvestable ~= nil then what[#what + 1] = "可采集状态变了" end
+                if fields.harvest_ready ~= nil then what[#what + 1] = "成熟度变化" end
                 if fields.work_action ~= nil then what[#what + 1] = "可作业状态变了" end
                 if fields.category ~= nil then what[#what + 1] = "分类变了" end
                 bits[#bits + 1] = "变化 " .. tostring(item.ref) .. " " .. tostring(item.label or item.prefab)
