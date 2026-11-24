@@ -424,3 +424,31 @@ test('SL-21：状态相同 30 秒内去重降噪', () => {
   r.tick()
   assert.equal(r.events.filter((e) => e.kind === 'state').length, 2, '状态改变后正常触发')
 })
+
+test('SL-22：reset() 清空前自动归档备份旧日志到 archives/，绝不丢失长跑历史', () => {
+  const dir = tempDir()
+  const src = makeBridgeFiles(dir)
+  const outDir = path.join(dir, 'logs')
+  fs.mkdirSync(outDir, { recursive: true })
+  fs.writeFileSync(path.join(outDir, 'session.jsonl'), '{"kind":"state","t":"2026-11-24T00:00:00.000Z"}\n')
+  fs.writeFileSync(path.join(outDir, 'session.txt'), 'LONG_RUN_500K_VALUABLE_SESSION_LOG_CONTENT\n')
+
+  const sl = new SessionLog({ outDir, bridge: fakeBridge(dir), explicit: src, intervalMs: 100000, sourceEveryMs: 100000 })
+  sl.start() // 触发 reset('start')
+  try {
+    // 检查 archives 目录是否存在且有备份文件
+    const archiveDir = path.join(outDir, 'archives')
+    assert.ok(fs.existsSync(archiveDir), 'archives 目录必须存在')
+    const files = fs.readdirSync(archiveDir)
+    const backupTxt = files.find((f) => f.includes('before_插件启动') && f.endsWith('.txt'))
+    const backupJsonl = files.find((f) => f.includes('before_插件启动') && f.endsWith('.jsonl'))
+    assert.ok(backupTxt, '必须存在 before_插件启动 的 txt 备份文件')
+    assert.ok(backupJsonl, '必须存在 before_插件启动 的 jsonl 备份文件')
+
+    const content = fs.readFileSync(path.join(archiveDir, backupTxt), 'utf8')
+    assert.match(content, /LONG_RUN_500K_VALUABLE_SESSION_LOG_CONTENT/, '备份必须完整保留原 500K 日志内容')
+  } finally {
+    sl.stop()
+  }
+})
+

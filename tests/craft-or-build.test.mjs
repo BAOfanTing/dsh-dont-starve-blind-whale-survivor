@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { craftOrBuild, materialsFor } from '../lib/skills/craft-or-build.js'
 import { skillIds } from '../lib/skills/index.js'
 import { stageTasksFor } from '../lib/planner/planner-core.js'
+import { STAGES } from '../lib/planner/development-stages.js'
 
 test('COB-1：craft_or_build 已注册', () => {
   assert.ok(skillIds().includes('craft_or_build'), '必须在技能注册表里')
@@ -35,3 +36,58 @@ test('COB-4：技能结构完整（materials/approach/act + completion）', () =
   assert.ok(materialsFor('firepit'), 'firepit 配方应可查')
   assert.ok(materialsFor('spear'), 'spear 配方应可查')
 })
+
+test('COB-5：Stage2 严格要求 firepit 且自动生成 12 石头与 2 木头采集依赖，造营火不完成阶段 2', () => {
+  const stage2 = STAGES[2]
+  assert.equal(stage2.id, 'basic_production')
+
+  // 1. 只有科学机器和一次性营火 campfire 时，阶段 2 不能判定为完成
+  const snapWithCampfire = {
+    nearby: {
+      buckets: {
+        structures: [
+          { prefab: 'sciencemachine', x: 0, z: 0 },
+          { prefab: 'campfire', x: 2, z: 2 },
+        ],
+      },
+    },
+  }
+  const mem = { known_buildings: [] }
+  assert.equal(stage2.isComplete(snapWithCampfire, mem), false, 'campfire 不能作为阶段 2 的完成凭证')
+
+  // 2. 只有科学机器和永久火坑 firepit 时，阶段 2 完成
+  const snapWithFirepit = {
+    nearby: {
+      buckets: {
+        structures: [
+          { prefab: 'sciencemachine', x: 0, z: 0 },
+          { prefab: 'firepit', x: 2, z: 2 },
+        ],
+      },
+    },
+  }
+  assert.equal(stage2.isComplete(snapWithFirepit, mem), true, 'firepit + sciencemachine 完成阶段 2')
+
+  // 3. 材料不足时，stageTasksFor 自动生成收集 12 石头与 2 木头依赖任务
+  const emptySnapshot = {
+    player: { inventory: { items: [{ prefab: 'rocks', count: 3 }] } },
+    nearby: { buckets: { structures: [{ prefab: 'sciencemachine' }] } },
+  }
+  const memory = { current_stage: 2, camp_site: { x: 0, z: 0 }, home_building_id: 'h', home_anchor: { x: 0, z: 0, radius: 10 }, known_buildings: [] }
+  const tasks = stageTasksFor(2, { snapshot: emptySnapshot, memory, sitePlan: null, now: 1000 })
+
+  const rockTask = tasks.find((t) => t.id === 'gather_firepit_rocks')
+  assert.ok(rockTask, '应生成收集石头任务')
+  assert.equal(rockTask.skill_args.target_items.rocks, 12)
+  assert.equal(rockTask.target.count, 12)
+
+  const logTask = tasks.find((t) => t.id === 'gather_firepit_log')
+  assert.ok(logTask, '应生成收集木头任务')
+  assert.equal(logTask.skill_args.target_items.log, 2)
+
+  const fireTask = tasks.find((t) => t.id === 'build_firepit')
+  assert.ok(fireTask, '应生成 build_firepit')
+  assert.deepEqual(fireTask.depends_on.sort(), ['gather_firepit_log', 'gather_firepit_rocks'].sort())
+  assert.equal(fireTask.priority, 2, '有未满足依赖时优先级降为 2')
+})
+

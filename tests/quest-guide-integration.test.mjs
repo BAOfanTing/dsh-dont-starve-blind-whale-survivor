@@ -567,3 +567,69 @@ test('QG-9: 生存受威胁状态下（survival.blocking），任务手册看板
   assert.ok(renderedText.includes('安全后继续任务手册任务'), '决策理由标明安全后继续任务手册')
 })
 
+test('QG-10: 任务手册遇到生火任务时优先锁定永久火坑 firepit 并自动补充 12 石头 + 2 木头依赖', () => {
+  const questGuide = {
+    installed: true,
+    tracked_task: {
+      id: 'a6',
+      title: '生一堆火',
+      season: 'autumn',
+      icon: 'campfire',
+      mats: [
+        { icon: 'log', name: '木头', n: 2 },
+        { icon: 'cutgrass', name: '采下的草', n: 3 },
+      ],
+      auto: [
+        [{ k: 'craft', p: ['campfire', 'firepit'], n: 1 }],
+      ],
+      done: false,
+    },
+  }
+
+  // 身上只有 2 块石头，0 木头，3 草
+  const snapshot = {
+    player: {
+      inventory: {
+        items: [
+          { prefab: 'rocks', count: 2 },
+          { prefab: 'cutgrass', count: 3 },
+        ],
+      },
+    },
+    nearby: { buckets: { structures: [] } },
+  }
+  const memory = { known_buildings: [] }
+
+  const tasks = questGuideTasksFor({ questGuide, snapshot, memory, now: 1000 })
+  // 必须优先选择 firepit，移除仅营火用的 cutgrass 依赖，并生成 12 石头 (差 10) 和 2 木头 (差 2) 的采集依赖
+  const mainTask = tasks.find((t) => t.id === 'qg_a6')
+  assert.ok(mainTask, '应生成主任务 qg_a6')
+  assert.equal(mainTask.skill_args.recipe, 'firepit', '必须优先锁定 firepit 而不是一次性营火')
+
+  const rocksTask = tasks.find((t) => t.id === 'gather_for_a6_rocks')
+  assert.ok(rocksTask, '应生成石头采集任务')
+  assert.equal(rocksTask.skill_args.target_items.rocks, 12, '石头目标必须为 12 块')
+
+  const logTask = tasks.find((t) => t.id === 'gather_for_a6_log')
+  assert.ok(logTask, '应生成木头采集任务')
+  assert.equal(logTask.skill_args.target_items.log, 2, '木头目标必须为 2 块')
+
+  // 不应存在草料依赖任务
+  const grassTask = tasks.find((t) => t.id === 'gather_for_a6_cutgrass')
+  assert.equal(grassTask, undefined, '锁定 firepit 后不应产生草料采集依赖')
+
+  // 验证 evaluateTarget：地上出现 firepit 后自动判定为完成
+  const target = mainTask.target
+  const doneSnapshot = {
+    quest_guide: { installed: true, done_tasks: {} },
+    nearby: {
+      buckets: {
+        structures: [{ prefab: 'firepit', x: -25, z: 49 }],
+      },
+    },
+  }
+  const evalResult = evaluateTarget(target, doneSnapshot, memory)
+  assert.equal(evalResult.done, true, '地上已有 firepit 时应判定主任务已完成')
+})
+
+
