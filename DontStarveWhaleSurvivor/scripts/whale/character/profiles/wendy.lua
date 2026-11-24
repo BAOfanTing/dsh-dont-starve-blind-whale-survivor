@@ -27,13 +27,19 @@ function w.GetSanityPolicy(_player)
     return { warn = 0.50, critical = 0.25, drain_mult = 0.75, allow_flower_pick = true,
              note = "温蒂理智流失×0.75：阈值略低；理智尚可时别乱采花；需要时只就近安全采花" }
 end
-function w.GetCombatPolicy(_player)
+function w.ShouldSummonCompanion(player)
+    local st = C.GetCompanionState(player)
+    return st.can_summon == true and st.has_flower == true and not st.present
+end
+
+function w.GetCombatPolicy(player)
     return {
         preferred_strategy = "abigail_assisted",
         allow_spider_hunt = true,
         requires_companion_for_hunt = true,
         avoid_melee = true,
         damage_mult = 0.75,
+        should_summon = w.ShouldSummonCompanion(player),
     }
 end
 

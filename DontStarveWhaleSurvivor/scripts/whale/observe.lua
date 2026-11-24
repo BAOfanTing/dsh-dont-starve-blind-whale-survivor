@@ -646,6 +646,15 @@ function O.Render(data)
                         -- 目标没了就作废；模型可以直接把它填进 target_handle。
                         if item.handle ~= nil then text = text .. " 句柄" .. tostring(item.handle) end
                         if item.fuel_percent ~= nil then text = text .. " 燃料 " .. tostring(item.fuel_percent) .. "%" end
+                        if item.stewer ~= nil then
+                            if item.stewer.done then
+                                text = text .. " [已煮好" .. (item.stewer.product and (":" .. tostring(item.stewer.product)) or "") .. "]"
+                            elseif item.stewer.cooking then
+                                text = text .. " [正在煮:剩" .. tostring(item.stewer.time_left) .. "s]"
+                            else
+                                text = text .. " [空闲可煮]"
+                            end
+                        end
                         if item.targeting_you then text = text .. " 正在追你" end
                         parts[#parts + 1] = text
                     end

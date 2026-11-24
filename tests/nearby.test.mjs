@@ -2106,7 +2106,7 @@ test('M2.2-21 guard 与 Observer 共用同一份白名单（同一张表，不�
             OUT_MAX = tostring(Whale.guard.PICKUP_MAX_TILES)`, '一致性')
   assert.equal(env.get('OUT_SAME'), 'true', '必须是同一张表（杜绝两份规则漂移）')
   assert.equal(env.get('OUT_LIST'),
-    'acorn,berries,berries_cooked,berries_juicy,berries_juicy_cooked,blue_cap,carrot,carrot_cooked,charcoal,corn,corn_cooked,cutgrass,eggplant,eggplant_cooked,fish,fish_cooked,flint,froglegs,froglegs_cooked,goldnugget,green_cap,honey,log,meat,meat_cooked,nitre,pinecone,pumpkin,pumpkin_cooked,red_cap,rocks,smallmeat,smallmeat_cooked,twigs',
+    'acorn,baconeggs,berries,berries_cooked,berries_juicy,berries_juicy_cooked,blue_cap,butterflymuffin,carrot,carrot_cooked,charcoal,corn,corn_cooked,cutgrass,dragonpie,eggplant,eggplant_cooked,fish,fish_cooked,fishsticks,flint,frogglebunwich,froglegs,froglegs_cooked,fruitmedley,goldnugget,green_cap,honey,honeyham,log,meat,meat_cooked,meatballs,meatstew,nitre,perogies,pinecone,pumpkin,pumpkin_cooked,ratatouille,red_cap,rocks,smallmeat,smallmeat_cooked,turkeydinner,twigs',
     '放行了地上的材料与基础/熟食食物（其它非白名单 prefab 仍然拒绝）')
   assert.equal(env.get('OUT_MAX'), '2.5', '执行距离上限仍在执行侧')
 })

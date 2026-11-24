@@ -53,7 +53,7 @@ test('模型可见的动作 === dispatcher 白名单（不多不少）', () => {
     '工具表暴露的动作必须和 dispatcher 放行的白名单完全一致')
   // SURVIVAL-01：新增 gather / eat / craft / equip
   // TARGET-REFRESH：新增 pickup_nearest / pickup_food / harvest_nearest / chop_nearest / mine_nearest
-  assert.deepEqual([...EXPOSED].sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fight_spider', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'sleep', 'stop', 'unequip', 'use', 'wait'])
+  assert.deepEqual([...EXPOSED].sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fight_spider', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'sleep', 'stop', 'summon_companion', 'unequip', 'use', 'wait'])
 })
 
 test('未开放的动作一律不在工具表里（模型看不到，也就不会去点）', () => {

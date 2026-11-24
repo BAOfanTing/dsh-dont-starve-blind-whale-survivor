@@ -841,6 +841,24 @@ function G.validate(cmd)
         target = ent
     end
 
+    if action == "summon_companion" then
+        if Whale.job ~= nil then return false, "actor_busy", nil end
+        if actor.components == nil or actor.components.ghostlybond == nil then
+            return false, "character_has_no_companion", nil
+        end
+        local gb = actor.components.ghostlybond
+        if gb.summoned == true and gb.notsummoned ~= true then
+            local ghost = gb.ghost
+            if ghost ~= nil and ghost:IsValid() and not ghost:HasTag("INLIMBO") then
+                return false, "already_summoned", nil
+            end
+        end
+        local inv = actor.components.inventory
+        if inv == nil then return false, "no_inventory", nil end
+        local flower = inv:FindItem(function(item) return item and item.prefab == "abigail_flower" end)
+        if flower == nil then return false, "flower_not_in_inventory", nil end
+    end
+
     -- ═══════════ SURVIVAL-02 ═══════════
     if action == "gather_area" then
         if Whale.job ~= nil then return false, "actor_busy", nil end

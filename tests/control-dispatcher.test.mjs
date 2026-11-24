@@ -322,7 +322,7 @@ test('dispatcher-10 F8 持有租约时，MCP 的请求被拒', async () => {
 
 test('dispatcher-11 白名单：move_to/stop 是 R1，pickup/harvest 是 R2；规格里有 riskLevel', () => {
   // SURVIVAL-01：新增 gather / eat / craft / equip
-  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fight_spider', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'sleep', 'stop', 'unequip', 'use', 'wait'])
+  assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fight_spider', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'sleep', 'stop', 'summon_companion', 'unequip', 'use', 'wait'])
   assert.equal(ACTION_SPECS.move_to.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.stop.riskLevel, 'R1')
   assert.equal(ACTION_SPECS.pickup.riskLevel, 'R2')

@@ -53,6 +53,19 @@ E.FOODS = {
     eggplant_cooked = "烤茄子",
     acorn_cooked = "烤桦栗果",
     petals = "花瓣",
+    -- 锅料理（高营养熟食储备）
+    meatballs = "肉丸",
+    meatstew = "炖肉汤",
+    butterflymuffin = "蝴蝶松饼",
+    dragonpie = "火龙果派",
+    frogglebunwich = "蛙腿三明治",
+    perogies = "波兰水饺",
+    fishsticks = "鱼肉卷",
+    ratatouille = "蔬菜杂烩",
+    fruitmedley = "水果拼盘",
+    honeyham = "蜜汁火腿",
+    baconeggs = "培根煎蛋",
+    turkeydinner = "火鸡正餐",
 }
 
 --- 自动挑食物时的保守白名单（不包含任何生蘑菇）。
@@ -83,6 +96,19 @@ E.AUTO_SAFE = {
     green_cap_cooked = true,
     blue_cap_cooked = true,
     petals = true,
+    -- 锅料理（安全熟食）
+    meatballs = true,
+    meatstew = true,
+    butterflymuffin = true,
+    dragonpie = true,
+    frogglebunwich = true,
+    perogies = true,
+    fishsticks = true,
+    ratatouille = true,
+    fruitmedley = true,
+    honeyham = true,
+    baconeggs = true,
+    turkeydinner = true,
 }
 
 --- 明确**不**放行的（写在这里是为了让后来者知道这是刻意的，不是漏了）

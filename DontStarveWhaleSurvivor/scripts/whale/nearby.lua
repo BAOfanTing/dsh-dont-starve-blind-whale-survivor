@@ -456,6 +456,24 @@ local function describe(ent, actor, category, item_kind)
         if ok and percent ~= nil then block.fuel_percent = math.floor(percent * 100) end
     end
 
+    local stewer = comp(ent, "stewer")
+    if stewer ~= nil then
+        local cooking = false
+        pcall(function() cooking = stewer:IsCooking() end)
+        local done = false
+        pcall(function() done = stewer:IsDone() end)
+        local time_left = 0
+        pcall(function() time_left = stewer:GetTimeToCook() or 0 end)
+        local product = nil
+        pcall(function() product = stewer.product end)
+        block.stewer = {
+            cooking = (cooking == true),
+            done = (done == true),
+            time_left = math.floor(time_left),
+            product = product and tostring(product) or nil,
+        }
+    end
+
     return block
 end
 

@@ -73,9 +73,47 @@ local STRATEGIES = {
     spider_warrior = {
         name = "spider_warrior",
         display_name = "蜘蛛战士",
-        can_kite = false,
-        supported = false,
-        reason = "spider_warrior_has_leap_attack",
+        swings_per_cycle = 1,       -- 蜘蛛战士硬直短、有跳扑，保守打一撤一
+        retreat_distance = 4.0,     -- 拉开更大距离防跳跃扑击
+        retreat_duration = 1.0,
+        reset_duration = 0.5,
+        can_kite = true,
+        supported = true,
+    },
+    hound = {
+        name = "hound",
+        display_name = "猎犬",
+        swings_per_cycle = 2,       -- 猎犬咬完后摇约 2s，打二撤一
+        retreat_distance = 4.0,     -- 避开猎犬扑咬
+        retreat_duration = 0.8,
+        reset_duration = 0.3,
+        can_kite = true,
+        supported = true,
+        fast_chaser = true,        -- 移速极快(10)，不可无脑逃跑
+    },
+    icehound = {
+        name = "icehound",
+        display_name = "冰猎犬",
+        swings_per_cycle = 1,       -- 保守打一，防冰冻
+        retreat_distance = 4.5,
+        retreat_duration = 1.0,
+        reset_duration = 0.4,
+        can_kite = true,
+        supported = true,
+        fast_chaser = true,
+        on_death_effect = "freeze",
+    },
+    firehound = {
+        name = "firehound",
+        display_name = "火猎犬",
+        swings_per_cycle = 1,       -- 保守打一
+        retreat_distance = 5.0,     -- 死亡产生 3 团火焰，击杀后需拉开大距离
+        retreat_duration = 1.2,
+        reset_duration = 0.4,
+        can_kite = true,
+        supported = true,
+        fast_chaser = true,
+        on_death_effect = "fire_explosion",
     },
 }
 B.STRATEGIES = STRATEGIES
@@ -90,9 +128,12 @@ B.BOSS_PREFABS = BOSS_PREFABS
 
 -- 拾取掉落物白名单（按优先级排序）
 local LOOT_PRIORITIES = {
-    silk = 1,           -- 优先拾取蜘蛛丝
-    spidergland = 2,    -- 其次蜘蛛腺体
-    monstermeat = 3,    -- 最后怪物肉
+    houndstooth = 1,    -- 狗牙优先
+    redgem = 2,         -- 红宝石
+    bluegem = 2,        -- 蓝宝石
+    silk = 3,           -- 蜘蛛丝
+    spidergland = 4,    -- 蜘蛛腺体
+    monstermeat = 5,    -- 怪物肉
 }
 
 -- ─────────────── 运行时会话 ───────────────
@@ -304,17 +345,72 @@ function B.ShouldSuppressReflex(p, attacker)
     return true
 end
 
--- ─────────────── 目标查找（就近寻找单只普通蜘蛛）───────────────
+--- 供 reflex.lua 在野狗等高速追击敌人锁定玩家时组织主动防御
+function B.StartDefense(p, attacker)
+    if p == nil or attacker == nil or not is_alive(attacker) then return false end
+    local prefab = tostring(attacker.prefab or "")
+    local strategy = STRATEGIES[prefab]
+    if strategy == nil or not strategy.supported then return false end
+
+    -- 若已在受控交战中且目标就是该怪，保持交战并抑制 flee
+    if session ~= nil and B.InCombat() and session.target == attacker then
+        return true
+    end
+
+    -- 残血（<25%）不硬接，让保命反射接管逃生
+    local hp = get_health_percent(p)
+    if hp ~= nil and hp < 0.25 then return false end
+
+    -- 温蒂角色伴生协同：阿比盖尔若未在场但可召唤，在野狗扑咬前优先召唤
+    local _prof = (Whale ~= nil and Whale.character ~= nil and Whale.character.Resolve ~= nil) and Whale.character.Resolve(p) or nil
+    if _prof ~= nil and _prof.id == "wendy" then
+        local comp = Whale.character.GetCompanionState(p)
+        if comp.can_summon == true and comp.has_flower == true and not comp.present then
+            local d = U.dist(p, attacker)
+            if d ~= nil and d > 3.0 * U.TILE then
+                local inv = p.components.inventory
+                local flower = inv and inv:FindItem(function(item) return item and item.prefab == "abigail_flower" end)
+                if flower ~= nil then
+                    local ba = BufferedAction(p, nil, ACTIONS.CASTSUMMON, flower)
+                    A.push(p, ba)
+                    blog("DEFENSE_SUMMON_COMPANION", { attacker = prefab })
+                    return true
+                end
+            end
+        end
+    end
+
+    -- 启动或接管为战术防御任务
+    if Whale.actions ~= nil and Whale.actions.Start ~= nil then
+        local ok = Whale.actions.Start("fight_spider", {}, "defense", { target = attacker, is_defense = true })
+        if ok then
+            blog("DEFENSE_ENGAGE", { attacker = prefab, guid = attacker.GUID })
+            return true
+        end
+    end
+
+    return false
+end
+
+-- ─────────────── 目标查找（寻找最近可战斗的敌对目标：蜘蛛/野狗）───────────────
 local function find_best_spider_target(p, radius_tiles)
     local r = radius_tiles or 16
     local list = U.find_all(p, r, nil, nil, function(e)
         if e == nil or e == p or not is_alive(e) then return false end
-        if e.prefab == "spider" then return true end
+        local strat = STRATEGIES[e.prefab]
+        if strat ~= nil and strat.supported == true then return true end
         return false
     end)
-    if #list == 0 then return nil, "no_spider_nearby" end
-    -- 按距离升序，选择最近的单只蜘蛛
-    table.sort(list, function(a, b) return a.d < b.d end)
+    if #list == 0 then return nil, "no_combat_target_nearby" end
+    -- 优先选正在把玩家当目标的敌人，其次按距离升序
+    table.sort(list, function(a, b)
+        local c_a = a.ent.components ~= nil and a.ent.components.combat or nil
+        local c_b = b.ent.components ~= nil and b.ent.components.combat or nil
+        local tgt_a = (c_a ~= nil and c_a.target == p) and 1 or 0
+        local tgt_b = (c_b ~= nil and c_b.target == p) and 1 or 0
+        if tgt_a ~= tgt_b then return tgt_a > tgt_b end
+        return a.d < b.d
+    end)
     return list[1].ent, nil
 end
 
@@ -347,7 +443,16 @@ local function find_loot_items(p, radius_tiles)
             return false
         end)
         if #threats > 0 then hostile_near = true end
-        if not hostile_near then
+
+        -- 检查掉落物是否着火（如火狗死亡引燃）
+        local burning = false
+        pcall(function()
+            if row.ent.components ~= nil and row.ent.components.burnable ~= nil then
+                burning = row.ent.components.burnable:IsBurning()
+            end
+        end)
+
+        if not hostile_near and not burning then
             items[#items + 1] = row.ent
         end
     end
@@ -366,10 +471,12 @@ function B.StepJob(j, p)
 
     -- 首次启动：初始化会话
     if j.step == "start" or session == nil then
+        local is_defense = (j.cmd_id == "defense" or (j.ctx and j.ctx.is_defense) or false)
+
         -- R8.2：角色战斗策略。温蒂（requires_companion_for_hunt）必须阿比盖尔可协助才主动狩猎；
-        -- 阿比盖尔不在/死亡/无法协助时降低主动战斗意愿，不白送。非温蒂 base 不受影响。
+        -- 但如果是被动防御（is_defense），不可拒战等死。
         local _prof = (Whale ~= nil and Whale.character ~= nil and Whale.character.Resolve ~= nil) and Whale.character.Resolve(p) or nil
-        if _prof ~= nil and _prof.GetCombatPolicy ~= nil then
+        if not is_defense and _prof ~= nil and _prof.GetCombatPolicy ~= nil then
             local _okp, _cp = pcall(function() return _prof.GetCombatPolicy(p) end)
             if _okp and _cp ~= nil and _cp.requires_companion_for_hunt == true then
                 local _okc, _comp = pcall(function() return Whale.character.GetCompanionState(p) end)
@@ -724,6 +831,28 @@ function B.StepJob(j, p)
     -- [VERIFY] 核实目标状态
     if st == STATES.VERIFY then
         if target == nil or not is_alive(target) then
+            -- 火狗死亡自燃爆炸防范：向后撤离并等待火焰消散
+            if session.strategy ~= nil and session.strategy.on_death_effect == "fire_explosion" then
+                if session.fire_wait_start == nil then
+                    session.fire_wait_start = now
+                    local px, py, pz = U.pos(p)
+                    local tx, ty, tz = U.pos(target)
+                    if px ~= nil and tx ~= nil then
+                        local dx, dz = px - tx, pz - tz
+                        local len = math.sqrt(dx * dx + dz * dz)
+                        if len < 0.01 then dx, dz, len = 1, 0, 1 end
+                        local dest_x = px + (dx / len) * 4 * U.TILE
+                        local dest_z = pz + (dz / len) * 4 * U.TILE
+                        local dtx, dtz = U.tile_of(dest_x, dest_z)
+                        walk_throttled(p, dtx, dtz)
+                    end
+                    return "run"
+                end
+                if now - session.fire_wait_start < 2.0 then
+                    return "run"
+                end
+            end
+
             blog("TARGET_DEAD", {
                 target = session.target_prefab,
                 guid = session.target_guid,

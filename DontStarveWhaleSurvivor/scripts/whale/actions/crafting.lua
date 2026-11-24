@@ -598,6 +598,13 @@ JOBS.cook = function(j, p)
             if d > 0 then gained = gained + d end
         end
         if gained > 0 then return "done", "锅里的东西做好了，已经拿出来" end
+        if stewer ~= nil then
+            local is_done = false
+            pcall(function() is_done = stewer:IsDone() end)
+            if not is_done then
+                return "done", "锅里的东西已出锅（若背包已满则掉落在锅旁）"
+            end
+        end
         if U.now() - j.data.phase_start > 10 then
             return "fail", "cook_harvest_failed: 没拿到东西"
         end

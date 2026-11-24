@@ -24,7 +24,8 @@ C.EMPTY_COMPANION = {
     present = false, alive = false, valid = false,
     distance = nil, health_percent = nil, current_target = nil,
     is_following = false, is_attacking = false, is_busy = false,
-    can_assist = false, unknown = true,
+    can_assist = false, can_summon = false, has_flower = false, bond_level = 1,
+    unknown = true,
 }
 
 local base = {}

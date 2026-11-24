@@ -249,6 +249,11 @@ Whale.guard_action_specs = {
             target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
+    summon_companion = {
+        risk = "R1",
+        required_components = { "inventory" },
+        args = {},
+    },
     -- wait / drop
     wait = {
         risk = "R1",

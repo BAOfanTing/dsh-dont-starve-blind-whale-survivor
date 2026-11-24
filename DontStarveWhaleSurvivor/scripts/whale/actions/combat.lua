@@ -256,4 +256,47 @@ JOBS.fight_spider = function(j, p)
     return "fail", "battle_subsystem_unavailable"
 end
 
+JOBS.summon_companion = function(j, p)
+    if p == nil or p.components == nil or p.components.ghostlybond == nil then
+        return "fail", "character_has_no_companion: 当前角色无伴生生物契约"
+    end
+    local gb = p.components.ghostlybond
+    if gb.summoned == true and gb.notsummoned ~= true then
+        local ghost = gb.ghost
+        if ghost ~= nil and ghost:IsValid() and not ghost:HasTag("INLIMBO") then
+            return "done", "already_summoned: 阿比盖尔已在场"
+        end
+    end
+
+    local inv = p.components.inventory
+    if inv == nil then return "fail", "no_inventory" end
+    local flower = inv:FindItem(function(item) return item and item.prefab == "abigail_flower" end)
+    if flower == nil then
+        return "fail", "flower_not_in_inventory: 背包中没有阿比盖尔之花"
+    end
+
+    if j.step == "start" then
+        j.data.phase_start = U.now()
+        local ba = BufferedAction(p, nil, ACTIONS.CASTSUMMON, flower)
+        push(p, ba)
+        j.step = "acting"
+        return "run"
+    end
+
+    if j.step == "acting" then
+        if gb.summoned == true and (gb.ghost ~= nil and gb.ghost:IsValid() and not gb.ghost:HasTag("INLIMBO")) then
+            return "done", "summon_succeeded: 已成功召唤阿比盖尔"
+        end
+        if U.now() - j.data.phase_start > 5 then
+            if gb.ghost ~= nil and gb.ghost:IsValid() and not gb.ghost:HasTag("INLIMBO") then
+                return "done", "summon_succeeded: 已成功召唤阿比盖尔"
+            end
+            return "fail", "summon_timeout: 召唤阿比盖尔超时或被中断"
+        end
+        return "run"
+    end
+
+    return "run"
+end
+
 return A

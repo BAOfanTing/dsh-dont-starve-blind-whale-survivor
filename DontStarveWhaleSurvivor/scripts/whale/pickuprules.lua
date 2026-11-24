@@ -76,6 +76,18 @@ P.PREFABS = {
     corn_cooked = true,
     pumpkin_cooked = true,
     eggplant_cooked = true,
+    meatballs = true,
+    meatstew = true,
+    butterflymuffin = true,
+    dragonpie = true,
+    frogglebunwich = true,
+    perogies = true,
+    fishsticks = true,
+    ratatouille = true,
+    fruitmedley = true,
+    honeyham = true,
+    baconeggs = true,
+    turkeydinner = true,
 }
 
 local function comp(ent, name)

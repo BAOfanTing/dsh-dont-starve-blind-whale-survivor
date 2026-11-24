@@ -1305,6 +1305,19 @@ local function run(p)
     local hp_safe = hp ~= nil and hp >= 0.50
 
     if attacker ~= nil and combat_targeting(attacker, p) then
+        -- R8.3.3 野狗等高速追击者防御判定
+        local is_fast_chaser = (attacker.prefab == "hound" or attacker.prefab == "icehound" or attacker.prefab == "firehound")
+        if is_fast_chaser and not suppress_flee then
+            -- 野狗移速(10) > 角色(6)，直线逃跑必被咬死！
+            -- 如果自身非残血濒死（>=25%），优先由战斗系统组织战术防御或召唤阿比盖尔
+            if B ~= nil and B.StartDefense ~= nil and (hp == nil or hp >= 0.25) then
+                local def_ok = B.StartDefense(p, attacker)
+                if def_ok then
+                    suppress_flee = true
+                end
+            end
+        end
+
         if not suppress_flee and not (fighting_back and hp_safe) then
             if try_action(p, "flee", P0, "under_attack", function() return reflex_flee(p) end) then return end
         end
