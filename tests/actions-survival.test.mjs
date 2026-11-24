@@ -65,8 +65,9 @@ test('survival-4：craft 的 recipe 必填且只能填白名单里的配方', ()
 test('survival-5：equip 的 item 必填，且 verify 拒非白名单', () => {
   const spec = ACTION_SPECS.equip
   assert.equal(validateArgs(spec, {}).ok, false, 'item 必填')
-  for (const it of ['torch', 'axe', 'pickaxe']) {
+  for (const it of ['torch', 'axe', 'pickaxe', 'shovel', 'goldenaxe', 'goldenpickaxe', 'goldenshovel']) {
     assert.equal(validateArgs(spec, { item: it }).ok, true)
+    assert.equal(spec.verify({}, { player: { equipment: { slots: { hands: { prefab: it } } } } }, { item: it }).ok, true)
   }
   const v = spec.verify({}, {}, { item: 'grass' })
   assert.equal(v.ok, false)
@@ -226,9 +227,12 @@ test('survival-12：工具表里的四个新工具描述必须讲清白名单/�
   assert.match(byName.equip.description, /torch/, 'equip 要列出手持物品')
   // craft/equip 的 enum 必须锁死
   assert.deepEqual(byName.craft.inputSchema.properties.recipe.enum,
-    ['axe', 'pickaxe', 'torch', 'flowerhat', 'rope', 'boards', 'backpack', 'spear', 'armorwood', 'cutstone', 'transistor'],
-    'TARGET-REFRESH：craft 的 enum 必须和 Node/Lua 白名单逐条一致（TENT 多了 cutstone / transistor）')
-  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, ['torch', 'axe', 'pickaxe', 'lantern', 'minerhat', 'flowerhat', 'spear'])
+    ['axe', 'pickaxe', 'torch', 'flowerhat', 'shovel', 'rope', 'boards', 'backpack', 'spear', 'armorwood', 'cutstone', 'transistor', 'goldenaxe', 'goldenpickaxe', 'goldenshovel'],
+    'TARGET-REFRESH：craft 的 enum 必须和 Node/Lua 白名单逐条一致')
+  assert.deepEqual(byName.equip.inputSchema.properties.item.enum, [
+    'torch', 'axe', 'pickaxe', 'shovel', 'goldenaxe', 'goldenpickaxe', 'goldenshovel',
+    'lantern', 'minerhat', 'flowerhat', 'spear',
+  ])
 })
 
 

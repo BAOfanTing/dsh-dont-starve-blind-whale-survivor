@@ -46,6 +46,7 @@ C.RECIPES = {
     torch = { ingredients = { cutgrass = 2, twigs = 2 }, label = "火把", tech = "NONE" },
     flowerhat = { ingredients = { petals = 12 }, label = "花环", tech = "NONE" },
     -- ── 第一阶段科技（需要科学机器）──
+    shovel = { ingredients = { twigs = 2, flint = 2 }, label = "铲子", tech = "SCIENCE_ONE" },
     rope = { ingredients = { cutgrass = 3 }, label = "绳子", tech = "SCIENCE_ONE" },
     boards = { ingredients = { log = 4 }, label = "木板", tech = "SCIENCE_ONE" },
     backpack = { ingredients = { cutgrass = 4, twigs = 4 }, label = "背包", tech = "SCIENCE_ONE" },
@@ -53,6 +54,10 @@ C.RECIPES = {
     armorwood = { ingredients = { log = 8, rope = 2 }, label = "木甲", tech = "SCIENCE_ONE" },
     cutstone = { ingredients = { rocks = 3 }, label = "石砖", tech = "SCIENCE_ONE" },
     transistor = { ingredients = { goldnugget = 2, cutstone = 1 }, label = "电子元件", tech = "SCIENCE_ONE" },
+    -- ── 第二阶段科技（需要炼金引擎）──
+    goldenaxe = { ingredients = { twigs = 4, goldnugget = 2 }, label = "黄金斧头", tech = "SCIENCE_TWO" },
+    goldenpickaxe = { ingredients = { twigs = 4, goldnugget = 2 }, label = "黄金镐", tech = "SCIENCE_TWO" },
+    goldenshovel = { ingredients = { twigs = 4, goldnugget = 2 }, label = "黄金铲", tech = "SCIENCE_TWO" },
 }
 
 --- 配方名 → 科技阶段（只有白名单里的名字有值；Node 侧有同一张表）

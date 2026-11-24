@@ -24,6 +24,10 @@ Q.ITEMS = {
     flowerhat = "花环",
     axe = "斧头",
     pickaxe = "镐",
+    shovel = "铲子",
+    goldenaxe = "黄金斧头",
+    goldenpickaxe = "黄金镐",
+    goldenshovel = "黄金铲",
     spear = "长矛",
 }
 

@@ -47,11 +47,17 @@ const THE_FIVE = ['rope', 'boards', 'backpack', 'spear', 'armorwood']
 const THE_FOUR = ['axe', 'pickaxe', 'torch', 'flowerhat']
 /** TENT（2026-11-17）：炼金引擎的材料，也是第一阶段科技 */
 const THE_TWO = ['cutstone', 'transistor']
-const SCIENCE_ONE = [...THE_FIVE, ...THE_TWO]
+const THE_SCIENCE_ONE_TOOLS = ['shovel']
+const SCIENCE_ONE = [...THE_FIVE, ...THE_TWO, ...THE_SCIENCE_ONE_TOOLS]
+const SCIENCE_TWO = ['goldenaxe', 'goldenpickaxe', 'goldenshovel']
 
-test('RP-1：第一阶段科技配方在 Node 与 Lua **两边同时**开放', () => {
+test('RP-1：第一/二阶段科技配方在 Node 与 Lua **两边同时**开放', () => {
   const lua = parseLuaRecipes(craftrules)
   for (const name of SCIENCE_ONE) {
+    assert.ok(RECIPE_WHITELIST[name], `Node 白名单缺少 ${name}`)
+    assert.ok(lua[name], `Lua 白名单缺少 ${name}`)
+  }
+  for (const name of SCIENCE_TWO) {
     assert.ok(RECIPE_WHITELIST[name], `Node 白名单缺少 ${name}`)
     assert.ok(lua[name], `Lua 白名单缺少 ${name}`)
   }
@@ -60,8 +66,8 @@ test('RP-1：第一阶段科技配方在 Node 与 Lua **两边同时**开放', (
     assert.ok(lua[name], `Lua 白名单缺少 ${name}`)
   }
   // 不能"顺手"多开别的配方
-  assert.deepEqual(Object.keys(RECIPE_WHITELIST).sort(), [...THE_FOUR, ...SCIENCE_ONE].sort())
-  assert.deepEqual(Object.keys(lua).sort(), [...THE_FOUR, ...SCIENCE_ONE].sort())
+  assert.deepEqual(Object.keys(RECIPE_WHITELIST).sort(), [...THE_FOUR, ...SCIENCE_ONE, ...SCIENCE_TWO].sort())
+  assert.deepEqual(Object.keys(lua).sort(), [...THE_FOUR, ...SCIENCE_ONE, ...SCIENCE_TWO].sort())
 })
 
 test('RP-2：配方名/中文名/科技阶段/兜底材料逐条一致（两边不能各抄一套数字）', () => {
@@ -73,8 +79,9 @@ test('RP-2：配方名/中文名/科技阶段/兜底材料逐条一致（两边�
     assert.equal(other.tech, def.tech, `${name} 的科技阶段两边不一致`)
     assert.deepEqual(other.ingredients, def.ingredients, `${name} 的兜底材料两边不一致`)
   }
-  // 科技阶段必须和原版 recipes.lua 对得上（SCIENCE_ONE vs NONE）
+  // 科技阶段必须和原版 recipes.lua 对得上（SCIENCE_ONE vs SCIENCE_TWO vs NONE）
   for (const name of SCIENCE_ONE) assert.equal(RECIPE_WHITELIST[name].tech, 'SCIENCE_ONE', `${name} 需要科学机器`)
+  for (const name of SCIENCE_TWO) assert.equal(RECIPE_WHITELIST[name].tech, 'SCIENCE_TWO', `${name} 需要炼金引擎`)
   for (const name of THE_FOUR) assert.equal(RECIPE_WHITELIST[name].tech, 'NONE', `${name} 不需要科技`)
 })
 
@@ -84,7 +91,7 @@ test('RP-3：craft 工具/规格的 enum 就是这张白名单（模型照 enum 
   const tool = TOOLS.find((t) => t.name === 'craft')
   assert.deepEqual(tool.inputSchema.properties.recipe.enum, CRAFTABLE_RECIPES)
   for (const r of CRAFTABLE_RECIPES) assert.equal(validateArgs(spec, { recipe: r }).ok, true, `${r} 应该合法`)
-  for (const bad of ['campfire', 'sciencemachine', 'goldenaxe', 'marble', 'ROPE']) {
+  for (const bad of ['campfire', 'sciencemachine', 'gunpowder', 'marble', 'ROPE']) {
     assert.equal(validateArgs(spec, { recipe: bad }).ok, false, `${bad} 不在 craft 白名单里，必须拒`)
   }
 })
