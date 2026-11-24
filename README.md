@@ -10,7 +10,7 @@
 
 ## 现在能做什么
 
-**模型能用的 38 个动作 + 5 个本地工具（共 43 个工具）**（下表按用途整理；动作与本地工具的数量、工具集由 `npm run check:docs` 对照 `ACTION_SPECS` / `TOOLS` 校验，不会和代码脱节）：
+**模型能用的 39 个动作 + 5 个本地工具（共 44 个工具）**（下表按用途整理；动作与本地工具的数量、工具集由 `npm run check:docs` 对照 `ACTION_SPECS` / `TOOLS` 校验，不会和代码脱节）：
 
 | 用途 | 工具 |
 |---|---|
@@ -21,7 +21,7 @@
 | 制作 | `craft`（torch / axe / pickaxe / flowerhat + 第一阶段科技 rope / boards / backpack / spear / armorwood）、`build`（营火 / 火坑 / 箱子 / 锅 / 科学机器）、`cook` |
 | 生存 | `eat`、`equip`（火把 / 提灯 / 矿工帽 / 长矛 / 防具等，已实机验证）、`unequip`、`drop`、`fuel`、`wait`、`sleep`（帐篷/睡袋） |
 | 交互 | `use`、`container_take`、`container_put`、`give` |
-| 战斗 | `attack`、`kill`、`fight_spider`（风筝战术） |
+| 战斗 | `attack`、`kill`、`fight_spider`（风筝战术）、`summon_companion`（召唤伴生生物，如温蒂的阿比盖尔） |
 | 社交 | `say` |
 | **任务调度** | `advance_task`（全自动推进任务看板、并发互斥、结构化报告） |
 | **复合技能** | `run_skill`（执行多步复合工作流：`survival_stabilize` 紧急保命、`establish_home` 选址前往建造设家全流程、`gather_resources` 指定配方/物品智能缺口采集，支持 `skill_args` 定制目标） |
