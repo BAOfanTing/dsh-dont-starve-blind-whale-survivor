@@ -90,7 +90,10 @@ test('MCP-01 ~ MCP-04: SSE 连接、listChanged 声明、模式切换通知与 t
     })
     const toolNames1 = listRes1.body.result.tools.map((t) => t.name)
     assert.ok(toolNames1.includes('advance_task'), 'autopilot 暴露 advance_task')
-    assert.ok(toolNames1.includes('chop'), 'autopilot 也暴露完整原子动作（模式不再裁剪工具）')
+    assert.ok(!toolNames1.includes('chop'), 'autopilot 不暴露原子动作 chop（只给高层接口）')
+    assert.ok(!toolNames1.includes('run_skill'), 'autopilot 不暴露 run_skill')
+    assert.deepEqual(toolNames1.slice().sort(), ['advance_task', 'get_guide', 'get_state', 'stop', 'update_notes'],
+      'autopilot 工具集 = 高层接口白名单')
 
     // 3. 建立 SSE 连接
     const sseEvents = []
@@ -149,14 +152,16 @@ test('MCP-01 ~ MCP-04: SSE 连接、listChanged 声明、模式切换通知与 t
   }
 })
 
-test('MCP-05: 模式不再按 executionMode 拦截工具（三模式同一工具集，仅驱动不同）', async () => {
+test('MCP-05: Autopilot 直调原子动作被拒；Assisted/Manual 不按模式拦截（R8.4）', async () => {
+  const REJECT = 'Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。'
   const call = async (name, args, mode) => {
     try { return String(await executeTool(name, args, { executionMode: mode, log: () => {} })) }
     catch (e) { return 'THREW:' + String(e?.message ?? e) }
   }
-  // autopilot 调用 chop / manual 调用 advance_task：都不应被“权限”拦截
-  assert.ok(!(await call('chop', { target_ref: '#1', snapshot_id: 's1' }, 'autopilot')).includes('禁止直接调用底层原子动作'))
-  assert.ok(!(await call('advance_task', {}, 'manual')).includes('禁止调用【advance_task】'))
+  // autopilot 调 chop：进入 dispatcher 之前就被固定文案拒绝
+  assert.equal(await call('chop', { target_ref: '#1', snapshot_id: 's1' }, 'autopilot'), REJECT)
+  // manual 调 advance_task：不按模式拦截
+  assert.ok(!(await call('advance_task', {}, 'manual')).includes('不允许模型直接调用原子动作'))
 })
 
 test('MCP-06: SSE 客户端断开后安全注销，防止内存泄漏', async () => {

@@ -4,6 +4,21 @@
 
 ---
 
+## [Phase R8.4] - 2026-11-24
+
+### Autopilot 高层任务驱动与原子工具收口 (Autopilot High-level Task Drive & Atomic Tool Isolation)
+
+最终标准：**Autopilot 模式下模型只负责制定和监督高层目标，`advance_task` 负责驱动现有任务执行系统，底层原子动作仍由 `SkillExecutor` 和 `Dispatcher` 安全执行。**
+
+- **工具隔离（模型层）**：`lib/tools.js` 新增 `AUTOPILOT_TOOL_WHITELIST`（`advance_task / get_state / get_guide / update_notes / stop`）与 `isToolAllowedInMode()`；`toolList(mode)` 对 Autopilot 只返回这 5 个高层接口，Assisted/Manual 返回完整工具集（原子动作 + `run_skill` + `advance_task`）。未知/非法模式安全回退为 Autopilot 白名单（不再意外放开全部工具）。
+- **入口纵深防御**：`executeTool` 在进入任何 `dispatcher` 之前加一道闸门——Autopilot 下直调原子动作 / `run_skill` 会被固定文案拒绝：`Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。`；`stop` 始终可用。该闸门**只作用于模型直调层**，`SkillExecutor → Dispatcher` 的内部派发（internal）不经过 `executeTool`，因此绝不会误伤内部执行链。
+- **提示词分离**：`lib/index.js` 的 `buildInstructions(guides, mode)` 改为模式感知——Autopilot 使用新的 `AUTOPILOT_RULES`（复用 `RULES` 的共享生存常识/MCP 说明，只把开头原子动作手册换成"高层任务驱动"：开局 `get_state` 一次 → 反复 `advance_task`（max_steps 默认 8）→ 读回执 `stop_reason` 决策）；删除"拥有完整原子动作工具集""任务看板只是建议"等冲突文案；Assisted/Manual 保留原完整动作手册 `RULES`。
+- **入口统一**：F8（`AiRunner`）、MCP（`tools/list` / `initialize` / `tools/call`）、DSH gateway（`help` / dst 工具）全部经 `toolsForExecutionMode(config)` 与 `buildInstructions(guidesOf(config), mode)` 解析，提示词 / 工具列表 / 服务端权限三者由构造方式保证一致。
+- **advance_task 审计**：确认 `WorldRuntimeManager.advanceTask()` 多动作循环有界（动作预算 ≤10，总 tick ≤ `预算×3+10`，`REPEAT_FAIL_LIMIT=3`），每 tick 至多下发一个原子动作，`AbortController` 全链路可中断；`revive / reflex / survival / unknown / blocked` 由 `TickOnce` 原样上报；结构化报告含 `world_key / task_id / skill_id / instance_id / step / actions_executed(每动作 status+verified) / budget_used / budget_remaining / stop_reason / failed_action`。日志上模型层 `advance_task` 调用与内部 `[AUTOPILOT] STEP_DISPATCHED` 原子派发分开可辨。
+- **测试**：新增 `tests/r84-autopilot-isolation.test.mjs`（TEST-01~TEST-10：工具裁剪 / 非法模式回退 / 拒绝文案 / 提示词分离 / 入口统一 / 内部执行链不被误伤）；更新 `tests/autopilot-runtime.test.mjs`（AUTOPILOT-01/02）、`tests/mcp-dynamic-tools.test.mjs`（MCP-01/05）、`tests/r74-agent-parity.test.mjs`（D1/D3）到 R8.4 契约。Node 侧改动，不涉及模组 Lua。
+
+---
+
 ## [Phase R.7.4.2] - 2026-11-21
 
 ### 内置 AI 无动作：Autopilot 提示词与工具列表不一致 (Autopilot Prompt Parity)

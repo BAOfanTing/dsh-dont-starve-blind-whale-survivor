@@ -470,7 +470,8 @@ flowchart TD
 
 - **WorldRuntimeManager**：实现世界级并发互斥锁（Mutex），保证单角色同一时间仅推进一个任务，隔离不同世界的实例记忆。
 - **advance_task**：打通 `LLM → advance_task → Orchestrator.tick() → SkillExecutor → Dispatcher` 的完整自主执行链路。
-- **执行模式控制**：通过 `executionMode` 实现 `Autopilot`（全自动推进）、`Assisted`（辅助执行）、`Manual`（手动干预）三种运行模式的权限隔离。
+- **执行模式控制**：通过 `executionMode` 实现 `Autopilot`（持续自主：模型只制定高层目标，用 `advance_task` 推进任务看板，原子动作由内部执行链执行）、`Assisted`（用户目标驱动，模型用完整原子动作）与 `Manual`（单次指令，模型用完整原子动作）三种运行模式。
+- **R8.4 工具收口**：`toolList(mode)` 对 Autopilot 只暴露 `advance_task / get_state / get_guide / update_notes / stop`（`AUTOPILOT_TOOL_WHITELIST`）；Assisted/Manual 暴露完整工具集。`executeTool` 在进入 `dispatcher` 之前再做一道纵深防御：Autopilot 下直调原子动作/`run_skill` 回固定文案 `Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。`。该闸门只作用于**模型直调层**，`SkillExecutor → Dispatcher` 的内部派发（internal）不经过 `executeTool`，绝不被误伤。
 
 ### 17.4 与执行通道的关系（安全边界不变）
 技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。Phase G-R7 只新增「编排层」，未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。

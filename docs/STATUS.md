@@ -18,6 +18,7 @@ DSH MCP:     模型 → MCP Client → executeTool() → runTool() → executeTo
 - 两条链**只在模型协议、Tool Call 解析、调用方身份（`f8_agent` / `mcp_client`）、Control Lease 上不同**；
 - 汇合点在 `runTool()` / `executeTool()`，之后全部进入 `TaskSkillOrchestrator → SkillExecutor → Dispatcher → Control Lease → Lua Guard → 游戏动作 → 新 Snapshot 验证`；
 - F8 与 DSH 的 `tools/list` 都通过 `toolsForExecutionMode(config)` 按同一 `executionMode` 生成，模式一致由构造方式保证。
+- **R8.4 工具收口**：Autopilot 下 `toolList` 只暴露 `advance_task / get_state / get_guide / update_notes / stop`；`executeTool` 在进入 `dispatcher` 前拦截 Autopilot 直调原子动作/`run_skill`（固定文案 `Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。`）。Assisted/Manual 保留完整工具集；内部 `SkillExecutor → Dispatcher` 派发不受此闸门影响。
 
 ### 1.8.2 Task 状态流转
 

@@ -13,7 +13,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const namesOf = (list) => list.map((t) => t.name).sort()
 
-test('R74-D1: 三种执行模式下，F8 与 DSH 的工具集合完全一致，且与当前配置匹配', () => {
+test('R74-D1: F8 与 DSH 工具集合一致，且各模式符合 R8.4 工具裁剪', () => {
   for (const mode of ['autopilot', 'assisted', 'manual']) {
     const dsh = namesOf(toolsForExecutionMode({ executionMode: mode }))
     const direct = namesOf(toolList(mode))
@@ -22,17 +22,24 @@ test('R74-D1: 三种执行模式下，F8 与 DSH 的工具集合完全一致，�
     // F8 现在通过同一个函数取工具（AiRunner.toolList() 无参调用闭包）
     const runner = new AiRunner({ toolList: () => toolsForExecutionMode({ executionMode: mode }) })
     assert.deepEqual(namesOf(runner.toolList()), dsh, `${mode}: F8 与 DSH 工具集合必须一致`)
-
-    // 三模式工具集完全一致：完整原子动作 + run_skill + advance_task
-    assert.ok(dsh.includes('advance_task') && dsh.includes('chop') && dsh.includes('run_skill'), `${mode}: 必须暴露完整工具集`)
+  }
+  // Autopilot：只有高层接口白名单
+  const auto = namesOf(toolsForExecutionMode({ executionMode: 'autopilot' }))
+  assert.deepEqual(auto, ['advance_task', 'get_guide', 'get_state', 'stop', 'update_notes'])
+  // Assisted / Manual：完整工具集（原子动作 + run_skill + advance_task）
+  for (const mode of ['assisted', 'manual']) {
+    const list = namesOf(toolsForExecutionMode({ executionMode: mode }))
+    assert.ok(list.includes('advance_task') && list.includes('chop') && list.includes('run_skill'), `${mode}: 必须暴露完整工具集`)
   }
 })
 
-test('R74-D3: 三模式都用完整动作手册；Autopilot 额外强调“持续自主”，Manual 强调单次', () => {
+test('R74-D3: Autopilot 用高层任务驱动手册；Assisted/Manual 用完整动作手册（R8.4）', () => {
   const auto = buildInstructions({ main: '主攻略' }, 'autopilot')
   assert.match(auto, /Autopilot/, 'Autopilot 提示要写明模式')
-  assert.match(auto, /能用的动作共\s*\d+\s*个/, 'Autopilot 也要展示完整动作清单（现在是完整工具集）')
-  assert.match(auto, /持续自主|自己规划|连续自主/, 'Autopilot 要强调持续自主')
+  assert.match(auto, /advance_task/, 'Autopilot 手册要讲 advance_task')
+  assert.match(auto, /budget_exhausted|stop_reason|回执/, 'Autopilot 手册要教怎么读回执')
+  assert.ok(!/能用的动作共\s*\d+\s*个/.test(auto), 'Autopilot 不再展示完整动作清单')
+  assert.ok(!/完整原子动作工具集/.test(auto), '不得再说 Autopilot 拥有完整原子工具集')
   const assisted = buildInstructions({ main: '主攻略' }, 'assisted')
   assert.match(assisted, /能用的动作共\s*\d+\s*个/, 'Assisted 应保留完整动作清单')
   assert.match(assisted, /harvest_nearest/, 'Assisted 应说明原子动作')
