@@ -29,7 +29,11 @@
     "check:docs": "node tools/check-tools-doc.mjs",
     "check:docs:fix": "node tools/check-tools-doc.mjs --write",
     "setup:hooks": "git config core.hooksPath .githooks",
-    "commitlint": "commitlint"
+    "commitlint": "commitlint",
+    "autodev": "node tools/auto-dev-loop.mjs",
+    "autodev:live": "node tools/auto-dev-loop.mjs --live",
+    "analyze": "node tools/analyze-session.mjs",
+    "e2e:tier1": "node tools/run-live-tier1.mjs"
   },
   "files": [
     "lib",

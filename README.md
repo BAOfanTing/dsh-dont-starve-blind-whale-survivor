@@ -230,6 +230,18 @@ F8 开/停 · F7 显示/隐藏小窗
 
 ---
 
+## 全自动游玩测试（AUTODEV）
+
+把「静态门禁 → 重装模组/重置世界 → 分层真机测试 → 质检员压缩报告 → 自动评分/回滚 → Coding Agent 修复」串成一条闭环，详见 [docs/AUTODEV.md](docs/AUTODEV.md)。最常用的三条：
+
+```bash
+npm run autodev            # dry：只跑 lint/check:docs/test + 分析现有 latestLogs，产出 .runtime/issue-report.json 与 AUTODEV_SUMMARY.md
+npm run analyze            # 单独把 latestLogs 压成 issue-report.json（0 token、纯确定性）
+npm run autodev:live       # LIVE：真正重装模组 + 分层真机测试（需游戏/专用服可用；按需再开 --allow-git --agent-cmd）
+```
+
+安全默认：dry 模式不动游戏、不 git、不调模型；动游戏 / 改 git / 叫 Agent 都要显式开关。
+
 ## 文档
 
 | 文档 | 看什么 |
@@ -239,6 +251,7 @@ F8 开/停 · F7 显示/隐藏小窗
 | [docs/STATUS.md](docs/STATUS.md) | 当前能力、验证等级、已知问题、还没做什么 |
 | [docs/NATIVE_REUSE.md](docs/NATIVE_REUSE.md) | 哪些能力用了饥荒原版的、哪些是自己写的、为什么（含源码行号与许可证分析） |
 | [docs/TESTING.md](docs/TESTING.md) | 怎么跑测试（命令都验过） |
+| [docs/AUTODEV.md](docs/AUTODEV.md) | 全自动游玩测试闭环：质检员 Oracle、分层 E2E、自动修复与回滚护栏 |
 | [docs/dsh-plugin.md](docs/dsh-plugin.md) | 插件形态说明（预设、入口工具、配置项） |
 
 ---

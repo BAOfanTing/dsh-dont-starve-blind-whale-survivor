@@ -394,6 +394,69 @@ local function warnings(p, player, world)
     return tips
 end
 
+-- ─────────────────────────── 新手任务手册（运行时动态直读） ───────────────────────────
+local function quest_guide_block(actor, world)
+    if actor == nil or actor.components == nil then return nil end
+    local qg = actor.components.qg_progress
+    if qg == nil or qg.state == nil then return nil end
+    local ok_l, L = pcall(GLOBAL.require, "qg/logic")
+    if not ok_l or type(L) ~= "table" then return nil end
+
+    local state = qg.state
+    local season = (world ~= nil and world.season) or "autumn"
+    local tracked_id = state.track
+    local tracked_task = nil
+    if tracked_id ~= nil and L.byid ~= nil and L.byid[tracked_id] ~= nil then
+        local t = L.byid[tracked_id]
+        tracked_task = {
+            id = t.id,
+            title = t.t,
+            desc = t.d,
+            tab = t.tab,
+            season = t.season,
+            gain = t.gain,
+            mats = t.mats,
+            auto = t.auto,
+            done = state.done ~= nil and state.done[t.id] == true,
+        }
+    end
+
+    local open_tasks = {}
+    local raw_open = nil
+    if L.OpenTasks ~= nil then
+        local ok_o, res = pcall(L.OpenTasks, state, season)
+        if ok_o and type(res) == "table" then raw_open = res end
+    end
+    for i, t in ipairs(raw_open or {}) do
+        if i > 5 then break end
+        table.insert(open_tasks, {
+            id = t.id,
+            title = t.t,
+            desc = t.d,
+            tab = t.tab,
+            season = t.season,
+            gain = t.gain,
+            mats = t.mats,
+            auto = t.auto,
+            req = t.req,
+        })
+    end
+
+    local done_count = 0
+    if state.done ~= nil then
+        for _ in pairs(state.done) do done_count = done_count + 1 end
+    end
+
+    return {
+        installed = true,
+        tracked_id = tracked_id,
+        tracked_task = tracked_task,
+        open_tasks = open_tasks,
+        done_count = done_count,
+        done_tasks = state.done,
+    }
+end
+
 -- ─────────────────────────── 文本渲染（唯一来源：data）───────────────────────────
 local function render_item(item)
     local text = item.name or item.prefab or "?"
@@ -634,6 +697,21 @@ function O.Render(data)
         end
     end
 
+    if data.quest_guide ~= nil and data.quest_guide.installed then
+        local qg = data.quest_guide
+        local bits = {}
+        if qg.tracked_task ~= nil then
+            bits[#bits + 1] = "当前追踪: " .. tostring(qg.tracked_task.title)
+                .. (qg.tracked_task.desc and ("（" .. tostring(qg.tracked_task.desc) .. "）") or "")
+        elseif qg.open_tasks ~= nil and #qg.open_tasks > 0 then
+            local top = qg.open_tasks[1]
+            bits[#bits + 1] = "待办任务: " .. tostring(top.title)
+                .. (top.desc and ("（" .. tostring(top.desc) .. "）") or "")
+        end
+        local summary = "任务手册（已完成 " .. tostring(qg.done_count or 0) .. " 项）：" .. (#bits > 0 and table.concat(bits, "；") or "无待办任务")
+        lines[#lines + 1] = summary
+    end
+
     local unavailable = obs.unavailable_fields or {}
     if #unavailable > 0 then
         lines[#lines + 1] = "读不到的字段：" .. table.concat(unavailable, "、")
@@ -785,6 +863,7 @@ function O.BuildData(actor, opts)
             end
         end
         data.dead = not info.alive
+        data.quest_guide = quest_guide_block(actor, data.world)
         data.x, data.z = info.tile_x, info.tile_z
         data.day = data.world ~= nil and data.world.day or nil
         data.phase = data.world ~= nil and data.world.phase or nil
