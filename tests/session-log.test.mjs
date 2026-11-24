@@ -452,3 +452,48 @@ test('SL-22：reset() 清空前自动归档备份旧日志到 archives/，绝不
   }
 })
 
+test('SL-23：死亡/幽灵状态归档边沿触发 —— 持续挂机绝不重复归档生成大量日志', async () => {
+  const dir = tempDir()
+  const src = makeBridgeFiles(dir)
+  const stateFile = path.join(dir, 'whale_state.json')
+  const out = path.join(dir, 'session.jsonl')
+  const r = new SessionRecorder({ ...src, out, stateEveryMs: 0, stateThrottleMs: 0, envEveryMs: 100000 })
+
+  // 1. 初始存活状态
+  fs.writeFileSync(stateFile, 'KLEI     1 {"data":{"day":1,"phase":"day","dead":false,"actor":{"is_ghost":false},"player":{"health":{"current":150,"max":150}}}}')
+  r.tick()
+  const archiveDir = path.join(dir, 'archives')
+  assert.equal(fs.existsSync(archiveDir), false, '存活时不该有归档目录')
+
+  // 2. 角色死亡变鬼魂：触发初次归档
+  fs.writeFileSync(stateFile, 'KLEI     1 {"data":{"day":1,"phase":"day","dead":false,"actor":{"is_ghost":true},"player":{"health":{"current":0,"max":150}}}}')
+  r.tick()
+  assert.ok(fs.existsSync(archiveDir), '变鬼魂时归档目录生成')
+  let files = fs.readdirSync(archiveDir).filter((f) => f.includes('death'))
+  assert.equal(files.length, 2, '死亡归档只生成 1 对文件（.txt + .jsonl）')
+
+  // 3. 角色继续以鬼魂形态漂浮挂机（多次 tick，改变时间模拟持续心跳）
+  for (let i = 2; i <= 10; i++) {
+    fs.writeFileSync(stateFile, `KLEI     1 {"data":{"day":${i},"phase":"day","dead":false,"actor":{"is_ghost":true},"player":{"health":{"current":0,"max":150}}}}`)
+    r.tick()
+  }
+  files = fs.readdirSync(archiveDir).filter((f) => f.includes('death'))
+  assert.equal(files.length, 2, '持续鬼魂挂机绝不重复归档，依然只有 1 对文件')
+
+  // 4. 角色复活
+  fs.writeFileSync(stateFile, 'KLEI     1 {"data":{"day":11,"phase":"day","dead":false,"actor":{"is_ghost":false},"player":{"health":{"current":50,"max":150}}}}')
+  r.tick()
+  files = fs.readdirSync(archiveDir).filter((f) => f.includes('death'))
+  assert.equal(files.length, 2, '复活时不增加归档')
+
+  // 等待跨秒，确保归档时间戳不同
+  await new Promise((resolve) => setTimeout(resolve, 1050))
+
+  // 5. 角色再次死亡：能够正常触发新周期的第二次归档
+  fs.writeFileSync(stateFile, 'KLEI     1 {"data":{"day":12,"phase":"night","dead":true,"actor":{"is_ghost":true},"player":{"health":{"current":0,"max":150}}}}')
+  r.tick()
+  files = fs.readdirSync(archiveDir).filter((f) => f.includes('death'))
+  assert.equal(files.length, 4, '新一轮死亡生命周期能够正常触发第二次归档')
+})
+
+
