@@ -4,6 +4,47 @@
 
 ---
 
+## [Phase R8.5] - 2026-11-25
+
+### 温蒂伴生战斗闭环：蜘蛛 / 青蛙防御与阿比盖尔主动参战 (Wendy Companion Defense)
+
+真机问题：温蒂背包有阿比盖尔之花却一直没召唤；青蛙靠近时 Lua Reflex 反复 flee（生命 150→130）；
+三只青蛙时 `advance_task` 被 `reflex_active` 阻断；花朵被青蛙命中击落在地面 `(25,-58)` 后无法捡回。
+
+- **Reflex → Battle 接线**：`reflex.lua` 不再只对猎犬启动防御，改为"`B.STRATEGIES` 里 supported 的
+  任何敌人"（含普通蜘蛛 / 蜘蛛战士 / 新增青蛙）都先尝试 `B.StartDefense`；召唤交接有界（8 秒或血量 <35%
+  立即回退逃跑），绝不永久禁用 flee。
+- **抢占矩阵（P0）**：`actions/core.lua` 新增唯一判定 `A.may_preempt()` 与 `A.DEFENSE_ID="defense"`：
+  只有"防御交接"能打断 Reflex flee（且黑暗照明 / 回血优先 / 召唤进行中一律拒绝），
+  其余非 defense 指令对 Reflex 的保护**一条没放宽**；交接时显式清空旧 job + BufferedAction。
+- **统一召唤入口**：`battle.lua` `StartDefense` 不再自己 `BufferedAction(CASTSUMMON)`，改为
+  `A.Start("summon_companion", {}, "defense")`，复用 `JOBS.summon_companion` 的契约检查 / 花朵检查 /
+  `summon_succeeded` 核验 / `summon_timeout`；失败带 20 秒退避，禁止无限重试。
+- **真正落实 avoid_melee**：`battle.lua` ATTACK 阶段在伴生可协助时**绝不**调用玩家 `ACTIONS.ATTACK`，
+  改为位置维持 + 监控；战斗有效性以"目标血量下降"为证据（`companion_hits`），结算如实写"阿比盖尔打倒了 X"。
+- **青蛙策略**：新增 `STRATEGIES.frog`（100 血 / 攻速 1s / 会击落背包物品 / 会被同伴共享目标），
+  不复用蜘蛛的 2 连击；群体容忍改为只统计"真的在打温蒂"的敌人，伴生健康时允许 ≤3 只受控群战，
+  超过 3 只 / 伴生 <40% / 自身 <50% 立即回退保命。
+- **伴生状态可核验**：`companion.lua` 补 `guid / target_guid / distance_tiles / defensive_range`；
+  协助半径修正为 `ABIGAIL_DEFENSIVE_MAX_FOLLOW × 2`（原实现误乘 4）；新增 `FindDroppedFlower()`。
+- **花朵保护与回收**：`pickuprules` 允许拾取 `abigail_flower`；`targetrules` + Node `target-kinds`
+  新增 `abigail_flower` kind（同一套 target-kind / Guard / Dispatcher 流程，未新开通道）；
+  `guard.lua` 禁止 AI 主动 `drop/fuel/add_fuel` 阿比盖尔之花（`critical_item_protected`）；
+  Reflex 空闲时走既有 `pickup` 回收并核验背包。
+- **可观测性**：`[BATTLE] DEFENSE_CANDIDATE / DEFENSE_HANDOFF / DEFENSE_ENGAGE / DEFENSE_ABORT /
+  COMPANION_TARGET / COMPANION_GROUP_ENGAGE / REFLEX_SUPPRESSED`，`[COMPANION] SUMMON_STARTED /
+  SUMMON_SUCCEEDED / SUMMON_FAILED / FLOWER_DROPPED / FLOWER_RECOVERED`、`[ACTIONS][PREEMPT]`（限频）。
+- **构建标识**：`modinfo` 0.41.2 → **0.41.3**；新增 `Whale.build = "0.41.3+r8.5-wendy-defense"`，
+  加载时打印 `[BUILD] ...`，状态文件透传 `build` 字段（`get_state` 也会显示），
+  用于确认"游戏实际加载的是哪一份源码"。
+- **测试**：新增 `tests/helpers/lua-harness.mjs`（fengari 统一加载生产 Lua）；新增
+  `tests/r85-wendy-defense.test.mjs` TEST-01~10（真实 Lua）；**重写** `tests/battle.test.mjs`
+  （旧版是 JS 手写假状态机）；`wendy-companion` 增 WC-8/9/10；同步 `hound-defense` HD-4 与 `nearby` 白名单。
+- 说明：`npm test` 只证明源码逻辑；**真实游戏验收（场景 A~D）另行执行**，见
+  `docs/R8.5-WENDY-DEFENSE.md` §6。
+
+---
+
 ## [Phase R8.4] - 2026-11-24
 
 ### Autopilot 高层任务驱动与原子工具收口 (Autopilot High-level Task Drive & Atomic Tool Isolation)

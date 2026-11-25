@@ -4,7 +4,7 @@
 
 这是一个 DSH 插件，自带饥荒 Lua 模组、本机 MCP 服务器和文件桥。也可以不接 DSH，直接在游戏里按 F8 让内置 AI 自己玩。
 
-已完成的阶段：活过第一晚 · 基础工具与资源采集 · 制作科学机器 · 第一阶段科技（背包/长矛/木甲） · 紧急避险与动态逃生 · 层级规划（发展阶段 / 任务看板） · 家园选址与建造约束 · 自主执行运行时集成 (Autopilot Runtime)
+已完成的阶段：活过第一晚 · 基础工具与资源采集 · 制作科学机器 · 第一阶段科技（背包/长矛/木甲） · 紧急避险与动态逃生 · 层级规划（发展阶段 / 任务看板） · 家园选址与建造约束 · 自主执行运行时集成 (Autopilot Runtime) · 角色 Profile 与阿比盖尔伴生 (Wendy Companion) · **温蒂伴生战斗闭环（蜘蛛/青蛙防御，R8.5）**
 
 ---
 
@@ -253,6 +253,7 @@ npm run autodev:live       # LIVE：真正重装模组 + 分层真机测试（�
 | [docs/TESTING.md](docs/TESTING.md) | 怎么跑测试（命令都验过） |
 | [docs/AUTODEV.md](docs/AUTODEV.md) | 全自动游玩测试闭环：质检员 Oracle、分层 E2E、自动修复与回滚护栏 |
 | [docs/dsh-plugin.md](docs/dsh-plugin.md) | 插件形态说明（预设、入口工具、配置项） |
+| [docs/R8.5-WENDY-DEFENSE.md](docs/R8.5-WENDY-DEFENSE.md) | 温蒂伴生战斗闭环：Reflex→Battle 接线、召唤交接、avoid_melee、青蛙策略、花朵保护与回收 |
 
 ---
 

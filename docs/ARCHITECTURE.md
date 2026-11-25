@@ -489,9 +489,24 @@ flowchart TD
 - **取消信号全链路穿透**：通过 `AbortController` 产生的 `signal` 贯穿：
   `WorldRuntime → Orchestrator → SkillExecutor → Dispatcher → GameBridge.call`
   各层在等待前与等待中均感知 `signal.aborted`，快速短路退出；
-- **底层动作打断与 Reflex 保命**：向底层下发唯一 `stop` 动作清理玩家控制状态与行动队列；同时在 Lua `core.lua` 中严格校验：
-  `if job.cmd_id == "reflex" and cmd_id ~= "reflex" then return false, "reflex_active" end`
-  保证普通动作与用户 stop 绝不打断关键生存逃跑或急救。
+- **底层动作打断与 Reflex 保命**：向底层下发唯一 `stop` 动作清理玩家控制状态与行动队列；同时在 Lua `core.lua` 中严格校验抢占矩阵（R8.5 起集中到 `A.may_preempt()`）：
+  普通动作与用户 stop 绝不打断关键生存逃跑或急救；唯一例外是**防御交接**（`cmd_id="defense"`）可以受控接管 Reflex flee，
+  且黑暗照明（`light_priority`）、回血（`heal_priority`）、召唤进行中（`summon_in_progress`）一律拒绝交接。
+  交接时显式清空旧 `job` 与 `BufferedAction`，保证不会同时存在两个动作。
+
+#### 17.5.2.1 战斗 / 伴生职责边界（R8.5）
+
+只有三层，且共用同一套 Actions / Dispatcher：
+
+- `reflex.lua`：**唯一**的保命反射层。只做 P0/P1 生存；遇到 `B.STRATEGIES` 支持且把温蒂当目标的敌人时，
+  先尝试 `B.StartDefense()` 受控防御（有界容忍，失败/超时/低血立刻回退 flee）。
+- `battle.lua`（Battle Director）：战术状态机（PREPARE→APPROACH→WAIT_ATTACK→ATTACK→RETREAT→VERIFY→LOOT→FINISH），
+  敌人策略表（蜘蛛 / 蜘蛛战士 / 猎犬 / 冰火猎犬 / 青蛙），Boss 硬黑名单；`StartDefense()` 是防御交接的**唯一**入口，
+  召唤必须复用 `JOBS.summon_companion`，绝不自己 push `CASTSUMMON`。
+- `character/companion.lua`：伴生状态的**唯一**来源（`present/alive/can_assist/can_summon/has_flower/guid/target_guid/...`），
+  `reflex` 与 `battle` 都不得各自重复查找 ghost。
+- `avoid_melee`（温蒂）：伴生可协助时战斗状态机**不调用玩家 `ACTIONS.ATTACK`**，只做位置维持与监控；
+  战斗有效性以"目标血量下降"为证据，绝不因"阿比盖尔在场"就宣布打赢。
 
 #### 17.5.3 `unknown` 结果对账与防重复下发状态机
 为防止网络/进程超时或未定回执导致重复建造、重复制造、重复进食等副作用：

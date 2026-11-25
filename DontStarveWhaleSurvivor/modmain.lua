@@ -17,7 +17,11 @@ Whale = {
     -- 版本号跟 modinfo.lua 走：状态文件里的 mod 字段要和模组列表里显示的一致，
     -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
     -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
-    version = (type(version) == "string" and version) or "0.41.2",
+    version = (type(version) == "string" and version) or "0.41.3",
+    -- ★ R8.5：源码构建标识。
+    -- 为什么需要它：只靠 modinfo 的 version 无法判断"游戏实际加载的是哪一份源码"
+    -- （日志里 0.41.2 可能是旧构建）。这个标记写进状态与 server_log，方便对账。
+    build = "0.41.3+r8.5-wendy-defense",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -119,6 +123,14 @@ modimport("scripts/whale/macros.lua")
 modimport("scripts/whale/reflex.lua")
 modimport("scripts/whale/bridge.lua")
 modimport("scripts/whale/hud.lua")
+
+-- ★ R8.5：启动时就打出源码构建标识。
+-- 只改 modinfo 的 version 数字，无法判断"游戏实际加载的是哪一份源码"（重启/缓存/旧构建都可能）。
+-- 这一行同时出现在 server_log 里，配合状态文件里的 build 字段可以对账。
+pcall(function()
+    print(string.format("[BUILD] %s version=%s build=%s",
+        tostring(Whale.name or "?"), tostring(Whale.version or "?"), tostring(Whale.build or "?")))
+end)
 
 -- ─────────── A 栈（Phase 1~6，已归档，M1.0）───────────
 -- 这里原来还有 19 个 modimport：scripts/main/{json_encoder,player_observer,inventory_observer,

@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 0.41.1)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)｜**完成统一任务执行核心可靠性与 F8/DSH 接入一致性治理 (Phase R.7.4)**｜全量自动化测试 **1083/1083 全部通过** (0 失败、0 跳过)｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 **0.41.3**)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)｜完成统一任务执行核心可靠性与 F8/DSH 接入一致性治理 (Phase R.7.4)｜完成 Autopilot 高层任务驱动与原子工具收口 (Phase R8.4)｜**完成温蒂伴生战斗闭环（蜘蛛/青蛙防御、召唤交接、avoid_melee、花朵回收，Phase R8.5）**｜全量自动化测试 **1225/1225 全部通过** (0 失败、0 跳过)｜真实游戏验收另见 `docs/R8.5-WENDY-DEFENSE.md` §6｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -19,6 +19,7 @@ DSH MCP:     模型 → MCP Client → executeTool() → runTool() → executeTo
 - 汇合点在 `runTool()` / `executeTool()`，之后全部进入 `TaskSkillOrchestrator → SkillExecutor → Dispatcher → Control Lease → Lua Guard → 游戏动作 → 新 Snapshot 验证`；
 - F8 与 DSH 的 `tools/list` 都通过 `toolsForExecutionMode(config)` 按同一 `executionMode` 生成，模式一致由构造方式保证。
 - **R8.4 工具收口**：Autopilot 下 `toolList` 只暴露 `advance_task / get_state / get_guide / update_notes / stop`；`executeTool` 在进入 `dispatcher` 前拦截 Autopilot 直调原子动作/`run_skill`（固定文案 `Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。`）。Assisted/Manual 保留完整工具集；内部 `SkillExecutor → Dispatcher` 派发不受此闸门影响。
+- **R8.5 防御闭环**：`reflex` 对 `B.STRATEGIES` 支持的敌人（蜘蛛/蜘蛛战士/猎犬/青蛙）先走 `B.StartDefense`；`core.A.may_preempt()` 是唯一抢占矩阵（只允许 defense 受控接管 reflex flee，黑暗/回血/召唤中拒绝）；召唤复用 `JOBS.summon_companion`，失败退避 20s；温蒂 `avoid_melee` 时 battle 不调玩家 `ATTACK`，以目标掉血为战斗证据；花朵可经既有 pickup 回收且 guard 禁止主动丢弃/燃烧。
 
 ### 1.8.2 Task 状态流转
 
