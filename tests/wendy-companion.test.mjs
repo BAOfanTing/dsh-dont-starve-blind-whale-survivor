@@ -75,3 +75,47 @@ test('WC-7: profiles/wendy.lua 包含主动召唤判定 ShouldSummonCompanion', 
   assert.match(wendyLua, /st\.can_summon\s*==\s*true/)
   assert.match(wendyLua, /should_summon/)
 })
+
+// ── R8.5：真实 Lua 行为（不再只是源码字符串断言） ──
+test('WC-8: 真实 Lua —— 协助距离以 ABIGAIL_DEFENSIVE_MAX_FOLLOW 为准（近=true/远=false）', async () => {
+  const { createLuaEnv, scenario } = await import('./helpers/lua-harness.mjs')
+  const env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wendy', summoned: true, withGhost: true, ghostX: 8 }))
+  env.run('NEAR = tostring(Whale.character.GetCompanionState(PLAYER).can_assist)')
+  assert.equal(env.global('NEAR'), 'true', '2 世界单位（半格）内必须可协助')
+
+  env.run(`
+    ABIGAIL.Transform.GetWorldPosition = function() return 400, 0, 0 end
+    FAR = tostring(Whale.character.GetCompanionState(PLAYER).can_assist)
+    RANGE = tostring(Whale.character.ABIGAIL_ASSIST_MAX_DIST)
+  `)
+  assert.equal(env.global('FAR'), 'false', '远到 100 格时绝不能报可协助')
+  assert.equal(env.global('RANGE'), '10', '协助半径 = ABIGAIL_DEFENSIVE_MAX_FOLLOW(5) × 2 = 10 世界单位')
+})
+
+test('WC-9: 真实 Lua —— FindDroppedFlower 只认"没人拿、不在 limbo"的地面花', async () => {
+  const { createLuaEnv, scenario } = await import('./helpers/lua-harness.mjs')
+  const env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wendy', items: [] }))
+  env.run(`
+    GROUND = newent("abigail_flower", 8, 0, { "abigail_flower" },
+        { inventoryitem = { owner = nil, canbepickedup = true } })
+    HELD = newent("abigail_flower", 4, 0, { "abigail_flower" },
+        { inventoryitem = { owner = PLAYER, canbepickedup = true } })
+    LIMBO = newent("abigail_flower", 2, 0, { "abigail_flower" },
+        { inventoryitem = { owner = nil, canbepickedup = true } })
+    LIMBO._tags.INLIMBO = true
+    NEARBY = { HELD, LIMBO, GROUND }
+    local found = Whale.character.FindDroppedFlower(PLAYER, 16)
+    FOUND_OK = tostring(found == GROUND)
+    NONE = "x"
+  `)
+  assert.equal(env.global('FOUND_OK'), 'true', '必须跳过被别人持有的、以及处于 limbo 的花')
+})
+
+test('WC-10: guard.lua 保护阿比盖尔之花，禁止 AI 主动丢弃/当燃料', () => {
+  const guardLua = readFileSync(join(MOD, 'scripts', 'whale', 'guard.lua'), 'utf8')
+  assert.match(guardLua, /critical_item_protected/)
+  assert.match(guardLua, /action == "drop" or action == "fuel" or action == "add_fuel"/)
+  assert.match(guardLua, /want == "abigail_flower"/)
+})

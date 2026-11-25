@@ -39,11 +39,14 @@ test('HD-3: battle.lua 导出 StartDefense 并包含温蒂召唤与迎击协调'
   assert.match(battleLua, /fire_wait_start/) // 火狗爆炸防范
 })
 
-test('HD-4: reflex.lua 与战斗系统协同：野狗来袭且非残血时启动主动防御并抑制自杀逃跑', () => {
+test('HD-4: reflex.lua 与战斗系统协同：受控敌人来袭且非残血时启动主动防御并抑制自杀逃跑', () => {
   const reflexLua = readFileSync(join(MOD, 'scripts', 'whale', 'reflex.lua'), 'utf8')
-  assert.match(reflexLua, /is_fast_chaser/)
+  // R8.5：不再只对 fast_chaser(猎犬) 生效，而是"战术表里 supported 的任何敌人"（含蜘蛛/青蛙）
+  assert.match(reflexLua, /strategy_supported/)
+  assert.match(reflexLua, /B\.STRATEGIES\[attacker\.prefab\]/)
   assert.match(reflexLua, /B\.StartDefense\(p,\s*attacker\)/)
   assert.match(reflexLua, /hp\s*>=\s*0\.25/)
+  assert.match(reflexLua, /suppress_flee\s*=\s*true/)
 })
 
 test('HD-5: survival-priority.js 在野狗贴脸时识别为 P0 retreat 且标记 is_hound', () => {
