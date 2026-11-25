@@ -293,6 +293,14 @@ function B.GetTarget()
     return session ~= nil and session.target or nil
 end
 
+-- ★ R8.5 真机 bug：防御会话必须在**这里**前置声明。
+--   之前 `local defense` 写在文件更靠下（战斗状态机附近），而 B.Cleanup() 定义在它之前，
+--   Lua 的作用域规则让 Cleanup 里引用到的是**全局** defense（永远是 nil），
+--   于是真机上会话结束后 `DefenseStatus()` 仍返回 "engaged"、Reflex 一直以为在防御而不敢逃跑。
+local defense = nil
+-- 停手中止后的冷却时间点（R8.5：防止"开战→停手→立刻再开战"的 8 秒死循环）
+local defense_retry_at = 0
+
 function B.Cleanup()
     if session ~= nil then
         session = nil
@@ -337,10 +345,12 @@ local COMPANION_MIN_HEALTH = 0.40    -- 阿比盖尔低于此比例不再算"能
 --   除了 core.A.Tick 里显式 Abort 之外，battle 自己也必须有硬上限，避免任何调用方忘了收尾。
 local MAX_SESSION_S = 45             -- 单场战斗硬上限（秒）
 local STALL_ABORT_S = 8              -- 伴生主战时连续无伤害多久判"停手"（阿比盖尔跑出防御范围）
+local STALL_RETRY_S = 6              -- 停手中止后的冷却：这段时间不要马上又开一场（让 Reflex 先脱离）
 
 -- 防御会话：{ phase="summoning"|"engaged"|"failed", target, target_guid, target_prefab,
 --             started_at, summon_started_at, retry_at, reason }
-local defense = nil
+-- 注意：`local defense` 已在文件上方（B.Cleanup 之前）前置声明，这里不能重复 local，
+-- 否则会遮蔽出第二个变量、Cleanup 又清不到它（真机踩过）。
 
 local function resolve_profile(p)
     local ch = Whale ~= nil and Whale.character or nil
@@ -403,6 +413,15 @@ B.CanTolerateGroup = can_tolerate_group
 --- 防御会话快照（给 reflex / observe / 诊断用）
 function B.DefenseStatus()
     if defense == nil then return nil end
+    -- ★ 自愈：engaged 但没有对应的防御 job 在跑，说明交接已经结束/被抢走。
+    --   这里必须主动清掉：否则上层会永远以为"还在防御"而不敢逃跑（真机踩过）。
+    if defense.phase == "engaged" then
+        local job = (Whale ~= nil) and Whale.job or nil
+        if job == nil or job.cmd_id ~= DEFENSE_ID or job.name ~= "fight_spider" then
+            defense = nil
+            return nil
+        end
+    end
     return {
         phase = defense.phase or "unknown",
         target_prefab = defense.target_prefab,
@@ -500,6 +519,14 @@ end
 ---   JOBS.summon_companion（它带契约检查/花朵检查/已召唤检查/summon_succeeded 核验）。
 function B.StartDefense(p, attacker)
     if p == nil or attacker == nil or not is_alive(attacker) then return "rejected" end
+    -- 停手中止后的冷却：这段时间先让 Reflex 脱离，不要马上又开一场（否则 8 秒一循环）
+    if U.now() < (defense_retry_at or 0) then
+        blog("DEFENSE_HANDOFF", {
+            reason = "cooldown_after_stall",
+            retry_in = string.format("%.1f", (defense_retry_at or 0) - U.now()),
+        })
+        return "rejected"
+    end
     local prefab = tostring(attacker.prefab or "")
     local strategy = STRATEGIES[prefab]
     if strategy == nil or not strategy.supported then return "rejected" end
@@ -932,6 +959,8 @@ function B.StepJob(j, p)
                 idle_s = string.format("%.0f", now - last_activity),
                 companion_distance = session.companion ~= nil and session.companion.distance or nil,
             })
+            -- 冷却：别让它下一秒又开一场（否则就是 8 秒一循环，Wendy 一直站着挨打）
+            defense_retry_at = now + STALL_RETRY_S
             B.Cleanup()
             return "fail", "companion_stalled: 阿比盖尔已有一段时间没有输出（可能跑出了防御范围），先脱离让 Reflex 重新评估"
         end

@@ -254,3 +254,48 @@ test('BATTLE-LUA-10：A.Tick 预算判失败时会显式收尾战斗会话（bud
   assert.equal(env.global('SESSION'), 'false', '预算失败也必须把战斗会话收尾，否则 InCombat() 永久为真')
   assert.match(env.global('LAST'), /budget_exceeded/)
 })
+
+// ── R8.5 真机 bug：Cleanup 的作用域（必须清掉真正的 local defense） ──
+test('BATTLE-LUA-11：Cleanup 能清掉 DefenseStatus（防 local/global 作用域回归）', async () => {
+  const env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wendy', items: ['abigail_flower'], summoned: true, withGhost: true }))
+  env.run(`
+    SPIDER = ${attacker('spider', 8, 0)}
+    NEARBY = { SPIDER }
+    ST = tostring(Whale.battle.StartDefense(PLAYER, SPIDER))
+    BEFORE = tostring(Whale.battle.DefenseStatus() ~= nil)
+    Whale.battle.Cleanup()
+    AFTER = tostring(Whale.battle.DefenseStatus() ~= nil)
+  `)
+  assert.equal(env.global('ST'), 'engaged')
+  assert.equal(env.global('BEFORE'), 'true', '开战后防御状态必须可见')
+  assert.equal(env.global('AFTER'), 'false',
+    'Cleanup 必须清掉真正的防御会话（历史 bug：Cleanup 引用的是全局 defense，永远清不掉）')
+})
+
+test('BATTLE-LUA-12：防御 job 消失后 DefenseStatus 自愈为 nil；停手中止后有冷却', async () => {
+  const env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wendy', items: ['abigail_flower'], summoned: true, withGhost: true }))
+  env.run(`
+    SPIDER = ${attacker('spider', 8, 0, { hp: 5000 })}
+    NEARBY = { SPIDER }
+    -- ① 自愈：job 被外部清掉（模拟预算/被抢）后，DefenseStatus 必须返回 nil
+    Whale.battle.StartDefense(PLAYER, SPIDER)
+    Whale.job = nil
+    HEAL1 = tostring(Whale.battle.DefenseStatus() ~= nil)
+  `)
+  assert.equal(env.global('HEAL1'), 'false', '没有 job 时防御状态必须自愈，否则 Reflex 永远不敢逃跑')
+
+  env.run(`
+    -- ② 停手守卫触发后要有冷却，不能立刻又开一场
+    Whale.battle.StartDefense(PLAYER, SPIDER)
+    for i = 1, 4 do NOW = NOW + 0.2; Whale.actions.Tick() end
+    NOW = NOW + 10
+    Whale.actions.Tick()          -- companion_stalled
+    STALLED = tostring(Whale.job == nil)
+    retry = Whale.battle.StartDefense(PLAYER, SPIDER)
+    RETRY = tostring(retry)
+  `)
+  assert.equal(env.global('STALLED'), 'true', '停手后 job 必须结束')
+  assert.equal(env.global('RETRY'), 'rejected', '停手中止后必须进入冷却，不能立刻重开')
+})
