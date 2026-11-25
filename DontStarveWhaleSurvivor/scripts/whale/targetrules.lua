@@ -74,6 +74,8 @@ T.KIND_ACTION = {
     goldnugget = "pickup",
     charcoal = "pickup",
     petals = "pickup",
+    -- ★ R8.5：掉在地上的阿比盖尔之花（青蛙命中会击落背包物品）。用既有 pickup 通道回收。
+    abigail_flower = "pickup",
     -- 地面食物（pickup_food）
     safe_ground_food = "food",
     carrot = "food",
@@ -111,6 +113,7 @@ T.KIND_PREFABS = {
     goldnugget = { goldnugget = true },
     charcoal = { charcoal = true },
     petals = { petals = true },
+    abigail_flower = { abigail_flower = true },
     carrot = { carrot = true },
     berries = { berries = true },
     berries_juicy = { berries_juicy = true },

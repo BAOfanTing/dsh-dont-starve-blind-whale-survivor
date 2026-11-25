@@ -28,6 +28,90 @@ local WORK_NAMES = {
 }
 A.WORK_NAMES = WORK_NAMES
 
+--- R8.5：防御通道的 cmd_id。
+--- 为什么需要独立 id：防御由 Reflex 发起、但**不是** P0 逃命；它必须能和 Reflex flee
+--- 做"受控交接"，又不能占用模型指令的结果槽（见 bridge.Report）。用 "defense" 单独标识，
+--- 抢占矩阵里单独放行，结果写本地文件而不是 whale_result.json。
+A.DEFENSE_ID = "defense"
+
+--- R8.5：Reflex 动作的"意图键"（flee/heal/light/eat/fuel/...）。
+--- try_action 会在启动后写 job.reflex_key；这里做一层兜底推断，避免旧 job 没有该字段时
+--- 把 heal/light 误判成 flee（那会放开不该放开的接管）。
+local function reflex_intent(j)
+    if j == nil then return nil end
+    if j.reflex_key ~= nil then return j.reflex_key end
+    if j.name == "move_to" and j.ctx ~= nil and j.ctx.flee == true then return "flee" end
+    if j.name == "move_to" then return "flee" end   -- reflex 的 move_to 只有逃跑/取暖两种；取暖走 temperature 键
+    if j.name == "heal" then return "heal" end
+    if j.name == "eat" then return "eat" end
+    if j.name == "equip" or j.name == "unequip" then return "light" end
+    if j.name == "craft" then return "craft_light" end
+    if j.name == "build" then return "light" end
+    if j.name == "make_fire" or j.name == "add_fuel" then return "light" end
+    return nil
+end
+A.reflex_intent = reflex_intent
+
+local function health_percent_of(p)
+    if p == nil or p.components == nil or p.components.health == nil then return nil end
+    local ok, pct = pcall(function() return p.components.health:GetPercent() end)
+    if ok and type(pct) == "number" then return pct end
+    local h = p.components.health
+    local cur = h.currenthealth or h.current
+    local max = h.maxhealth or h.max
+    if type(cur) == "number" and type(max) == "number" and max > 0 then return cur / max end
+    return nil
+end
+
+--- R8.5 抢占矩阵（唯一判定处，禁止各处散落"改 cmd_id 绕过"）。
+---
+--- 期望行为：
+---   Reflex flee  → Wendy defense handoff : 允许受控交接（仅逃跑时；黑暗中/濒死时不交）
+---   Reflex heal  → Wendy defense         : 生命仍在紧急线以下 → 保留回血；否则重新评估后允许
+---   Reflex light → Wendy defense         : 黑暗无光 P0 优先，绝不交
+---   普通采集     → Wendy defense         : 允许防御抢占
+---   正在 summon_companion → 再次 summon  : 拒绝重复
+---   正在 defense  → 同一目标 defense     : 保持原任务（拒绝重复启动）
+---   其余非 defense 指令 → Reflex 动作     : 一律不可打断（保留历史 P0 保护）
+---
+--- @return ok(boolean), reason(string|nil), detail(table|nil)
+local function may_preempt(cur, new_id, args)
+    if cur == nil then return true, nil end
+
+    if new_id == A.DEFENSE_ID then
+        -- 同一场防御不重复启动（交由 battle 自己的会话保持逻辑处理）
+        if cur.cmd_id == A.DEFENSE_ID then return false, "defense_in_progress" end
+        -- 召唤进行中：绝不打断（否则永远召不出来）
+        if cur.name == "summon_companion" then return false, "summon_in_progress" end
+
+        if cur.cmd_id == "reflex" then
+            local intent = reflex_intent(cur)
+            -- 黑暗/照明保命优先：不许交给防御
+            if intent == "light" or intent == "craft_light" then
+                return false, "light_priority"
+            end
+            -- 回血优先：生命仍在紧急线以下时先回血
+            if intent == "heal" or intent == "eat" then
+                local hp = health_percent_of(U.player())
+                if hp == nil or hp < 0.35 then return false, "heal_priority" end
+                return true, "reflex_reassessed"
+            end
+            -- 逃跑：允许受控交接（真正的安全前提由 battle.StartDefense 再校验一次）
+            if intent == "flee" then return true, "flee_handoff" end
+            return false, "reflex_priority"
+        end
+        -- 普通任务（模型/计划/技能）：允许防御抢占
+        return true, "preempt_ordinary"
+    end
+
+    -- 非防御指令：Reflex 动作一律不可被打断（保留历史 P0 保护，绝不放开）
+    if cur.cmd_id == "reflex" then
+        return false, "reflex_active: 正在保命抢占中，请勿打断 Reflex"
+    end
+    return true, nil
+end
+A.may_preempt = may_preempt
+
 local MODNAME = type(modname) == "string" and modname or "DontStarveWhaleSurvivor"
 A.MODNAME = MODNAME
 
@@ -498,15 +582,28 @@ function A.Start(name, args, cmd_id, ctx)
     local p = U.player()
     if p == nil then return false, "现在没有玩家（游戏可能还在读档）" end
     if job ~= nil then
-        -- 增加 P0 保护：如果正在进行 Reflex 逃跑/保命，严禁被非 Reflex 动作打断（保留 Reflex 保命优先级）
-        if job.cmd_id == "reflex" and cmd_id ~= "reflex" then
-            return false, "reflex_active: 正在保命抢占中，请勿打断 Reflex"
+        -- ★ R8.5：抢占矩阵（唯一判定处）。以前这里是"reflex 一律不许被打断"，
+        --   导致 Reflex flee 正在跑时，伴生防御永远接不上（真机：青蛙追击 →
+        --   flee 反复启动 → advance_task 一直被 reflex_active 阻断）。
+        --   现在只对"防御交接"按明确矩阵放行，其余保护一条没放宽。
+        local ok_pre, why_pre = may_preempt(job, cmd_id, args)
+        if not ok_pre then
+            return false, why_pre or "job_running"
+        end
+        if why_pre ~= nil and why_pre ~= "preempt_ordinary" then
+            pcall(function()
+                print(string.format("[ACTIONS][PREEMPT] %s(%s) -> %s reason=%s",
+                    tostring(job.name), tostring(job.cmd_id), tostring(name), tostring(why_pre)))
+            end)
         end
         local prev_id = job.cmd_id
         pcall(function()
             stop_actions(p)
         end)
         Whale.bridge.Report(false, "被新指令打断了（上一件事没做完）", prev_id)
+        -- ★ 明确清空旧 job：确认旧任务已清理后，才允许新任务开始（绝不允许两个 job 并存）。
+        job = nil
+        Whale.job = nil
     end
     job = {
         name = name,

@@ -99,6 +99,9 @@ local COOLDOWN = {
     craft_light = 4,
     stow_light = 5,     -- 白天收纳火把防抖
     temperature = 10,
+    -- R8.5：伴生维护（主动召唤 / 掉落花朵回收）
+    companion_summon = 20,
+    companion_flower = 5,
 }
 
 -- ─────────────────────────── 基础小工具 ───────────────────────────
@@ -950,6 +953,8 @@ local function job_priority(job)
     if job == nil then return P3 end
     if job.reflex_priority ~= nil then return job.reflex_priority end
     if job.cmd_id == REFLEX_ID then return P1 end
+    -- R8.5：防御/召唤交接也是"保命级"任务，不允许被 P2 日常维护抢走
+    if job.cmd_id == "defense" then return P1 end
     return P2
 end
 
@@ -1145,6 +1150,32 @@ local function confirm_pending(p)
         local ok = (now ~= nil and pending.san_before ~= nil and now > pending.san_before + 0.005)
         diag("sanity_result", { "result=" .. (ok and "succeeded" or "unconfirmed") })
         mark_fail("sanity_pick", ok and 1 or 8)   -- 成功短冷却；未确认长冷却，避免重复
+    elseif pending.kind == "companion_summon" then
+        -- R8.5：召唤结果必须用真实 ghostlybond 状态核对，不看"自称成功"
+        local comp = companion_state(p)
+        local ok = comp ~= nil and comp.present == true and comp.alive == true
+        diag("companion_summon_result", {
+            "result=" .. (ok and "succeeded" or "failed"),
+            "present=" .. bool_str(comp ~= nil and comp.present == true),
+            "alive=" .. bool_str(comp ~= nil and comp.alive == true),
+        })
+        if ok then
+            mark("companion_summon")
+            companion_log("SUMMON_SUCCEEDED", "present=true")
+        else
+            mark_fail("companion_summon", 20)
+            companion_log("SUMMON_FAILED", "present=false")
+        end
+    elseif pending.kind == "companion_flower" then
+        local comp = companion_state(p)
+        local ok = comp ~= nil and comp.has_flower == true
+        diag("companion_flower_result", { "result=" .. (ok and "recovered" or "failed") })
+        if ok then
+            mark("companion_flower")
+            companion_log("FLOWER_RECOVERED", "has_flower=true")
+        else
+            mark_fail("companion_flower", 8)
+        end
     end
     pending = nil
 end
@@ -1166,7 +1197,97 @@ local function is_critical_hunger(p, hunger)
     return true
 end
 
--- ─────────── R8.1：日常生存维护（本地确定性；复用 Whale.actions 唯一状态机；P2 只空闲执行） ───────────
+-- ─────────── R8.5：伴生维护（主动召唤 / 掉落花朵回收）───────────
+--
+-- 背景（真机）：温蒂背包里有阿比盖尔之花，但**一直没召唤**；青蛙追击时 flowers
+-- 被原版 frog:onhitother → thief:StealItem 击落到地上 (25,-58)，角色从此长时间没有伴生。
+-- 这里做两件事（都只在"完全空闲且确实安全"时执行，P2）：
+--   1) 花朵掉在地上 → 用既有 pickup 动作捡回来（FLOWER_DROPPED / FLOWER_RECOVERED）；
+--   2) 有花、没召唤、周围没敌人 → 提前召唤（不等被咬）。
+
+local COMPANION_FLOWER_RADIUS = 16
+local COMPANION_LOG_GAP = 20
+
+--- 伴生状态（唯一来源仍是 character/companion.lua）
+local function companion_state(p)
+    local ch = Whale ~= nil and Whale.character or nil
+    if ch == nil or ch.GetCompanionState == nil then return nil end
+    local ok, st = pcall(function() return ch.GetCompanionState(p) end)
+    if ok and type(st) == "table" then return st end
+    return nil
+end
+
+local companion_log_at = {}
+
+local function companion_log(tag, text)
+    local now = U.now()
+    local prev = companion_log_at[tag]
+    if prev ~= nil and (now - prev) < COMPANION_LOG_GAP then return end
+    companion_log_at[tag] = now
+    pcall(function() print("[COMPANION] " .. tostring(tag) .. " " .. tostring(text or "")) end)
+end
+
+--- 地上是否有"没人拿着"的阿比盖尔之花
+local function find_dropped_flower(p, radius)
+    return U.find_nearest(p, radius or COMPANION_FLOWER_RADIUS, nil, nil, function(e)
+        if e == nil or e == p then return false end
+        if tostring(e.prefab or "") ~= "abigail_flower" then return false end
+        local c = e.components
+        if c == nil or c.inventoryitem == nil then return false end
+        local ok, owned = pcall(function() return c.inventoryitem.owner ~= nil end)
+        if ok and owned then return false end
+        local okv, valid = pcall(function() return e:IsValid() end)
+        if okv and valid == false then return false end
+        return true
+    end)
+end
+
+--- P2：只在没有任务、没有敌人贴脸时，做"捡花 / 提前召唤"。
+local function maintain_companion(p)
+    if A == nil or Whale.job ~= nil then return false end
+    local comp = companion_state(p)
+    if comp == nil or comp.unknown == true then return false end
+
+    -- 有敌人贴脸/附近有活怪：什么都不做（交给 P0/P1）
+    if find_attacker(p, 6) ~= nil then return false end
+    if active_threat(p, 8) ~= nil then return false end
+
+    -- 1) 花朵掉在地上且没在场 → 先用既有 pickup 动作捡回来（回收优先于召唤）
+    if comp.present ~= true and comp.has_flower ~= true then
+        local flower = find_dropped_flower(p, COMPANION_FLOWER_RADIUS)
+        if flower ~= nil then
+            companion_log("FLOWER_DROPPED", string.format(
+                "prefab=abigail_flower dist=%.1f have_flower=%s present=%s",
+                (U.dist(p, flower) or 0) / U.TILE, tostring(comp.has_flower), tostring(comp.present)))
+            if cooldown_ok("companion_flower") then
+                local started = A.Start("pickup", { radius = COMPANION_FLOWER_RADIUS }, REFLEX_ID,
+                    { target = flower })
+                if started then
+                    mark("companion_flower")
+                    pending = { kind = "companion_flower", t0 = U.now() }
+                    diag("companion_flower", { "started=true", "reason=flower_dropped" })
+                    return true
+                end
+            end
+        end
+    end
+
+    -- 2) 有花、没召唤、安全 → 提前召唤（不等被咬）
+    if comp.can_summon == true and comp.has_flower == true and comp.present ~= true then
+        if not cooldown_ok("companion_summon") then return false end
+        local started = A.Start("summon_companion", {}, REFLEX_ID, { proactive = true })
+        if started then
+            mark("companion_summon")
+            pending = { kind = "companion_summon", t0 = U.now() }
+            companion_log("SUMMON_STARTED", "reason=proactive")
+            diag("companion_summon", { "started=true", "reason=proactive" })
+            return true
+        end
+    end
+    return false
+end
+
+
 local function has_fuel_item(p)
     if A == nil or A.count_item == nil then return false end
     local ok, v = pcall(function()
@@ -1305,15 +1426,36 @@ local function run(p)
     local hp_safe = hp ~= nil and hp >= 0.50
 
     if attacker ~= nil and combat_targeting(attacker, p) then
-        -- R8.3.3 野狗等高速追击者防御判定
-        local is_fast_chaser = (attacker.prefab == "hound" or attacker.prefab == "icehound" or attacker.prefab == "firehound")
-        if is_fast_chaser and not suppress_flee then
-            -- 野狗移速(10) > 角色(6)，直线逃跑必被咬死！
-            -- 如果自身非残血濒死（>=25%），优先由战斗系统组织战术防御或召唤阿比盖尔
-            if B ~= nil and B.StartDefense ~= nil and (hp == nil or hp >= 0.25) then
-                local def_ok = B.StartDefense(p, attacker)
-                if def_ok then
-                    suppress_flee = true
+        -- ★ R8.5：受控防御接线。
+        --   旧实现只对野狗(hound/icehound/firehound)调 B.StartDefense，普通蜘蛛/蜘蛛战士/青蛙
+        --   一律走 flee —— 真机上就是"青蛙靠近 → flee 反复启动 → 生命 150→130 → advance_task
+        --   一直被 reflex_active 阻断"。现在：任何"战术表里有策略"的敌人，都先尝试受控防御；
+        --   StartDefense 内部再判残血 / 是否有伴生 / 是否正在召唤 / 优先级，绝不硬接。
+        local strategy_supported = false
+        if B ~= nil and B.STRATEGIES ~= nil then
+            local strat = B.STRATEGIES[attacker.prefab]
+            strategy_supported = (strat ~= nil and strat.supported == true)
+        end
+        if strategy_supported and not suppress_flee and (hp == nil or hp >= 0.25) then
+            local defense_state = nil
+            if B.StartDefense ~= nil then
+                defense_state = B.StartDefense(p, attacker)
+            end
+            if defense_state == "engaged" or defense_state == "summoning" then
+                suppress_flee = true
+                -- 召唤交接必须有界：拖太久或快死了立刻回退逃跑（绝不永久禁用 flee）。
+                if defense_state == "summoning" then
+                    local ds = (B.DefenseStatus ~= nil) and B.DefenseStatus() or nil
+                    local elapsed = (ds ~= nil and ds.summon_started_at ~= nil)
+                        and (U.now() - ds.summon_started_at) or 0
+                    local too_long = elapsed > 8
+                    local too_hurt = hp ~= nil and hp < 0.35
+                    if too_long or too_hurt then
+                        if B.AbortDefense ~= nil then
+                            B.AbortDefense(too_hurt and "critical_health" or "summon_timeout")
+                        end
+                        suppress_flee = false
+                    end
                 end
             end
         end
@@ -1405,6 +1547,8 @@ local function run(p)
     if Whale.job == nil then
         if maintain_fuel(p, phase) then return end
         if maintain_food(p) then return end
+        -- R8.5：伴生维护（捡回掉落的花 / 提前召唤）
+        if maintain_companion(p) then return end
         if maintain_sanity(p) then return end
     end
 

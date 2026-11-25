@@ -850,6 +850,23 @@ function O.BuildData(actor, opts)
                         local okay, tgt = pcall(function() return bt.GetTarget() end)
                         if okay and tgt ~= nil then data.combat.active_target = tostring(tgt.prefab or "target") end
                     end
+                    -- R8.5：防御交接状态（summoning / engaged）—— 让日志与上层能区分
+                    -- "正在受控防御" 与 "只是附近有怪"，不要把两者混为一谈。
+                    if bt ~= nil and bt.DefenseStatus ~= nil then
+                        local okd, ds = pcall(function() return bt.DefenseStatus() end)
+                        if okd and type(ds) == "table" then
+                            data.combat.defense = ds.phase
+                            data.combat.defense_target = ds.target_prefab
+                            data.combat.defense_guid = ds.target_guid
+                        end
+                    end
+                    -- 伴生主战标志（温蒂 avoid_melee 真正生效时才为 true）
+                    if bt ~= nil and bt.GetSession ~= nil then
+                        local oks, ss = pcall(function() return bt.GetSession() end)
+                        if oks and type(ss) == "table" then
+                            data.combat.companion_led = ss.companion_led == true
+                        end
+                    end
                 end
             end
         end

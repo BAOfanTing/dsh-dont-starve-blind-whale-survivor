@@ -161,6 +161,8 @@ local function build_state()
         seq = seq,
         t = os.time(),
         mod = Whale.version,
+        -- R8.5：源码构建标识（只改 version 数字无法区分"游戏实际加载的是哪份源码"）
+        build = Whale.build or Whale.version,
         ready = data.ready == true,
         text = text,
         data = data,
@@ -190,12 +192,15 @@ end
 
 function B.Report(ok, text, cmd_id, reason)
     local id = cmd_id or last_cmd_id
-    -- R8.x：本地反射(reflex)回执走独立文件，**绝不占用模型指令的结果槽**。
+    -- R8.x：本地反射(reflex)/本地防御(defense)回执走独立文件，**绝不占用模型指令的结果槽**。
     -- 否则反射动作完成会覆盖 pending_result，把模型的 result 挤掉 → Node 等不到匹配 command_id → 罚站到超时判 unknown。
-    if tostring(id) == "reflex" then
-        local rtext = Whale.json.encode({ v = 1, id = "reflex", ok = ok and true or false, reason = reason, text = tostring(text or ""), t = os.time() })
-        pcall(function() write_both("whale_reflex_result.json", "whale_io_reflex_result.json", rtext) end)
-        log("反射结果 " .. tostring(ok) .. "：" .. tostring(text))
+    -- R8.5：防御（Wendy companion defense / summon handoff）同样不是模型指令，必须走本地结果文件。
+    if tostring(id) == "reflex" or tostring(id) == "defense" then
+        local fname = (tostring(id) == "defense") and "whale_defense_result.json" or "whale_reflex_result.json"
+        local ioname = (tostring(id) == "defense") and "whale_io_defense_result.json" or "whale_io_reflex_result.json"
+        local rtext = Whale.json.encode({ v = 1, id = id, ok = ok and true or false, reason = reason, text = tostring(text or ""), t = os.time() })
+        pcall(function() write_both(fname, ioname, rtext) end)
+        log("本地结果 " .. tostring(id) .. " " .. tostring(ok) .. "：" .. tostring(text))
         return
     end
     pending_result_data = {

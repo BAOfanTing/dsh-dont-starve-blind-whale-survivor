@@ -16,9 +16,15 @@ local function world_dist(a, b)
 end
 
 local TUNING = GLOBAL.TUNING or {}
--- 阿比盖尔"防御/跟随"能覆盖的距离（世界单位）；有 TUNING 用真实值，否则保守 20 格
-local ASSIST_MAX_DIST = (type(TUNING.ABIGAIL_DEFENSIVE_MAX_FOLLOW) == "number"
-    and TUNING.ABIGAIL_DEFENSIVE_MAX_FOLLOW * 4) or (20 * 4)
+-- 阿比盖尔"防御/跟随"能覆盖的距离（世界单位）。
+-- ★ 依据 .runtime/dst-scripts/scripts/prefabs/abigail.lua:97-105,125-158：
+--   原版 DefensiveRetarget 只在 `inst:GetDistanceSqToInst(player) < ABIGAIL_DEFENSIVE_MAX_FOLLOW^2`
+--   时接战（tuning.lua:4822 = 5 世界单位 ≈ 1.25 格），且目标必须距**玩家**小于
+--   ABIGAIL_COMBAT_TARGET_DISTANCE(=15 世界单位 ≈ 3.75 格)。
+--   跟随时会有滞后 / 被怪挤开，所以"可协助"判定留 2 倍容差（超过 2 倍基本接不上战）。
+local ASSIST_FOLLOW = (type(TUNING.ABIGAIL_DEFENSIVE_MAX_FOLLOW) == "number"
+    and TUNING.ABIGAIL_DEFENSIVE_MAX_FOLLOW > 0) and TUNING.ABIGAIL_DEFENSIVE_MAX_FOLLOW or 5
+local ASSIST_MAX_DIST = ASSIST_FOLLOW * 2
 
 --- 阿比盖尔状态。字段：present/alive/valid/distance/health_percent/current_target/
 --- is_following/is_attacking/is_busy/can_assist/can_summon/has_flower/bond_level/unknown。无法可靠读取时 unknown=true。
@@ -69,6 +75,7 @@ function C.GetCompanionState(player)
     end
 
     st.present = true
+    st.guid = ghost.GUID
     local h = ghost.components ~= nil and ghost.components.health or nil
     if h ~= nil then
         local okd, dead = pcall(function() return h:IsDead() end)
@@ -80,12 +87,15 @@ function C.GetCompanionState(player)
     end
 
     st.distance = world_dist(player, ghost)
+    st.distance_tiles = (st.distance ~= nil) and (st.distance / 4) or nil
+    st.defensive_range = ASSIST_MAX_DIST
 
     local c = ghost.components ~= nil and ghost.components.combat or nil
     if c ~= nil then
         local tgt = c.target
         st.is_attacking = (tgt ~= nil)
         st.current_target = (tgt ~= nil) and tostring(tgt.prefab or "target") or nil
+        st.target_guid = (tgt ~= nil) and tgt.GUID or nil
     end
 
     st.is_following = (st.alive and st.valid)
@@ -96,4 +106,38 @@ function C.GetCompanionState(player)
     return st
 end
 
+--- 地上是否有一朵"没人拿着"的阿比盖尔之花（掉落回收用；与其他码头共用同一套判据）。
+--- 返回 flower_ent 或 nil。
+function C.FindDroppedFlower(player, radius_tiles)
+    if player == nil or GLOBAL.TheSim == nil then return nil end
+    local okp, px, _py, pz = pcall(function() return player.Transform:GetWorldPosition() end)
+    if not okp or px == nil then return nil end
+    local r = (radius_tiles or 16) * 4
+    local ok, ents = pcall(function()
+        return GLOBAL.TheSim:FindEntities(px, 0, pz, r, { "abigail_flower" })
+    end)
+    if not ok or ents == nil then return nil end
+    local best, best_d = nil, nil
+    for i = 1, #ents do
+        local e = ents[i]
+        if e ~= nil and e ~= player then
+            local valid = false
+            pcall(function() valid = e:IsValid() == true end)
+            local c = e.components
+            local owned = true
+            if c ~= nil and c.inventoryitem ~= nil then
+                pcall(function() owned = c.inventoryitem.owner ~= nil end)
+            end
+            local limbo = false
+            pcall(function() limbo = e:HasTag("INLIMBO") == true end)
+            if valid and not owned and not limbo then
+                local d = world_dist(player, e)
+                if d ~= nil and (best_d == nil or d < best_d) then best, best_d = e, d end
+            end
+        end
+    end
+    return best, best_d
+end
+
 C.ABIGAIL_ASSIST_MAX_DIST = ASSIST_MAX_DIST
+C.ABIGAIL_ASSIST_FOLLOW = ASSIST_FOLLOW

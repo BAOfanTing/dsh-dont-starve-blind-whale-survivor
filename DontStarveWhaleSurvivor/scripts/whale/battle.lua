@@ -80,6 +80,27 @@ local STRATEGIES = {
         can_kite = true,
         supported = true,
     },
+    -- ★ R8.5：青蛙（依据 .runtime/dst-scripts）：
+    --   prefabs/frog.lua：FROG_HEALTH=100、FROG_DAMAGE=10、FROG_ATTACK_PERIOD=1、runspeed=8；
+    --     tags: hostile / animal / prey / smallcreature / frog；onhitother → thief:StealItem(目标)
+    --     —— **命中会击落玩家背包里的一件物品**（这就是"阿比盖尔之花被击落"的原版机制）；
+    --     OnAttacked → ShareTarget(30, 同tag "frog") —— 打一只会引来周围青蛙协同敌对。
+    --   brains/frogbrain.lua：ChaseAndAttack(MAX_CHASE_TIME=8) → 追击不放弃，不能靠直线跑甩掉。
+    --   ⇒ 策略要点：血薄（100）、攻速快（1s）、会击落物品、会成群。
+    --     所以"打一撤一"、保持 3.5 格、并且优先让伴生生物承担输出（温蒂 avoid_melee）。
+    frog = {
+        name = "frog",
+        display_name = "青蛙",
+        swings_per_cycle = 1,       -- 攻速 1s，硬直短：只打一下就走
+        retreat_distance = 3.5,     -- 每次出手后必须拉开，避免被连咬击落物品
+        retreat_duration = 0.8,
+        reset_duration = 0.5,
+        can_kite = true,
+        supported = true,
+        drops_items = true,         -- 命中会击落背包物品（保护 key item 用）
+        share_target = true,        -- 被打会喊周围青蛙一起上
+        fragile = true,             -- 100 血，优先集火/快速击杀
+    },
     hound = {
         name = "hound",
         display_name = "猎犬",
@@ -276,6 +297,11 @@ function B.Cleanup()
     if session ~= nil then
         session = nil
     end
+    -- R8.5：战斗会话结束 = 这次防御已收尾；防御交接状态一并清掉，
+    -- 让 reflex 下一次调度重新评估"要不要重新召唤/再来一场防御"。
+    if defense ~= nil and defense.phase ~= "summoning" then
+        defense = nil
+    end
 end
 
 function B.Abort(reason)
@@ -293,6 +319,111 @@ function B.Abort(reason)
     return false
 end
 
+-- ─────────────── 角色 / 伴生 / 防御会话（R8.5）───────────────
+--
+-- 红线：防御**不是**第二条战斗执行器。它只通过既有 A.Start 启动既有 JOBS
+--      （summon_companion / fight_spider），由 A.Tick 推进；这里只保存"交接状态"，
+--      供 reflex 判定要不要抑制 flee，以及决定是否回退撤退。
+
+local DEFENSE_ID = (A ~= nil and A.DEFENSE_ID) or "defense"
+B.DEFENSE_ID = DEFENSE_ID
+
+local SUMMON_TIMEOUT_S = 8           -- 召唤交接最长容忍时间（超过就回退逃跑）
+local SUMMON_RETRY_COOLDOWN_S = 20   -- 召唤失败后的退避，禁止无限重试
+local GROUP_MAX_WITH_COMPANION = 3   -- 伴生健康时可同时纠缠的敌人数上限
+local COMPANION_MIN_HEALTH = 0.40    -- 阿比盖尔低于此比例不再算"能扛"
+
+-- 防御会话：{ phase="summoning"|"engaged"|"failed", target, target_guid, target_prefab,
+--             started_at, summon_started_at, retry_at, reason }
+local defense = nil
+
+local function resolve_profile(p)
+    local ch = Whale ~= nil and Whale.character or nil
+    if ch == nil or ch.Resolve == nil then return nil end
+    local ok, prof = pcall(function() return ch.Resolve(p) end)
+    if ok and type(prof) == "table" then return prof end
+    return nil
+end
+
+local function combat_policy_of(p, prof)
+    prof = prof or resolve_profile(p)
+    if prof == nil or prof.GetCombatPolicy == nil then return nil end
+    local ok, pol = pcall(function() return prof.GetCombatPolicy(p) end)
+    if ok and type(pol) == "table" then return pol end
+    return nil
+end
+
+local function companion_of(p)
+    local ch = Whale ~= nil and Whale.character or nil
+    if ch == nil or ch.GetCompanionState == nil then return nil end
+    local ok, st = pcall(function() return ch.GetCompanionState(p) end)
+    if ok and type(st) == "table" then return st end
+    return nil
+end
+
+local function is_wendy(p)
+    local prof = resolve_profile(p)
+    return prof ~= nil and prof.id == "wendy"
+end
+
+local function same_entity(a, b)
+    if a == nil or b == nil then return false end
+    if a == b then return true end
+    return a.GUID ~= nil and b.GUID ~= nil and a.GUID == b.GUID
+end
+
+--- 伴生是否能"扛住当前群体"。区分"只是附近有敌人"和"真的在打温蒂"。
+--- 返回 ok, why。allow 时不会放开硬上限：>3 只仍然强制撤退。
+local function can_tolerate_group(p, attacker_count)
+    if attacker_count <= 1 then return true, "single" end
+    if attacker_count > GROUP_MAX_WITH_COMPANION then
+        return false, "too_many_attackers"
+    end
+    local comp = companion_of(p)
+    if comp == nil or comp.alive ~= true or comp.can_assist ~= true then
+        return false, "no_companion_support"
+    end
+    local chp = comp.health_percent
+    if chp ~= nil and chp < COMPANION_MIN_HEALTH then
+        return false, "companion_low_health"
+    end
+    local hp = get_health_percent(p)
+    if hp ~= nil and hp < 0.50 then
+        return false, "player_low_health"
+    end
+    return true, "companion_supported"
+end
+B.CanTolerateGroup = can_tolerate_group
+
+--- 防御会话快照（给 reflex / observe / 诊断用）
+function B.DefenseStatus()
+    if defense == nil then return nil end
+    return {
+        phase = defense.phase or "unknown",
+        target_prefab = defense.target_prefab,
+        target_guid = defense.target_guid,
+        started_at = defense.started_at,
+        summon_started_at = defense.summon_started_at,
+        reason = defense.reason,
+    }
+end
+
+--- 主动结束防御交接（reflex 决定撤退时调用；会安全清掉 defense job）
+function B.AbortDefense(reason)
+    if defense == nil then return false end
+    local job = Whale.job
+    if job ~= nil and job.cmd_id == DEFENSE_ID then
+        pcall(function() A.Abort(reason or "defense_abort") end)
+    end
+    blog("DEFENSE_ABORT", {
+        reason = reason or "manual",
+        target = defense.target_prefab or "none",
+        phase = defense.phase or "unknown",
+    })
+    defense = nil
+    return true
+end
+
 -- ─────────────── 保命反射协同接口 ───────────────
 --- 供 reflex.lua 判定是否应当抑制普通单怪被攻击逃跑
 function B.ShouldSuppressReflex(p, attacker)
@@ -301,12 +432,7 @@ function B.ShouldSuppressReflex(p, attacker)
     if target == nil or not is_alive(target) then return false end
 
     -- 攻击者必须是当前锁定的目标
-    local is_same_target = false
-    if attacker == target then
-        is_same_target = true
-    elseif attacker ~= nil and target ~= nil and attacker.GUID ~= nil and attacker.GUID == target.GUID then
-        is_same_target = true
-    end
+    local is_same_target = same_entity(attacker, target)
     if not is_same_target then
         return false
     end
@@ -323,73 +449,209 @@ function B.ShouldSuppressReflex(p, attacker)
         return false
     end
 
-    -- 硬规则2：遭到多只敌人围攻（> 1 只敌对生物把玩家设为目标），不可抑制保命反射
+    -- 硬规则2：群体围攻。
+    -- ★ R8.5：旧规则是"num_attackers>1 直接紧急覆盖"，导致"三只青蛙在附近"
+    --   永远进不了防御（真机：flee 反复启动、advance_task 一直被阻断）。
+    --   现在：只有当敌人**真的把温蒂当目标**时才计数；伴生健康且可协助时允许受控群战，
+    --   硬上限 3 只、且阿比盖尔/温蒂血量任何一项跌破安全线都立刻回退保命。
     local num_attackers = count_attackers_targeting(p, 8)
     if num_attackers > 1 then
-        blog("REFLEX_EMERGENCY_OVERRIDE", {
-            reason = "outnumbered",
+        local allow, why = can_tolerate_group(p, num_attackers)
+        if not allow then
+            blog("REFLEX_EMERGENCY_OVERRIDE", {
+                reason = "outnumbered:" .. tostring(why),
+                count = num_attackers,
+                target = session.target_prefab or "none",
+            })
+            session.reflex_intervened = "outnumbered"
+            return false
+        end
+        blog("COMPANION_GROUP_ENGAGE", {
             count = num_attackers,
+            reason = tostring(why),
             target = session.target_prefab or "none",
         })
-        session.reflex_intervened = "outnumbered"
-        return false
     end
 
-    -- 正常受控单怪交战：抑制保命反射的 P0 flee，让战斗系统自主执行风筝
+    -- 正常受控交战：抑制保命反射的 P0 flee，让战斗系统自主执行
     session.reflex_suppressed_count = (session.reflex_suppressed_count or 0) + 1
     blog("REFLEX_SUPPRESSED", {
         target = session.target_prefab or "none",
         guid = session.target_guid or 0,
         hp = hp ~= nil and string.format("%.2f", hp) or "unknown",
+        companion_led = session.companion_led == true,
     })
     return true
 end
 
---- 供 reflex.lua 在野狗等高速追击敌人锁定玩家时组织主动防御
+--- 供 reflex.lua 组织受控防御（含 Wendy 的伴生召唤交接）。
+---
+--- 返回状态字符串（调用方据此决定是否抑制 flee）：
+---   "engaged"    已接管为战术防御（战斗 job 已启动或本就在打同一目标）
+---   "summoning"  已启动 summon_companion 交接（有花、阿比盖尔未到场）
+---   "rejected"   不能接管 —— 调用方应回退到 Reflex 逃跑
+---
+--- ★ 绝不在这里自己 BufferedAction(CASTSUMMON)：召唤必须复用 actions/combat.lua 的
+---   JOBS.summon_companion（它带契约检查/花朵检查/已召唤检查/summon_succeeded 核验）。
 function B.StartDefense(p, attacker)
-    if p == nil or attacker == nil or not is_alive(attacker) then return false end
+    if p == nil or attacker == nil or not is_alive(attacker) then return "rejected" end
     local prefab = tostring(attacker.prefab or "")
     local strategy = STRATEGIES[prefab]
-    if strategy == nil or not strategy.supported then return false end
-
-    -- 若已在受控交战中且目标就是该怪，保持交战并抑制 flee
-    if session ~= nil and B.InCombat() and session.target == attacker then
-        return true
+    if strategy == nil or not strategy.supported then return "rejected" end
+    if BOSS_PREFABS[prefab] then
+        blog("DEFENSE_ABORT", { reason = "boss_forbidden", target = prefab })
+        return "rejected"
     end
 
     -- 残血（<25%）不硬接，让保命反射接管逃生
     local hp = get_health_percent(p)
-    if hp ~= nil and hp < 0.25 then return false end
+    if hp ~= nil and hp < 0.25 then return "rejected" end
 
-    -- 温蒂角色伴生协同：阿比盖尔若未在场但可召唤，在野狗扑咬前优先召唤
-    local _prof = (Whale ~= nil and Whale.character ~= nil and Whale.character.Resolve ~= nil) and Whale.character.Resolve(p) or nil
-    if _prof ~= nil and _prof.id == "wendy" then
-        local comp = Whale.character.GetCompanionState(p)
-        if comp.can_summon == true and comp.has_flower == true and not comp.present then
-            local d = U.dist(p, attacker)
-            if d ~= nil and d > 3.0 * U.TILE then
-                local inv = p.components.inventory
-                local flower = inv and inv:FindItem(function(item) return item and item.prefab == "abigail_flower" end)
-                if flower ~= nil then
-                    local ba = BufferedAction(p, nil, ACTIONS.CASTSUMMON, flower)
-                    A.push(p, ba)
-                    blog("DEFENSE_SUMMON_COMPANION", { attacker = prefab })
-                    return true
-                end
+    -- 已在受控交战中且目标就是该怪，保持交战并抑制 flee
+    if session ~= nil and B.InCombat() and same_entity(session.target, attacker) then
+        if defense ~= nil then defense.phase = "engaged" end
+        return "engaged"
+    end
+
+    -- 已在"等召唤完成"的交接中：不重复启动（job 仍是 summon_companion 就继续保持）
+    if defense ~= nil and defense.phase == "summoning" then
+        local job = Whale.job
+        if job ~= nil and job.name == "summon_companion" and job.cmd_id == DEFENSE_ID then
+            blog("DEFENSE_CANDIDATE", { target = prefab, phase = "summoning", guid = attacker.GUID })
+            return "summoning"
+        end
+        -- 召唤 job 已经结束：用真实状态判定成功/失败，绝不"没成功就再来一次"
+        local comp0 = companion_of(p)
+        if comp0 ~= nil and comp0.can_assist == true then
+            defense = nil   -- 成功：交给下面的常规判定进入防御
+        else
+            local now0 = U.now()
+            blog("DEFENSE_HANDOFF", {
+                target = prefab, phase = "failed", reason = "summon_not_completed",
+            })
+            defense = {
+                phase = "failed",
+                started_at = now0,
+                retry_at = now0 + SUMMON_RETRY_COOLDOWN_S,
+                target_prefab = prefab,
+                last_fail = "summon_not_completed",
+            }
+            return "rejected"
+        end
+    end
+
+    -- 已有一场防御战斗在跑：保持原任务，不重复启动
+    if defense ~= nil and defense.phase == "engaged" then
+        local job = Whale.job
+        if job ~= nil and job.cmd_id == DEFENSE_ID then
+            return "engaged"
+        end
+        defense = nil
+    end
+
+    local prof = resolve_profile(p)
+    local pol = combat_policy_of(p, prof)
+    local wendy = (prof ~= nil and prof.id == "wendy")
+        or (pol ~= nil and pol.preferred_strategy == "abigail_assisted")
+    local comp = companion_of(p)
+
+    if wendy then
+        -- 伴生太虚（血量低于安全线）时，不再假装"她在扛" —— 立刻回退保命
+        if comp ~= nil and comp.can_assist == true
+            and comp.health_percent ~= nil and comp.health_percent < COMPANION_MIN_HEALTH then
+            blog("DEFENSE_ABORT", {
+                target = prefab, reason = "companion_low_health",
+                companion_hp = comp.health_percent,
+            })
+            return "rejected"
+        end
+        if comp ~= nil and comp.can_assist == true then
+            blog("DEFENSE_CANDIDATE", {
+                target = prefab, guid = attacker.GUID, companion = "ready",
+                companion_hp = comp.health_percent,
+            })
+        elseif comp ~= nil and comp.can_summon == true and comp.has_flower == true then
+            -- 有花但没召唤：先走既有 summon_companion job（绝不自己 push CASTSUMMON）
+            local now = U.now()
+            if defense ~= nil and defense.retry_at ~= nil and now < defense.retry_at then
+                blog("DEFENSE_HANDOFF", {
+                    target = prefab, phase = "cooldown",
+                    retry_in = string.format("%.0f", defense.retry_at - now),
+                })
+                return "rejected"
             end
+            local ok, err = A.Start("summon_companion", {}, DEFENSE_ID, {
+                defense_reason = "wendy_companion_defense",
+                target_guid = attacker.GUID,
+                budget_s = SUMMON_TIMEOUT_S + 4,
+            })
+            if ok then
+                defense = {
+                    phase = "summoning",
+                    target = attacker,
+                    target_guid = attacker.GUID,
+                    target_prefab = prefab,
+                    started_at = now,
+                    summon_started_at = now,
+                    reason = "wendy_companion_defense",
+                }
+                blog("DEFENSE_HANDOFF", {
+                    target = prefab, guid = attacker.GUID, phase = "summoning",
+                    job = "summon_companion", cmd_id = DEFENSE_ID,
+                })
+                blog("DEFENSE_SUMMON_COMPANION", {
+                    attacker = prefab, guid = attacker.GUID,
+                    job = "summon_companion", via = "actions",
+                })
+                return "summoning"
+            end
+            -- 启动失败（例如 Reflex 回血/照明优先级更高）：记录并回退逃跑
+            blog("DEFENSE_HANDOFF", {
+                target = prefab, phase = "rejected", reason = tostring(err),
+            })
+            defense = {
+                phase = "failed",
+                last_fail = tostring(err),
+                started_at = now,
+                retry_at = now + SUMMON_RETRY_COOLDOWN_S,
+                target_prefab = prefab,
+            }
+            return "rejected"
+        else
+            -- 无花 / 不可召唤：绝不假装能召唤，回退安全撤退
+            blog("DEFENSE_ABORT", {
+                target = prefab,
+                reason = "companion_unavailable",
+                has_flower = comp ~= nil and comp.has_flower == true,
+            })
+            return "rejected"
         end
     end
 
-    -- 启动或接管为战术防御任务
-    if Whale.actions ~= nil and Whale.actions.Start ~= nil then
-        local ok = Whale.actions.Start("fight_spider", {}, "defense", { target = attacker, is_defense = true })
-        if ok then
-            blog("DEFENSE_ENGAGE", { attacker = prefab, guid = attacker.GUID })
-            return true
-        end
+    -- 通用角色，或伴生已可协助：启动/接管为战术防御任务
+    local ok = A.Start("fight_spider", {}, DEFENSE_ID, {
+        target = attacker,
+        is_defense = true,
+        budget_s = 60,
+    })
+    if ok then
+        defense = defense or {}
+        defense.phase = "engaged"
+        defense.target = attacker
+        defense.target_guid = attacker.GUID
+        defense.target_prefab = prefab
+        defense.started_at = defense.started_at or U.now()
+        if defense.summon_started_at == nil then defense.summon_started_at = defense.started_at end
+        defense.reason = "tactical_defense"
+        blog("DEFENSE_ENGAGE", {
+            attacker = prefab,
+            guid = attacker.GUID,
+            companion = comp ~= nil and comp.can_assist == true,
+            companion_hp = comp ~= nil and comp.health_percent or nil,
+        })
+        return "engaged"
     end
-
-    return false
+    return "rejected"
 end
 
 -- ─────────────── 目标查找（寻找最近可战斗的敌对目标：蜘蛛/野狗）───────────────
@@ -476,6 +738,11 @@ function B.StepJob(j, p)
         -- R8.2：角色战斗策略。温蒂（requires_companion_for_hunt）必须阿比盖尔可协助才主动狩猎；
         -- 但如果是被动防御（is_defense），不可拒战等死。
         local _prof = (Whale ~= nil and Whale.character ~= nil and Whale.character.Resolve ~= nil) and Whale.character.Resolve(p) or nil
+        local _pol = nil
+        if _prof ~= nil and _prof.GetCombatPolicy ~= nil then
+            local _okp2, _p2 = pcall(function() return _prof.GetCombatPolicy(p) end)
+            if _okp2 and type(_p2) == "table" then _pol = _p2 end
+        end
         if not is_defense and _prof ~= nil and _prof.GetCombatPolicy ~= nil then
             local _okp, _cp = pcall(function() return _prof.GetCombatPolicy(p) end)
             if _okp and _cp ~= nil and _cp.requires_companion_for_hunt == true then
@@ -533,6 +800,13 @@ function B.StepJob(j, p)
             loot_index = 1,
             reflex_suppressed_count = 0,
             reflex_intervened = nil,
+            -- ★ R8.5：温蒂 avoid_melee 必须真正落地。avoid_melee 来自 Profile/CombatPolicy，
+            --   但只有"阿比盖尔真的可协助"时才切到伴生主战（否则仍然是原来的风筝打法）。
+            avoid_melee = (_pol ~= nil and _pol.avoid_melee == true),
+            companion_led = false,
+            companion = nil,
+            companion_hits = 0,
+            last_seen_hp = nil,
         }
 
         blog("START", {
@@ -557,6 +831,37 @@ function B.StepJob(j, p)
     session.weapon = current_weapon_name(p)
     session.armor = current_armor_name(p)
 
+    -- ★ R8.5：每 tick 重新读伴生状态（阿比盖尔可能刚被召唤 / 刚死 / 刚走远）。
+    --   日志限频：只在"关键状态变化"或每 5 秒打一次，绝不每帧刷屏。
+    local _comp_now = companion_of(p)
+    if _comp_now ~= nil then
+        session.companion = _comp_now
+        local _assist = (_comp_now.alive == true and _comp_now.can_assist == true)
+        session.companion_led = (_assist and session.avoid_melee == true)
+        local _sig = table.concat({
+            tostring(_comp_now.current_target), tostring(_comp_now.is_attacking),
+            tostring(_comp_now.alive), tostring(_comp_now.can_assist),
+        }, "|")
+        local _last = session._comp_sig
+        local _at = session._comp_log_at or 0
+        if _sig ~= _last or (now - _at) >= 5 then
+            session._comp_sig = _sig
+            session._comp_log_at = now
+            blog("COMPANION_TARGET", {
+                target = session.target_prefab,
+                guid = session.target_guid,
+                companion_hp = _comp_now.health_percent,
+                companion_target = _comp_now.current_target or "none",
+                companion_attacking = _comp_now.is_attacking == true,
+                companion_distance = _comp_now.distance,
+                companion_led = session.companion_led == true,
+            })
+        end
+    else
+        session.companion = nil
+        session.companion_led = false
+    end
+
     -- ── 全局监控守卫 ──
     -- 1. 残血守卫
     if session.player_current_hp ~= nil and session.player_current_hp < 0.25 then
@@ -566,13 +871,23 @@ function B.StepJob(j, p)
         return "fail", "low_health: 自身血量过低（<25%），中止战斗并脱离"
     end
 
-    -- 2. 多怪围攻守卫
+    -- 2. 多怪围攻守卫（R8.5：伴生健康时可受控群战，上限 3 只；否则立刻紧急中止）
     local threat_count = count_attackers_targeting(p, 8)
     if threat_count > 1 then
-        transition(STATES.EMERGENCY, "outnumbered")
-        blog("EMERGENCY", { reason = "outnumbered", count = threat_count })
-        B.Cleanup()
-        return "fail", "outnumbered: 遭到多只敌人围攻，紧急中止战斗"
+        local allow, why = can_tolerate_group(p, threat_count)
+        if not allow then
+            transition(STATES.EMERGENCY, "outnumbered")
+            blog("EMERGENCY", { reason = "outnumbered:" .. tostring(why), count = threat_count })
+            B.Cleanup()
+            return "fail", "outnumbered: 遭到多只敌人围攻（" .. tostring(why) .. "），紧急中止战斗"
+        end
+        if (session._group_log_at or 0) == 0 or (now - (session._group_log_at or 0)) >= 5 then
+            session._group_log_at = now
+            blog("COMPANION_GROUP_ENGAGE", {
+                count = threat_count, reason = tostring(why),
+                target = session.target_prefab or "none",
+            })
+        end
     end
 
     -- 3. 黑暗环境守卫
@@ -716,6 +1031,85 @@ function B.StepJob(j, p)
     if st == STATES.ATTACK then
         if target == nil or not target:IsValid() or not is_alive(target) then
             transition(STATES.VERIFY, "target_down")
+            return "run"
+        end
+
+        -- ★ R8.5：伴生主战（温蒂 avoid_melee 的真正落地）。
+        --   阿比盖尔可协助时：温蒂**绝不**调用自己的 ACTIONS.ATTACK；
+        --   她只负责保持在"阿比盖尔防御范围"内，由阿比盖尔输出。
+        if session.companion_led then
+            local comp = session.companion
+            if comp == nil or comp.alive ~= true or comp.can_assist ~= true then
+                blog("DEFENSE_ABORT", { reason = "companion_unavailable", target = session.target_prefab })
+                transition(STATES.EMERGENCY, "companion_unavailable")
+                B.Cleanup()
+                return "fail", "companion_unavailable: 阿比盖尔已无法协助，先脱离"
+            end
+            local chp = comp.health_percent
+            if chp ~= nil and chp < 0.25 then
+                blog("DEFENSE_ABORT", { reason = "companion_low_health", companion_hp = chp })
+                transition(STATES.EMERGENCY, "companion_low_health")
+                B.Cleanup()
+                return "fail", "companion_low_health: 阿比盖尔血量过低，先脱离"
+            end
+            local php = get_health_percent(p)
+            if php ~= nil and php < 0.35 then
+                blog("DEFENSE_ABORT", { reason = "critical_health", hp = php })
+                transition(STATES.EMERGENCY, "critical_health")
+                B.Cleanup()
+                return "fail", "low_health: 自身血量过低（<35%），中止伴生战斗并脱离"
+            end
+
+            -- 位置维持：阿比盖尔的 DefensiveRetarget（prefabs/abigail.lua）要求
+            --   (a) 阿比盖尔距温蒂 < ABIGAIL_DEFENSIVE_MAX_FOLLOW
+            --   (b) 目标距温蒂 < ABIGAIL_COMBAT_TARGET_DISTANCE(15 世界单位≈3.75 格)
+            -- 所以温蒂要保持在约 2.2~3.2 格：太远阿比盖尔不会接战，太近会被青蛙咬掉背包物品。
+            local d = U.dist(p, target)
+            if d ~= nil then
+                local tiles = d / U.TILE
+                if tiles > 3.2 then
+                    local ox, _, oz = U.pos(target)
+                    if ox ~= nil then
+                        local tx, tz = U.tile_of(ox, oz)
+                        walk_throttled(p, tx, tz)
+                    end
+                elseif tiles < 2.2 then
+                    local angle = nil
+                    if native ~= nil and native.FleeAngle ~= nil then
+                        angle = native.FleeAngle(p, target, 4)
+                    end
+                    local rx, rz = nil, nil
+                    if native ~= nil and native.PointFromAngle ~= nil and angle ~= nil then
+                        rx, rz = native.PointFromAngle(p, angle, 4 * U.TILE)
+                    elseif angle ~= nil then
+                        local px, _, pz = U.pos(p)
+                        local rad = angle * (GLOBAL.DEGREES or (math.pi / 180))
+                        rx = px + 4 * U.TILE * math.cos(rad)
+                        rz = pz - 4 * U.TILE * math.sin(rad)
+                    end
+                    if rx ~= nil and rz ~= nil then
+                        local rtx, rtz = U.tile_of(rx, rz)
+                        walk_throttled(p, rtx, rtz)
+                    end
+                else
+                    pcall(A.stop_actions, p)
+                end
+            end
+
+            -- 证据：目标血量下降 = 阿比盖尔确实在输出。
+            -- 不能只因"她在场"就宣称战斗有效 —— 必须有真实伤害证据。
+            if session.last_seen_hp ~= nil and session.target_current_hp ~= nil
+                and session.target_current_hp < session.last_seen_hp then
+                session.companion_hits = (session.companion_hits or 0) + 1
+                blog("COMPANION_TARGET", {
+                    target = session.target_prefab,
+                    guid = session.target_guid,
+                    hp = session.target_current_hp,
+                    hits = session.companion_hits,
+                    companion_target = comp.current_target or "none",
+                })
+            end
+            session.last_seen_hp = session.target_current_hp
             return "run"
         end
 
@@ -925,12 +1319,20 @@ function B.StepJob(j, p)
 
     -- [FINISH] 结算与清理
     if st == STATES.FINISH then
-        local msg = string.format("打倒了 %s（挥砍 %d 次，后撤 %d 次）",
-            session.target_label or "目标", session.total_swings or 0, session.retreat_count or 0)
+        local msg
+        if session.companion_led or (session.avoid_melee and (session.companion_hits or 0) > 0) then
+            msg = string.format("阿比盖尔打倒了 %s（确认出手 %d 次，温蒂未近战）",
+                session.target_label or "目标", session.companion_hits or 0)
+        else
+            msg = string.format("打倒了 %s（挥砍 %d 次，后撤 %d 次）",
+                session.target_label or "目标", session.total_swings or 0, session.retreat_count or 0)
+        end
         blog("FINISH", {
             target = session.target_prefab,
             total_swings = session.total_swings,
             retreats = session.retreat_count,
+            companion_led = session.companion_led == true,
+            companion_hits = session.companion_hits or 0,
             result = "success",
         })
         B.Cleanup()

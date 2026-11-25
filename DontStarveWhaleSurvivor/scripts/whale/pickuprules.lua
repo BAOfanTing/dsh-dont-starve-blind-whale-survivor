@@ -51,6 +51,12 @@ P.PREFABS = {
     -- 松果/桦栗果：砍树会掉，留着能种树（不进白名单的话永远捡不起来）
     pinecone = true,
     acorn = true,
+    -- ★ R8.5：阿比盖尔之花（关键角色物品）。
+    --   真机：青蛙命中会走原版 frog:onhitother → thief:StealItem(玩家)，把背包里的花
+    --   **击落到地上**（日志里花出现在地面 (25,-58)，然后角色长时间没有伴生）。
+    --   花是普通地面物品（inventoryitem + canbepickedup），必须允许用既有 pickup 捡回来；
+    --   同时 guard 会禁止 AI 主动丢弃/当燃料烧掉它（见 guard.lua）。
+    abigail_flower = true,
     -- 地上的食物：与 eatrules 基础食物与熟食完全对齐，掉在地上都可以被原生 ACTIONS.PICKUP 捡起
     carrot = true,
     berries = true,

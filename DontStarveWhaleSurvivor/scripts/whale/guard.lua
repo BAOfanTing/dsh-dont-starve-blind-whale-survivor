@@ -859,6 +859,16 @@ function G.validate(cmd)
         if flower == nil then return false, "flower_not_in_inventory", nil end
     end
 
+    -- ═══════════ R8.5：伴生关键物品保护 ═══════════
+    -- 阿比盖尔之花是温蒂唯一的召唤/召回凭据（abigail_flower.lua 带 summoningitem + MakeSmallBurnable）。
+    -- 任务书明确要求：禁止 AI 因为背包空间或整理材料擅自丢弃它，也不得当作普通燃料烧掉。
+    if action == "drop" or action == "fuel" or action == "add_fuel" then
+        local want = tostring(cmd.args ~= nil and cmd.args.item or "")
+        if want == "abigail_flower" then
+            return false, "critical_item_protected", nil
+        end
+    end
+
     -- ═══════════ SURVIVAL-02 ═══════════
     if action == "gather_area" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
