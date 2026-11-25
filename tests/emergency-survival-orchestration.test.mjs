@@ -193,6 +193,74 @@ test('EMERGENCY-01: 当处于饥饿或残血状态时，Orchestrator 内部自�
   assert.equal(actionsDispatched[0].args.food, 'berries')
 })
 
+test('EMERGENCY-02: 当快照处于 retreat 状态但 Lua reflex.active=false 时，Orchestrator 调度 survival_stabilize 撤离走位防死锁', async () => {
+  WorldRuntimeManager.clear()
+  const store = createMockStore()
+  const mem = store.load('world_retreat_escape')
+  mem.task_board = {
+    schema: 'bws.task-board/1',
+    goal: '收集基础物资',
+    tasks: [
+      {
+        id: 'gather_cutgrass',
+        title: '收集草',
+        priority: 'normal',
+        status: 'ready',
+        skill_id: 'gather_resources',
+        attempts: 0,
+      },
+    ],
+  }
+
+  // 附近有发条怪 (距5格)，血量40%，但 Lua reflex 未触发 (没有被攻击中)
+  let snap = {
+    identity: { worldKey: 'world_retreat_escape' },
+    actor: { valid: true, alive: true, isGhost: false, tileX: -80, tileZ: 20 },
+    player: {
+      health: { percent: 40 },
+      hunger: { percent: 80 },
+      sanity: { percent: 90 },
+      in_light: true,
+      inventory: { items: [] },
+    },
+    reflex: { active: false },
+    nearby: {
+      buckets: {
+        threats: [
+          { prefab: 'rook', label: '发条战车', distance: 5.2, tile_x: -85, tile_z: 22 },
+        ],
+      },
+    },
+  }
+
+  let actionsDispatched = []
+  const dispatcher = {
+    dispatch: async (tool, args) => {
+      const toolName = typeof tool === 'object' ? tool.tool : tool
+      const toolArgs = typeof tool === 'object' ? tool.args : args
+      actionsDispatched.push({ tool: toolName, args: toolArgs })
+      return { status: 'succeeded', verified: true }
+    },
+    describe: (o) => `动作 ${o.status}`,
+  }
+
+  const orchestrator = new TaskSkillOrchestrator({
+    memory: mem,
+    worldKey: 'world_retreat_escape',
+    readSnapshot: () => snap,
+    dispatch: dispatcher.dispatch,
+    save: () => {},
+  })
+
+  const res = await orchestrator.tickOnce()
+  assert.ok(['survival_in_progress', 'survival_stabilized'].includes(res.status))
+  assert.equal(res.task_id, 'emergency:survival_stabilize')
+  assert.equal(res.skill_id, 'survival_stabilize')
+  assert.equal(actionsDispatched.length, 1)
+  assert.equal(actionsDispatched[0].tool, 'move_to')
+  assert.ok(typeof actionsDispatched[0].args.x === 'number')
+})
+
 test('STOP-01: WorldRuntime.stop 立即清理活动实例与队列，并以短超时下发底层 stop', async () => {
   WorldRuntimeManager.clear()
   const store = createMockStore()

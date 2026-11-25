@@ -632,4 +632,83 @@ test('QG-10: 任务手册遇到生火任务时优先锁定永久火坑 firepit �
   assert.equal(evalResult.done, true, '地上已有 firepit 时应判定主任务已完成')
 })
 
+test('QG-11: 多配方制作任务（如 a2 先斧头后镐）在斧头完成后自动切换为镐并生成对应材料依赖，mergeBoard 正确解除终态锁存', () => {
+  const questGuide = {
+    installed: true,
+    tracked_task: {
+      id: 'a2',
+      title: '做斧头和镐',
+      season: 'autumn',
+      icon: 'axe',
+      mats: [
+        { icon: 'twigs', name: '树枝', n: 1 },
+        { icon: 'flint', name: '燧石', n: 1 },
+      ],
+      auto: [
+        [{ k: 'craft', p: ['axe'], n: 1 }],
+        [{ k: 'craft', p: ['pickaxe', 'goldenpickaxe'], n: 1 }],
+      ],
+      done: false,
+    },
+  }
+
+  // 场景：玩家身上已有斧头（手持或背包），但没有镐，也没有多余燧石
+  const snapshotWithAxe = {
+    quest_guide: questGuide,
+    player: {
+      equipment: { slots: { hands: { prefab: 'axe', count: 1 } } },
+      inventory: {
+        items: [
+          { prefab: 'twigs', count: 4 },
+        ],
+      },
+    },
+  }
+
+  const tasks = questGuideTasksFor({ questGuide, snapshot: snapshotWithAxe, now: 1000 })
+  // 应当自动锁定 pickaxe，所需材料 twigs: 2 (已有4足够), flint: 2 (缺2个)
+  const flintGather = tasks.find((t) => t.id === 'gather_for_a2_flint')
+  assert.ok(flintGather, '应生成燧石采集任务')
+  assert.equal(flintGather.skill_args.target_items.flint, 2, '采燧石目标数量应补足至 2 个')
+  assert.equal(flintGather.target.count, 2)
+
+  const pickaxeTask = tasks.find((t) => t.id === 'qg_a2')
+  assert.ok(pickaxeTask, '主任务 qg_a2 应当存在')
+  assert.equal(pickaxeTask.skill_args.recipe, 'pickaxe', '待制作配方应当切换为 pickaxe')
+  assert.deepEqual(pickaxeTask.depends_on, ['gather_for_a2_flint'], '应当依赖采燧石任务')
+
+  // 验证 mergeBoard：之前已有一张旧看板，其中 qg_a2 和 gather_for_a2_flint 曾因做斧头而被标记为 completed/done
+  const prevBoard = {
+    schema: BOARD_SCHEMA,
+    goal: '旧目标',
+    tasks: [
+      {
+        id: 'gather_for_a2_flint',
+        title: '收集燧石（还需 1 个）',
+        status: 'completed',
+        priority: 1,
+        progress: { current: 1, required: 1 },
+        target: { type: 'inventory', prefab: 'flint', count: 1 },
+      },
+      {
+        id: 'qg_a2',
+        title: '做斧头和镐',
+        status: 'completed',
+        priority: 2,
+        progress: { current: 1, required: 1 },
+        target: { type: 'quest_complete', quest_id: 'a2', fallback_prefab: 'axe', count: 1 },
+      },
+    ],
+  }
+
+  const merged = mergeBoard(prevBoard, tasks, { goal: '新目标', now: 1000, snapshot: snapshotWithAxe })
+  const mergedFlint = merged.tasks.find((t) => t.id === 'gather_for_a2_flint')
+  const mergedMain = merged.tasks.find((t) => t.id === 'qg_a2')
+
+  assert.equal(mergedFlint.status, 'ready', '由于身上燧石不足2个，燧石采集任务应当重置为 ready')
+  assert.equal(mergedFlint.target.count, 2)
+  assert.equal(mergedMain.status, 'ready', '由于镐尚未制作且任务未打钩，qg_a2 应当重置为 ready')
+  assert.equal(mergedMain.skill_args.recipe, 'pickaxe')
+})
+
 
