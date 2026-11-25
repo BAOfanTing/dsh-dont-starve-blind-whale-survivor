@@ -192,3 +192,65 @@ test('BATTLE-LUA-07：没有受控战斗时不抑制 Reflex；受控单怪交战
   assert.equal(env.global('OWNER'), 'true', '防御会话状态必须可见（可观测性）')
   assert.equal(env.global('START'), 'engaged', '伴生可协助时应直接进入防御')
 })
+
+// ── R8.5 真机发现：战斗会话必须能自己收尾，不能永久悬挂 ──
+test('BATTLE-LUA-08：单场战斗超过硬上限会自己收尾（battle_timeout）', async () => {
+  const env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wilson', ghostlybond: false }))
+  env.run(`
+    SPIDER = ${attacker('spider', 8, 0, { hp: 5000 })}
+    NEARBY = { SPIDER }
+    Whale.actions.Start("fight_spider", {}, "defense", { target = SPIDER, is_defense = true, budget_s = 600 })
+    Whale.actions.Tick()
+    NOW = NOW + 50          -- 超过 MAX_SESSION_S(45)
+    Whale.actions.Tick()
+    JOB = Whale.job ~= nil and tostring(Whale.job.name) or "none"
+    SESSION = tostring(Whale.battle.GetSession() ~= nil)
+    LAST = tostring(REPORTS[#REPORTS] ~= nil and REPORTS[#REPORTS].text or "")
+  `)
+  assert.equal(env.global('JOB'), 'none', '超时后 job 必须结束')
+  assert.equal(env.global('SESSION'), 'false', '战斗会话必须一起清理，不能永久悬挂')
+  assert.match(env.global('LAST'), /battle_timeout/)
+})
+
+test('BATTLE-LUA-09：伴生主战连续无伤害会中止（companion_stalled，阿比盖尔跑出防御范围）', async () => {
+  const env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wendy', items: ['abigail_flower'], summoned: true, withGhost: true }))
+  env.run(`
+    SPIDER = ${attacker('spider', 8, 0, { hp: 5000 })}
+    NEARBY = { SPIDER }
+    Whale.battle.StartDefense(PLAYER, SPIDER)
+    -- 推进到伴生主战（ATTACK）
+    for i = 1, 4 do NOW = NOW + 0.2; Whale.actions.Tick() end
+    LED = tostring(Whale.battle.GetSession() ~= nil and Whale.battle.GetSession().companion_led or false)
+    -- 连续 10 秒没有任何伤害
+    NOW = NOW + 10
+    Whale.actions.Tick()
+    JOB = Whale.job ~= nil and tostring(Whale.job.name) or "none"
+    SESSION = tostring(Whale.battle.GetSession() ~= nil)
+    LAST = tostring(REPORTS[#REPORTS] ~= nil and REPORTS[#REPORTS].text or "")
+  `)
+  assert.equal(env.global('LED'), 'true', '应已进入伴生主战')
+  assert.equal(env.global('JOB'), 'none')
+  assert.equal(env.global('SESSION'), 'false')
+  assert.match(env.global('LAST'), /companion_stalled/)
+})
+
+test('BATTLE-LUA-10：A.Tick 预算判失败时会显式收尾战斗会话（budget_exceeded）', async () => {
+  const env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wilson', ghostlybond: false }))
+  env.run(`
+    SPIDER = ${attacker('spider', 8, 0, { hp: 5000 })}
+    NEARBY = { SPIDER }
+    Whale.actions.Start("fight_spider", {}, "defense", { target = SPIDER, is_defense = true, budget_s = 1 })
+    Whale.actions.Tick()
+    NOW = NOW + 3
+    Whale.actions.Tick()
+    JOB = Whale.job ~= nil and tostring(Whale.job.name) or "none"
+    SESSION = tostring(Whale.battle.GetSession() ~= nil)
+    LAST = tostring(REPORTS[#REPORTS] ~= nil and REPORTS[#REPORTS].text or "")
+  `)
+  assert.equal(env.global('JOB'), 'none')
+  assert.equal(env.global('SESSION'), 'false', '预算失败也必须把战斗会话收尾，否则 InCombat() 永久为真')
+  assert.match(env.global('LAST'), /budget_exceeded/)
+})

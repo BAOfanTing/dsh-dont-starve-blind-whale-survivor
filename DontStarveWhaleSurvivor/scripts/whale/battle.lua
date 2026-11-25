@@ -332,6 +332,11 @@ local SUMMON_TIMEOUT_S = 8           -- 召唤交接最长容忍时间（超过�
 local SUMMON_RETRY_COOLDOWN_S = 20   -- 召唤失败后的退避，禁止无限重试
 local GROUP_MAX_WITH_COMPANION = 3   -- 伴生健康时可同时纠缠的敌人数上限
 local COMPANION_MIN_HEALTH = 0.40    -- 阿比盖尔低于此比例不再算"能扛"
+-- ★ R8.5 真机发现（第 1 天青蛙战）：战斗 job 被 A.Tick 的预算判失败时，battle 会话不会收尾，
+--   于是 B.InCombat()/active_target 永久悬挂、REFLEX_SUPPRESSED 每秒刷却没有 FINISH。
+--   除了 core.A.Tick 里显式 Abort 之外，battle 自己也必须有硬上限，避免任何调用方忘了收尾。
+local MAX_SESSION_S = 45             -- 单场战斗硬上限（秒）
+local STALL_ABORT_S = 8              -- 伴生主战时连续无伤害多久判"停手"（阿比盖尔跑出防御范围）
 
 -- 防御会话：{ phase="summoning"|"engaged"|"failed", target, target_guid, target_prefab,
 --             started_at, summon_started_at, retry_at, reason }
@@ -807,6 +812,7 @@ function B.StepJob(j, p)
             companion = nil,
             companion_hits = 0,
             last_seen_hp = nil,
+            last_damage_at = now,
         }
 
         blog("START", {
@@ -898,6 +904,36 @@ function B.StepJob(j, p)
             blog("EMERGENCY", { reason = "darkness" })
             B.Cleanup()
             return "fail", "dark_no_light: 陷入黑暗，保命优先"
+        end
+    end
+
+    -- 4. 硬上限 / 伴生停手守卫（R8.5 真机发现：会话不能永久悬挂）
+    --    · 单场战斗超过 MAX_SESSION_S：无论谁忘了收尾，都必须自己结束；
+    --    · 伴生主战时连续 STALL_ABORT_S 没有造成任何伤害：说明阿比盖尔跑出了原版防御范围
+    --      （真机：她跟随距离能到 6.5 世界单位 > ABIGAIL_DEFENSIVE_MAX_FOLLOW=5，于是停手），
+    --      继续挂着只会让 Reflex 一直被抑制，必须回退让 Reflex 重新评估。
+    if session.started_at ~= nil and (now - session.started_at) > MAX_SESSION_S then
+        transition(STATES.EMERGENCY, "battle_timeout")
+        blog("DEFENSE_ABORT", {
+            reason = "battle_timeout",
+            target = session.target_prefab or "none",
+            elapsed = string.format("%.0f", now - session.started_at),
+        })
+        B.Cleanup()
+        return "fail", "battle_timeout: 单场战斗超过 " .. tostring(MAX_SESSION_S) .. " 秒，先脱离再重新评估"
+    end
+    if session.companion_led then
+        local last_activity = math.max(session.last_damage_at or 0, session.state_entered_at or 0)
+        if (now - last_activity) > STALL_ABORT_S then
+            transition(STATES.EMERGENCY, "companion_stalled")
+            blog("DEFENSE_ABORT", {
+                reason = "companion_stalled",
+                target = session.target_prefab or "none",
+                idle_s = string.format("%.0f", now - last_activity),
+                companion_distance = session.companion ~= nil and session.companion.distance or nil,
+            })
+            B.Cleanup()
+            return "fail", "companion_stalled: 阿比盖尔已有一段时间没有输出（可能跑出了防御范围），先脱离让 Reflex 重新评估"
         end
     end
 
@@ -1101,6 +1137,7 @@ function B.StepJob(j, p)
             if session.last_seen_hp ~= nil and session.target_current_hp ~= nil
                 and session.target_current_hp < session.last_seen_hp then
                 session.companion_hits = (session.companion_hits or 0) + 1
+                session.last_damage_at = now
                 blog("COMPANION_TARGET", {
                     target = session.target_prefab,
                     guid = session.target_guid,

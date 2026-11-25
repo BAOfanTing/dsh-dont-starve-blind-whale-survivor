@@ -40,8 +40,17 @@
 - **测试**：新增 `tests/helpers/lua-harness.mjs`（fengari 统一加载生产 Lua）；新增
   `tests/r85-wendy-defense.test.mjs` TEST-01~10（真实 Lua）；**重写** `tests/battle.test.mjs`
   （旧版是 JS 手写假状态机）；`wendy-companion` 增 WC-8/9/10；同步 `hound-defense` HD-4 与 `nearby` 白名单。
-- 说明：`npm test` 只证明源码逻辑；**真实游戏验收（场景 A~D）另行执行**，见
-  `docs/R8.5-WENDY-DEFENSE.md` §6。
+- **真机验收（2026-11-25 第 1 天，青蛙战）**：确认 `[BUILD] 0.41.3+r8.5-wendy-defense` 已加载；
+  `SUMMON_STARTED reason=proactive` 证明提前召唤生效；青蛙战时 `DEFENSE_ENGAGE` → `companion_led=true` →
+  `REFLEX_SUPPRESSED` → `COMPANION_TARGET hits=1 hp=85`，两只青蛙被阿比盖尔打死、温蒂只掉 10 血且**没有玩家 ATTACK**；
+  花朵被击落后用既有 `pickup_nearest` 成功捡回。
+- **真机缺陷修复**：战斗 job 被 `A.Tick` 的 `budget_exceeded` 结束时，`battle` 会话不会收尾
+  （日志只剩每秒 `REFLEX_SUPPRESSED`、`active_target` 悬挂）。修复：`core.A.Tick` 对 `fight_spider`
+  显式 `Whale.battle.Abort("budget_exceeded")`；`battle.lua` 增加 `MAX_SESSION_S=45` 硬上限与
+  `STALL_ABORT_S=8`（伴生主战连续无伤害 → `companion_stalled`）。新增 `BATTLE-LUA-08/09/10`。
+  **需重新读档生效**。
+- 说明：`npm test` 只证明源码逻辑；真实游戏场景 A（普通蜘蛛）与 C/D（伴生失效、危险中断）仍待补，
+  记录见 `docs/R8.5-WENDY-DEFENSE.md` §7。
 
 ---
 

@@ -654,6 +654,13 @@ function A.Tick()
     if ok and status == "run" and j.t0 ~= nil then
         if (U.now() - j.t0) > budget then
             status = "fail"
+            -- ★ R8.5 真机发现：战斗 job 被预算判失败时，battle 的会话不会被 StepJob 收尾，
+            --   于是 B.InCombat()/active_target 会永久悬挂（日志里 REFLEX_SUPPRESSED 一直刷、没有 FINISH）。
+            --   这里显式让 battle 自己收尾（Abort 内部会 Cleanup + 打 DEFENSE_ABORT 日志）。
+            if j.name == "fight_spider" and Whale ~= nil and Whale.battle ~= nil
+                and Whale.battle.Abort ~= nil then
+                pcall(function() Whale.battle.Abort("budget_exceeded") end)
+            end
             text = string.format("budget_exceeded: 这一步用了 %d 秒还没完（上限 %d 秒），先停下。已经做了一部分，用 get_state 看现在的真实状态再决定下一步",
                 math.floor(U.now() - j.t0), math.floor(budget))
         end
