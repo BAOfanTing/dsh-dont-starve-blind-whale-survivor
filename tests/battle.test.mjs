@@ -299,3 +299,46 @@ test('BATTLE-LUA-12：防御 job 消失后 DefenseStatus 自愈为 nil；停手�
   assert.equal(env.global('STALLED'), 'true', '停手后 job 必须结束')
   assert.equal(env.global('RETRY'), 'rejected', '停手中止后必须进入冷却，不能立刻重开')
 })
+
+// ── R8.5.6：温蒂"拿长矛也打" ──
+test('BATTLE-LUA-13：有武器时温蒂参与输出；没武器时仍只站位不近战', async () => {
+  // ① 有长矛 → companion_led 仍为真，同时 wendy_melee=true 并真的发出玩家 ATTACK
+  let env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wendy', items: ['abigail_flower'], summoned: true, withGhost: true }))
+  env.run(`
+    SPEAR = mkitem("spear", 1, { weapon = { damage = 34 } })
+    PLAYER.components.inventory:Equip(SPEAR)
+    SPIDER = ${attacker('spider', 6, 0, { hp: 500 })}
+    NEARBY = { SPIDER }
+    Whale.battle.StartDefense(PLAYER, SPIDER)
+    for i = 1, 8 do NOW = NOW + 0.3; Whale.actions.Tick() end
+    local s = Whale.battle.GetSession()
+    LED = tostring(s ~= nil and s.companion_led or false)
+    MELEE = tostring(s ~= nil and s.wendy_melee or false)
+    PLAYER_ATTACKS = 0
+    for _, ba in ipairs(PUSHES) do
+        if ba.action == GLOBAL.ACTIONS.ATTACK and ba.doer == PLAYER then PLAYER_ATTACKS = PLAYER_ATTACKS + 1 end
+    end
+  `)
+  assert.equal(env.global('LED'), 'true', '伴生主战仍然成立')
+  assert.equal(env.global('MELEE'), 'true', '有长矛时温蒂应允许参与输出')
+  assert.ok(Number(env.global('PLAYER_ATTACKS')) >= 1, '温蒂必须真的用长矛发出 ATTACK')
+
+  // ② 没有武器（空手/火把）→ 仍然只站位，不近战
+  env = createLuaEnv(await import('fengari'))
+  env.run(scenario({ prefab: 'wendy', items: ['abigail_flower'], summoned: true, withGhost: true }))
+  env.run(`
+    SPIDER2 = ${attacker('spider', 6, 0, { hp: 500 })}
+    NEARBY = { SPIDER2 }
+    Whale.battle.StartDefense(PLAYER, SPIDER2)
+    for i = 1, 8 do NOW = NOW + 0.3; Whale.actions.Tick() end
+    local s2 = Whale.battle.GetSession()
+    MELEE2 = tostring(s2 ~= nil and s2.wendy_melee or false)
+    ATK2 = 0
+    for _, ba in ipairs(PUSHES) do
+        if ba.action == GLOBAL.ACTIONS.ATTACK and ba.doer == PLAYER then ATK2 = ATK2 + 1 end
+    end
+  `)
+  assert.equal(env.global('MELEE2'), 'false', '没有武器时不能贴脸近战')
+  assert.equal(env.global('ATK2'), '0', '没有武器时温蒂不得发出 ATTACK')
+})

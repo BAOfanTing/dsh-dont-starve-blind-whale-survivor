@@ -340,6 +340,12 @@ local SUMMON_TIMEOUT_S = 8           -- 召唤交接最长容忍时间（超过�
 local SUMMON_RETRY_COOLDOWN_S = 20   -- 召唤失败后的退避，禁止无限重试
 local GROUP_MAX_WITH_COMPANION = 3   -- 伴生健康时可同时纠缠的敌人数上限
 local COMPANION_MIN_HEALTH = 0.40    -- 阿比盖尔低于此比例不再算"能扛"
+-- ★ R8.5.6：温蒂"拿长矛也打"。avoid_melee 不再等于"永远不还手"：
+--   有像样近战武器（长矛 34 / 斧头 27.5，阈值 25）且血量够时，温蒂贴到武器射程内和阿比盖尔一起输出；
+--   没武器 / 血量 < 60% / 夜里手举火把时，仍然只站位不近战（火把不能当武器）。
+local MIN_MELEE_WEAPON_DAMAGE = 25
+local WENDY_MELEE_MIN_HP = 0.60
+local WENDY_MELEE_RANGE_TILES = 1.9   -- 贴到武器射程内才出手
 -- ★ R8.5 真机发现（第 1 天青蛙战）：战斗 job 被 A.Tick 的预算判失败时，battle 会话不会收尾，
 --   于是 B.InCombat()/active_target 永久悬挂、REFLEX_SUPPRESSED 每秒刷却没有 FINISH。
 --   除了 core.A.Tick 里显式 Abort 之外，battle 自己也必须有硬上限，避免任何调用方忘了收尾。
@@ -385,6 +391,23 @@ local function same_entity(a, b)
     if a == nil or b == nil then return false end
     if a == b then return true end
     return a.GUID ~= nil and b.GUID ~= nil and a.GUID == b.GUID
+end
+
+--- 手上（hands 槽）武器的伤害。没有武器 / 拿着火把 → nil。
+--- 只看**已装备**的，不看背包里"最好那把"：夜里举着火把时不能当成长矛去贴脸。
+local function equipped_weapon_damage(p)
+    local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
+    if inv == nil then return nil end
+    local hand = nil
+    pcall(function() hand = inv:GetEquippedItem(EQUIPSLOTS.HANDS) end)
+    if hand == nil then return nil end
+    local dmg = nil
+    pcall(function()
+        dmg = hand.components ~= nil and hand.components.weapon ~= nil
+            and hand.components.weapon.damage or nil
+    end)
+    if type(dmg) == "number" then return dmg end
+    return nil
 end
 
 --- 伴生是否能"扛住当前群体"。区分"只是附近有敌人"和"真的在打温蒂"。
@@ -871,6 +894,11 @@ function B.StepJob(j, p)
         session.companion = _comp_now
         local _assist = (_comp_now.alive == true and _comp_now.can_assist == true)
         session.companion_led = (_assist and session.avoid_melee == true)
+        -- ★ R8.5.6：温蒂有武器（长矛/斧头）+ 血量够 → 允许和阿比盖尔一起输出
+        session.melee_weapon_damage = equipped_weapon_damage(p)
+        session.wendy_melee = session.companion_led
+            and (session.melee_weapon_damage ~= nil and session.melee_weapon_damage >= MIN_MELEE_WEAPON_DAMAGE)
+            and (session.player_current_hp == nil or session.player_current_hp >= WENDY_MELEE_MIN_HP)
         local _sig = table.concat({
             tostring(_comp_now.current_target), tostring(_comp_now.is_attacking),
             tostring(_comp_now.alive), tostring(_comp_now.can_assist),
@@ -1128,40 +1156,10 @@ function B.StepJob(j, p)
             -- 位置维持：阿比盖尔的 DefensiveRetarget（prefabs/abigail.lua）要求
             --   (a) 阿比盖尔距温蒂 < ABIGAIL_DEFENSIVE_MAX_FOLLOW
             --   (b) 目标距温蒂 < ABIGAIL_COMBAT_TARGET_DISTANCE(15 世界单位≈3.75 格)
-            -- 所以温蒂要保持在约 2.2~3.2 格：太远阿比盖尔不会接战，太近会被青蛙咬掉背包物品。
             local d = U.dist(p, target)
-            if d ~= nil then
-                local tiles = d / U.TILE
-                if tiles > 3.2 then
-                    local ox, _, oz = U.pos(target)
-                    if ox ~= nil then
-                        local tx, tz = U.tile_of(ox, oz)
-                        walk_throttled(p, tx, tz)
-                    end
-                elseif tiles < 2.2 then
-                    local angle = nil
-                    if native ~= nil and native.FleeAngle ~= nil then
-                        angle = native.FleeAngle(p, target, 4)
-                    end
-                    local rx, rz = nil, nil
-                    if native ~= nil and native.PointFromAngle ~= nil and angle ~= nil then
-                        rx, rz = native.PointFromAngle(p, angle, 4 * U.TILE)
-                    elseif angle ~= nil then
-                        local px, _, pz = U.pos(p)
-                        local rad = angle * (GLOBAL.DEGREES or (math.pi / 180))
-                        rx = px + 4 * U.TILE * math.cos(rad)
-                        rz = pz - 4 * U.TILE * math.sin(rad)
-                    end
-                    if rx ~= nil and rz ~= nil then
-                        local rtx, rtz = U.tile_of(rx, rz)
-                        walk_throttled(p, rtx, rtz)
-                    end
-                else
-                    pcall(A.stop_actions, p)
-                end
-            end
+            local tiles = (d ~= nil) and (d / U.TILE) or nil
 
-            -- 证据：目标血量下降 = 阿比盖尔确实在输出。
+            -- 证据：目标血量下降 = 这一轮确实打出了伤害（阿比盖尔或温蒂都算）。
             -- 不能只因"她在场"就宣称战斗有效 —— 必须有真实伤害证据。
             if session.last_seen_hp ~= nil and session.target_current_hp ~= nil
                 and session.target_current_hp < session.last_seen_hp then
@@ -1173,10 +1171,66 @@ function B.StepJob(j, p)
                     hp = session.target_current_hp,
                     hits = session.companion_hits,
                     companion_target = comp.current_target or "none",
+                    wendy_melee = session.wendy_melee == true,
                 })
             end
             session.last_seen_hp = session.target_current_hp
-            return "run"
+
+            -- ★ R8.5.6：温蒂"拿长矛也打"。
+            --   有像样武器（长矛/斧头）且血量 ≥60%：贴到武器射程内，和阿比盖尔一起输出（复用下面的通用出手逻辑）；
+            --   没武器 / 血量低 / 夜里手举火把：保持原来的"只站位不近战"。
+            if session.wendy_melee == true then
+                if tiles == nil or tiles > WENDY_MELEE_RANGE_TILES then
+                    local ox, _, oz = U.pos(target)
+                    if ox ~= nil then
+                        local tx, tz = U.tile_of(ox, oz)
+                        walk_throttled(p, tx, tz)
+                    end
+                    return "run"
+                end
+                if (session._melee_log_at or 0) == 0 or (now - (session._melee_log_at or 0)) >= 5 then
+                    session._melee_log_at = now
+                    blog("COMPANION_MELEE_ASSIST", {
+                        target = session.target_prefab,
+                        guid = session.target_guid,
+                        weapon_damage = session.melee_weapon_damage,
+                        hp = php,
+                        tiles = tiles,
+                    })
+                end
+                -- 落到下面的通用出手逻辑（HIT_CONFIRMED / 打 N 撤一 全部复用）
+            else
+                if tiles ~= nil then
+                    if tiles > 3.2 then
+                        local ox, _, oz = U.pos(target)
+                        if ox ~= nil then
+                            local tx, tz = U.tile_of(ox, oz)
+                            walk_throttled(p, tx, tz)
+                        end
+                    elseif tiles < 2.2 then
+                        local angle = nil
+                        if native ~= nil and native.FleeAngle ~= nil then
+                            angle = native.FleeAngle(p, target, 4)
+                        end
+                        local rx, rz = nil, nil
+                        if native ~= nil and native.PointFromAngle ~= nil and angle ~= nil then
+                            rx, rz = native.PointFromAngle(p, angle, 4 * U.TILE)
+                        elseif angle ~= nil then
+                            local px, _, pz = U.pos(p)
+                            local rad = angle * (GLOBAL.DEGREES or (math.pi / 180))
+                            rx = px + 4 * U.TILE * math.cos(rad)
+                            rz = pz - 4 * U.TILE * math.sin(rad)
+                        end
+                        if rx ~= nil and rz ~= nil then
+                            local rtx, rtz = U.tile_of(rx, rz)
+                            walk_throttled(p, rtx, rtz)
+                        end
+                    else
+                        pcall(A.stop_actions, p)
+                    end
+                end
+                return "run"
+            end
         end
 
         -- 核对真实挥砍是否发生（引擎 lastdoattacktime 推进）

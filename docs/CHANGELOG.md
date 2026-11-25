@@ -49,6 +49,13 @@
   显式 `Whale.battle.Abort("budget_exceeded")`；`battle.lua` 增加 `MAX_SESSION_S=45` 硬上限与
   `STALL_ABORT_S=8`（伴生主战连续无伤害 → `companion_stalled`）。新增 `BATTLE-LUA-08/09/10`。
   **需重新读档生效**。
+- **真机再次缺陷修复**：`B.Cleanup()` 定义在 `local defense` 声明之前，Lua 作用域让它操作的是**全局**
+  `defense`，导致中止后 `combat.defense` 永久残留 `"engaged"`（Reflex 一直以为在防御而不敢逃跑）。
+  修复：前置声明 + `DefenseStatus` 自愈（engaged 但无对应 job → nil）+ 停手后 6 秒冷却（防 8 秒死循环）。
+  新增 `BATTLE-LUA-11/12`。
+- **R8.5.6 温蒂"拿长矛也打"**：`avoid_melee` 不再等于永不还手——手上有像样武器（长矛 34 / 斧头 27.5，
+  阈值 25）且血量 ≥60% 时，温蒂贴到武器射程内与阿比盖尔一起输出（复用通用出手逻辑）；
+  没武器 / 血低 / 夜里举火把时仍只站位。新增 `COMPANION_MELEE_ASSIST` 日志与 `BATTLE-LUA-13`。
 - 说明：`npm test` 只证明源码逻辑；真实游戏场景 A（普通蜘蛛）与 C/D（伴生失效、危险中断）仍待补，
   记录见 `docs/R8.5-WENDY-DEFENSE.md` §7。
 
