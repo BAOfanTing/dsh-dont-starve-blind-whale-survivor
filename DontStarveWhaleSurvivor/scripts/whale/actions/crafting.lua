@@ -492,11 +492,16 @@ JOBS.cook = function(j, p)
         j.data.label = U.pretty(pot)
         j.data.before = snapshot_counts(p)
         j.data.phase_start = U.now()
-        -- P1-2：把任意堆叠拆成单个单元（下锅每个槽只放 1 个）。
         local function one_unit(item)
             if item == nil then return nil end
             local st = item.components ~= nil and item.components.stackable or nil
-            if st ~= nil and st.StackSize ~= nil and st:StackSize() > 1 then return st:Get(1) end
+            if st ~= nil and st.StackSize ~= nil then
+                local ok_sz, sz = pcall(function() return st:StackSize() end)
+                if ok_sz and type(sz) == "number" and sz > 1 and st.Get ~= nil then
+                    local ok_get, split = pcall(function() return st:Get(1) end)
+                    if ok_get and split ~= nil then return split end
+                end
+            end
             return item
         end
         -- ① 已经煮好 → 拿出来

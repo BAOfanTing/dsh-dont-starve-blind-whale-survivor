@@ -640,3 +640,77 @@ test('UNKNOWN-14: resolveUnknownTask 严格校验参数并支持 completed / aba
   assert.equal(err4.ok, false)
   assert.equal(err4.reason, 'not_unknown')
 })
+
+test('UNKNOWN-15: checkActionEffectVerified 支持 pickup_food / chop_nearest / mine_nearest / build / equip 对账', async () => {
+  const mkMultiStepSkill = (id, tool, args) => {
+    try {
+      registerSkill({
+        id,
+        steps: [
+          {
+            id: 'step_1',
+            // 故意保持 step.isDone 为 false，以专门验证 checkActionEffectVerified 对单步动作的核验
+            isDone: () => false,
+            nextAction: () => ({ tool, args }),
+          },
+          { id: 'step_2', isDone: () => true, nextAction: () => ({ done: true }) },
+        ],
+      })
+    } catch {}
+  }
+
+  mkMultiStepSkill('test_reconcile_pickup_food', 'pickup_food', { target_kind: 'safe_ground_food' })
+  mkMultiStepSkill('test_reconcile_chop_nearest', 'chop_nearest', { target_kind: 'tree' })
+  mkMultiStepSkill('test_reconcile_mine_nearest', 'mine_nearest', { target_kind: 'ordinary_rock' })
+  mkMultiStepSkill('test_reconcile_build', 'build', { recipe: 'sciencemachine' })
+  mkMultiStepSkill('test_reconcile_equip', 'equip', { item: 'spear' })
+
+  const runCase = async (skillId, taskId, initialSnap, updatedSnap) => {
+    let snap = initialSnap
+    let dispatches = 0
+    const { executor } = createMockExecutor({
+      dispatch: async () => {
+        dispatches += 1
+        return { status: 'unknown', reason: 'result_timeout', commandId: `cmd_${taskId}` }
+      },
+      readSnapshot: () => snap,
+    })
+    const r1 = await executor.run(skillId, taskId)
+    assert.equal(r1.status, 'awaiting_reconciliation')
+    snap = updatedSnap
+    const r2 = await executor.run(skillId, taskId)
+    assert.equal(r2.status, 'step_verified', `${skillId} 应通过 checkActionEffectVerified 完成对账`)
+    assert.equal(dispatches, 1, `${skillId} 对账期间不能重发动作`)
+  }
+
+  await runCase(
+    'test_reconcile_pickup_food',
+    't_pf',
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { inventory: { items: [] } } },
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { inventory: { items: [{ prefab: 'berries', count: 1 }] } } },
+  )
+  await runCase(
+    'test_reconcile_chop_nearest',
+    't_cn',
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { inventory: { items: [] } } },
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { inventory: { items: [{ prefab: 'log', count: 2 }] } } },
+  )
+  await runCase(
+    'test_reconcile_mine_nearest',
+    't_mn',
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { inventory: { items: [] } } },
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { inventory: { items: [{ prefab: 'rocks', count: 3 }] } } },
+  )
+  await runCase(
+    'test_reconcile_build',
+    't_bld',
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, nearby: { buckets: { structures: [] } } },
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, nearby: { buckets: { structures: [{ prefab: 'researchlab' }] } } },
+  )
+  await runCase(
+    'test_reconcile_equip',
+    't_eq',
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { equipment: { slots: {} } } },
+    { identity: { worldKey: 'test_world' }, actor: { tileX: 0, tileZ: 0 }, player: { equipment: { slots: { hands: { prefab: 'spear' } } } } },
+  )
+})

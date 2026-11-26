@@ -91,3 +91,42 @@ test('COB-5：Stage2 严格要求 firepit 且自动生成 12 石头与 2 木头�
   assert.equal(fireTask.priority, 2, '有未满足依赖时优先级降为 2')
 })
 
+test('一级科技建筑（cookpot / researchlab2 / alchemyengine）在 approach 阶段未建科学机器时返回 blocked', () => {
+  const approach = craftOrBuild.steps.find((s) => s.id === 'approach')
+  const act = craftOrBuild.steps.find((s) => s.id === 'act')
+  const memoryNoSci = { home_anchor: { x: 0, z: 0 }, known_buildings: [] }
+  const snapNoSci = {
+    actor: { tileX: 10, tileZ: 10 },
+    nearby: { buckets: { structures: [] } },
+    inventory: { items: [] },
+  }
+
+  for (const recipe of ['cookpot', 'researchlab2', 'alchemyengine']) {
+    const res = approach.nextAction({
+      snapshot: snapNoSci,
+      memory: memoryNoSci,
+      instance: { skill_args: { recipe } },
+    })
+    assert.ok(res.blocked, `${recipe} 缺少科学机器时必须返回 blocked`)
+    assert.match(res.blocked, /sciencemachine|科学机器/)
+  }
+
+  // 有科学机器（原生名 researchlab）时不再 blocked，返回 move_to；建筑存在时通过 alias 归一判定完成
+  const snapWithSci = {
+    actor: { tileX: 10, tileZ: 10 },
+    nearby: { buckets: { structures: [{ prefab: 'researchlab' }] } },
+  }
+  const moveRes = approach.nextAction({
+    snapshot: snapWithSci,
+    memory: memoryNoSci,
+    instance: { skill_args: { recipe: 'cookpot' } },
+  })
+  assert.equal(moveRes.tool, 'move_to')
+
+  const snapWithAlchemy = {
+    nearby: { buckets: { structures: [{ prefab: 'researchlab2' }] } },
+  }
+  assert.equal(act.isDone({ snapshot: snapWithAlchemy, memory: memoryNoSci, instance: { skill_args: { recipe: 'alchemyengine' } } }), true)
+  assert.equal(craftOrBuild.completion({ snapshot: snapWithAlchemy, memory: memoryNoSci, instance: { skill_args: { recipe: 'alchemyengine' } } }), true)
+})
+

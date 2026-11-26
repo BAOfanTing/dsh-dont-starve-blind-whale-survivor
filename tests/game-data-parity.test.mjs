@@ -220,6 +220,26 @@ test('COOK-ATOMIC-1：cooking pot（cook）不足 4 样食材时不拆包不放�
     Whale.actions.Tick()
     assert(#POT_SLOTS == 4, "锅内应精确放入 4 样食材，实际：" .. #POT_SLOTS)
     assert(START_COOKING_CALLED == 1, "放满 4 格后应成功触发 StartCooking")
+
+    -- ③ one_unit 内 stackable:StackSize / Get 抛异常时由 pcall 兜底，不崩溃
+    Whale.actions.Abort("reset")
+    local badItem = _mkStack("berries", 1, { veggie = true })
+    local stackCalls = 0
+    badItem.components.stackable.StackSize = function()
+      stackCalls = stackCalls + 1
+      if stackCalls == 4 then error("boom_stack") end
+      return 1
+    end
+    local badSplit = _mkStack("carrot", 2, { veggie = true })
+    badSplit.components.stackable.Get = function() error("boom_get") end
+    INV_ITEMS = { badItem, _mkStack("corn", 1, { veggie = true }), _mkStack("meat", 1, { meat = true }), badSplit }
+    POT_SLOTS = {}
+    START_COOKING_CALLED = 0
+    local okStart, errStart = Whale.actions.Start("cook", {}, "c-pcall", { target = POT })
+    assert(okStart == true, "Start 应成功：" .. tostring(errStart))
+    Whale.actions.Tick()
+    local lastRep = REPORTS[#REPORTS]
+    assert(#POT_SLOTS == 4, "stackable 异常时应安全降级放满 4 格，实际：" .. #POT_SLOTS .. " report=" .. tostring(lastRep and lastRep.text))
   `, 'assert')
 })
 

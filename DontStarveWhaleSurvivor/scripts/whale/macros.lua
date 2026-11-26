@@ -204,7 +204,13 @@ A.register("cook_meal", function(j, p)
     local container = pot.components ~= nil and pot.components.container or nil
     local unit = item
     local st = item.components ~= nil and item.components.stackable or nil
-    if st ~= nil and st.StackSize ~= nil and st:StackSize() > 1 then unit = st:Get(1) end
+    if st ~= nil and st.StackSize ~= nil then
+        local ok_sz, sz = pcall(function() return st:StackSize() end)
+        if ok_sz and type(sz) == "number" and sz > 1 and st.Get ~= nil then
+            local ok_get, split = pcall(function() return st:Get(1) end)
+            if ok_get and split ~= nil then unit = split end
+        end
+    end
     if unit.components ~= nil and unit.components.inventoryitem ~= nil and unit.components.inventoryitem.RemoveFromOwner ~= nil then
         unit.components.inventoryitem:RemoveFromOwner()
     end

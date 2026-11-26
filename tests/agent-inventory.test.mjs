@@ -39,6 +39,8 @@ test('craft：成品进背包，但自动装备的不算（它在手上）', () 
   assert.equal(applyVerified({}, 'craft', { recipe: 'axe' }, { made: 1 }).axe, 1)
   const auto = applyVerified({}, 'craft', { recipe: 'torch' }, { made: 1, how: 'auto_equipped', hand: 'torch' })
   assert.equal(auto.torch, undefined, '自动装备的火把不在背包里')
+  const autoBody = applyVerified({}, 'craft', { recipe: 'backpack' }, { made: 1, how: 'auto_equipped_body' })
+  assert.equal(autoBody.backpack, undefined, '任意 auto_equipped* 前缀都不应重复记入背包')
 })
 
 test('eat：按 used 扣掉吃的那个，扣到 0 就删键', () => {

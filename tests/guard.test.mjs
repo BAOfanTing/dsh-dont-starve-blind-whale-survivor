@@ -340,3 +340,14 @@ test('guard-38 目标实体失效 / 进 limbo → entity_gone / in_limbo', async
   assert.equal(await mk('TARGET.valid = false'), 'reject:entity_gone')
   assert.equal(await mk('TARGET.limbo = true'), 'reject:in_limbo')
 })
+
+test('recipes filter 允许包含数字的配方名（如 researchlab2）与 Node 规格一致', async () => {
+  const { ACTION_SPECS, validateArgs } = await import('../lib/dispatcher.js')
+  assert.equal(validateArgs(ACTION_SPECS.recipes, { filter: 'researchlab2' }).ok, true)
+
+  const env = await load()
+  env.reset()
+  env.run('PLAYER.components.builder = {}')
+  env.setCommand(cmd({ action: 'recipes', args: { filter: 'researchlab2' } }))
+  assert.equal(env.validate(), 'true|nil')
+})

@@ -388,7 +388,7 @@ Whale.guard_action_specs = {
         risk = "R1",
         required_components = { "builder" },
         args = {
-            filter = { type = "string", pattern = "^[a-z_]*$", max_len = 32 },
+            filter = { type = "string", pattern = "^[a-z0-9_]*$", max_len = 32 },
             limit = { type = "number", min = 1, max = 60, integer = true },
         },
     },

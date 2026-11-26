@@ -19,6 +19,8 @@ import {
   KIND_ACTION,
   KIND_PREFABS,
   TREE_PREFIXES,
+  AUTO_SAFE_FOODS,
+  GROUND_PICKUP_PREFABS,
   kindPrefabs,
   kindsFor,
   isKindForAction,
@@ -360,4 +362,57 @@ test('TN-16（INTEGRATION）：JOBS 真存在，且 ctx.target 缺失时一律�
   assert.equal(out.split('|')[0], '', `这些动作必须都注册了：${out}`)
   assert.equal(out.split('|')[1], 'fail', '没有解析好的目标时必须 fail')
   assert.match(out.split('|')[2], /no_resolved_target/)
+})
+
+test('pickup/food 类别与 AUTO_SAFE_FOODS 必须全部存在于 pickuprules.PREFABS 与 GROUND_PICKUP_PREFABS', () => {
+  const pickuprules = readFileSync(join(MOD, 'scripts', 'whale', 'pickuprules.lua'), 'utf8')
+  const prefabsBlock = pickuprules.match(/P\.PREFABS = \{([\s\S]*?)\n\}/)
+  assert.ok(prefabsBlock, '解析不到 pickuprules.lua 的 P.PREFABS')
+  const luaPickupPrefabs = new Set([...prefabsBlock[1].matchAll(/^\s*([a-z0-9_]+)\s*=\s*true/gm)].map((m) => m[1]))
+  const nodePickupPrefabs = new Set(GROUND_PICKUP_PREFABS)
+
+  const required = new Set(AUTO_SAFE_FOODS)
+  for (const [kind, action] of Object.entries(KIND_ACTION)) {
+    if (action !== 'pickup' && action !== 'food') continue
+    if (kind === 'safe_ground_food') continue
+    for (const prefab of KIND_PREFABS[kind] ?? []) {
+      required.add(prefab)
+    }
+  }
+
+  for (const prefab of required) {
+    assert.equal(luaPickupPrefabs.has(prefab), true, `pickuprules.lua P.PREFABS 缺少 ${prefab}`)
+    assert.equal(nodePickupPrefabs.has(prefab), true, `GROUND_PICKUP_PREFABS 缺少 ${prefab}`)
+  }
+})
+
+test('INTEGRATION：petals 与熟食（acorn_cooked/green_cap_cooked/blue_cap_cooked）在地面可被 pickuprules 与 pickup_nearest 放行', async () => {
+  const mkPickup = (prefab, guid, x = 4) =>
+    `mkent({ prefab = "${prefab}", guid = ${guid}, x = ${x}, z = 0, pickup = true, edible = true })`
+  const env = await loadTargets({
+    entities: [
+      mkPickup('petals', 101, 4),
+      mkPickup('acorn_cooked', 102, 6),
+      mkPickup('green_cap_cooked', 103, 6),
+      mkPickup('blue_cap_cooked', 104, 6),
+    ],
+  })
+  env.buildNearby()
+
+  env.setCmd(env.cmd({
+    action: 'pickup_nearest',
+    args: { target_kind: 'petals' },
+    snapshot_id: null,
+    target_ref: null,
+  }))
+  assert.equal(env.validate().split('|')[0], 'true', 'pickup_nearest(petals) 必须放行')
+
+  env.run(`
+    OUT = ""
+    for _, idx in ipairs({1, 2, 3, 4}) do
+      local ok, why = Whale.pickuprules.IsCandidate(WORLD[idx], PLAYER)
+      if not ok then OUT = OUT .. tostring(WORLD[idx].prefab) .. ":" .. tostring(why) .. ";" end
+    end
+  `)
+  assert.equal(env.get('OUT'), '', 'petals 与熟食掉在地上时必须通过 pickuprules.IsCandidate')
 })

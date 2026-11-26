@@ -1170,3 +1170,63 @@ test('P2-15：环境指纹变了（换世界/换角色）→ 立刻拒绝，不�
   assert.notEqual(acq.reason, 'renewed', '环境变了不能当成续租')
 })
 
+test('锁持有进程仍在但锁已过期时可被安全回收，且 _withLock 遇到 lock_busy 会短暂重试', () => {
+  const dir = tmp()
+  const file = join(dir, 'm2-control.json')
+  try {
+    const now = { value: 1000 }
+    const logs = []
+    const c1 = new LeaseManager({ file, now: () => now.value, ttlMs: 1000, ownerInstanceId: 'A', log: (lvl, msg) => logs.push({ lvl, msg }) })
+    c1.acquire('f8_agent', ENV, { ownerInstanceId: 'A' })
+    assert.ok(logs.some((l) => l.msg.includes('[Lease]')), '应通过 log 回调记录租约写入')
+
+    // 1) 持锁进程 PID 仍存活，但锁已过期 → 允许安全抢回清理
+    writeFileSync(`${file}.lock`, JSON.stringify({
+      owner_type: 'f8_agent', owner_instance_id: 'A', pid: process.pid, nonce: 'hung-proc',
+      acquired_at: 1000, expires_at: 2000,
+    }), 'utf8')
+    now.value = 10000
+    const c2 = new LeaseManager({ file, now: () => now.value, ttlMs: 1000, ownerInstanceId: 'B' })
+    const r = c2.acquire('mcp_client', ENV, { ownerInstanceId: 'B' })
+    assert.equal(r.ok, true, '持锁进程假死且锁过期后必须允许回收')
+
+    // 2) _withLock 遇 lock_busy 时最多短重试 5 次后成功
+    let calls = 0
+    const origAcquireLock = c2._acquireLock.bind(c2)
+    c2._acquireLock = (...args) => {
+      calls += 1
+      if (calls < 3) return { ok: false, reason: 'lock_busy' }
+      return origAcquireLock(...args)
+    }
+    const retried = c2._withLock('mcp_client', 'B', () => ({ ok: true, reason: 'retried_ok' }))
+    assert.equal(retried.ok, true)
+    assert.equal(retried.reason, 'retried_ok')
+    assert.equal(calls, 3)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('GameBridge.locate 使用 log 回调输出目录定位信息而非裸 console.log', async () => {
+  const { GameBridge } = await import('../lib/bridge.js')
+  const dir = tmp()
+  const logs = []
+  const origConsoleLog = console.log
+  const consoleCalls = []
+  console.log = (...args) => consoleCalls.push(args.join(' '))
+  const bridge = new GameBridge({
+    bridgeDir: dir,
+    enableHttp: false,
+    log: (level, message) => logs.push({ level, message }),
+  })
+  try {
+    bridge.locate(true)
+    assert.ok(logs.some((l) => l.message.includes('[Bridge] Located')), '应通过 this.log 记录定位日志')
+    assert.equal(consoleCalls.some((s) => s.includes('[Bridge] Located')), false, '不得再直接调用 console.log')
+  } finally {
+    console.log = origConsoleLog
+    bridge.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+

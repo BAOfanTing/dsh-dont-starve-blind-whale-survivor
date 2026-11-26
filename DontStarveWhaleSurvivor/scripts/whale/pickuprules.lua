@@ -51,6 +51,7 @@ P.PREFABS = {
     -- 松果/桦栗果：砍树会掉，留着能种树（不进白名单的话永远捡不起来）
     pinecone = true,
     acorn = true,
+    petals = true,
     -- ★ R8.5：阿比盖尔之花（关键角色物品）。
     --   真机：青蛙命中会走原版 frog:onhitother → thief:StealItem(玩家)，把背包里的花
     --   **击落到地上**（日志里花出现在地面 (25,-58)，然后角色长时间没有伴生）。
@@ -82,6 +83,9 @@ P.PREFABS = {
     corn_cooked = true,
     pumpkin_cooked = true,
     eggplant_cooked = true,
+    acorn_cooked = true,
+    green_cap_cooked = true,
+    blue_cap_cooked = true,
     meatballs = true,
     meatstew = true,
     butterflymuffin = true,

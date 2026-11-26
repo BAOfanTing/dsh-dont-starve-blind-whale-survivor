@@ -176,6 +176,30 @@ test('ORACLE-14：里程碑按 id/seq 精确匹配，别把别的动作的 ok �
   assert.equal(matched.torch, true)
 })
 
+test('ORACLE-15：Autopilot/Assisted 模式从 state/env 事件也能识别 torch 与 sciencemachine 里程碑', () => {
+  const mFromHand = detectMilestones([
+    { kind: 'tool_call', tool: 'advance_task', args: {}, t: '2026-01-01T00:00:01Z' },
+    { kind: 'state', day: 1, hand: 'torch', inv: 'twigs:2', t: '2026-01-01T00:00:02Z' },
+    {
+      kind: 'env',
+      nearby: { buckets: { structures: [{ prefab: 'researchlab' }] } },
+      lines: [],
+      t: '2026-01-01T00:00:03Z',
+    },
+  ])
+  assert.equal(mFromHand.torch, true)
+  assert.equal(mFromHand.sciencemachine, true)
+
+  const mFromInvAndLines = detectMilestones([
+    { kind: 'tool_call', tool: 'run_skill', args: { skill_id: 'craft_or_build' }, t: '2026-01-01T00:00:01Z' },
+    { kind: 'state', day: 2, hand: null, inv: 'cutgrass:1,torch:1', t: '2026-01-01T00:00:02Z' },
+    { kind: 'env', lines: ['[建筑] #1 科学机器 (1,2)'], t: '2026-01-01T00:00:03Z' },
+  ])
+  assert.equal(mFromInvAndLines.torch, true)
+  assert.equal(mFromInvAndLines.sciencemachine, true)
+  assert.equal(mFromInvAndLines.surviveNight1, true)
+})
+
 test('ORACLE-12：analyzeDirectory 能从真实文件读并产出报告', () => {  const dir = tempDir('oracle-')
   fs.writeFileSync(path.join(dir, 'session.jsonl'), [
     JSON.stringify({ kind: 'state', day: 1, ghost: true, t: '2026-01-01T00:00:00Z' }),
