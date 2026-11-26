@@ -3,7 +3,7 @@
 // DSH 不会照着插件的 Config 自动画表单：插件要自己带一个浏览器端模块（package.json 的 dsh.client +
 // exports["./client"]），在插件页的 plugins.row.config 插槽里挂一张卡片，组件名旁边才会出现“配置 ›”。
 // 字段直接从 lib/index.js 的 Config 读（类型、范围、说明），这里只补短标题和分组；
-// Config 加了字段忘了重新生成时，tests/client.test.mjs 会报错。
+// Config 加了字段忘了重新生成时，tests/bridge/client.test.mjs 会报错。
 //
 // 用法：node tools/build-client.mjs
 

@@ -13,7 +13,7 @@ try {
         Write-Host "先装一下测试用的依赖（fengari、luaparse）…"
         & npm install --no-fund --no-audit --include=dev --save-dev fengari luaparse
     }
-    & $node --test --test-force-exit 'tests/*.test.mjs'
+    & $node --test --test-force-exit 'tests/**/*.test.mjs'
     exit $LASTEXITCODE
 } finally {
     Pop-Location
