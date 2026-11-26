@@ -14,6 +14,7 @@ import {
   CRAFT_RECIPES,
   CRAFTED_DEPS,
   EDIBLE_HUNGER_FOOD_SET,
+  EQUIPPABLE_ITEMS,
   FOOD_EFFECTS,
   HEALING_FOOD_SET,
 } from '../lib/game-data/recipes-and-foods.js'
@@ -81,6 +82,15 @@ test('GD-2：Node 侧全部配方表均引用唯一数据源 recipes-and-foods.j
   assert.equal(planInternals.FIREPIT_RECIPE, BUILD_RECIPES.firepit)
   assert.equal(planInternals.SCIENCE_MACHINE_RECIPE, CORE_RECIPE)
   assert.equal(planInternals.TORCH_RECIPE, CRAFT_RECIPES.torch.ingredients)
+
+  // 可装备白名单（EQUIPPABLE_ITEMS）与 Lua equiprules.lua / tool-defs / survival.js 一致
+  const equiprules = readFileSync(join(MOD, 'scripts', 'whale', 'equiprules.lua'), 'utf8')
+  const equipBlock = equiprules.match(/Q\.ITEMS\s*=\s*\{([\s\S]*?)\n\}/)
+  assert.ok(equipBlock, '解析不到 equiprules.lua 的 Q.ITEMS')
+  const luaEquippables = [...equipBlock[1].matchAll(/^\s*([a-z0-9_]+)\s*=\s*"/gm)].map((m) => m[1]).sort()
+  assert.deepEqual([...EQUIPPABLE_ITEMS].sort(), luaEquippables, 'EQUIPPABLE_ITEMS 必须与 equiprules.lua Q.ITEMS 逐条一致')
+  const equipTool = ACTION_TOOLS.find((t) => t.name === 'equip')
+  assert.deepEqual(equipTool.inputSchema.properties.item.enum, [...EQUIPPABLE_ITEMS])
 
   const buildTool = ACTION_TOOLS.find((t) => t.name === 'build')
   assert.match(buildTool.description, /campfire（营火，2 木头 \+ 3 草）/)

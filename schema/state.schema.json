@@ -1,797 +1,412 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://blind-whale-survivor/schema/state.schema.json",
-  "title": "Blind Whale Survivor · Phase 1 日志契约（schema_version = 1）",
-  "description": "游戏日志里每条 [BWS] 记录都是下面三种之一（oneOf）。Bridge 把同一 session + tick 的 state 与 nearby 合并成 $defs.GameState 对外服务。",
+  "title": "Blind Whale Survivor State Contract (bws.state/1)",
+  "description": "Game state contract shared by Lua observe.lua (WireEnvelope) and Node lib/state/snapshot.js (NormalizedState).",
   "oneOf": [
-    {
-      "$ref": "#/$defs/Boot"
-    },
-    {
-      "$ref": "#/$defs/State"
-    },
-    {
-      "$ref": "#/$defs/Nearby"
-    }
+    { "$ref": "#/$defs/NormalizedState" },
+    { "$ref": "#/$defs/WireEnvelope" }
   ],
   "$defs": {
-    "Header": {
-      "type": "object",
-      "description": "所有记录共有的头部字段",
-      "required": [
-        "schema_version",
-        "type",
-        "phase",
-        "observer_version",
-        "side",
-        "shard"
-      ],
+    "NullableString": { "type": ["string", "null"] },
+    "NullableNumber": { "type": ["number", "null"] },
+    "NullableBoolean": { "type": ["boolean", "null"] },
+    "StatBlock": {
+      "type": ["object", "null"],
       "properties": {
-        "schema_version": {
-          "type": "string",
-          "const": "1"
-        },
-        "phase": {
-          "type": "integer",
-          "const": 1
-        },
-        "observer_version": {
-          "type": "string"
-        },
-        "side": {
-          "type": "string",
-          "enum": [
-            "server",
-            "client",
-            "unknown"
-          ]
-        },
-        "shard": {
-          "type": "string",
-          "enum": [
-            "master",
-            "caves",
-            "unknown"
-          ]
-        },
-        "session": {
-          "type": "string",
-          "description": "TheNet:GetSessionIdentifier()，分片各自不同"
-        },
-        "t": {
-          "type": "integer",
-          "description": "unix 秒（os.time）"
-        },
-        "rt": {
-          "type": "number",
-          "description": "真实时间秒（TheSim:GetRealTime()/1000）"
-        },
-        "sim_tick": {
-          "type": "integer",
-          "description": "模拟 tick（TheSim:GetTick()），服务器暂停时不涨"
-        },
-        "last_error": {
-          "type": "string"
-        }
-      }
-    },
-    "Boot": {
-      "type": "object",
-      "required": [
-        "type",
-        "mod",
-        "ismastersim",
-        "interval",
-        "players"
-      ],
-      "properties": {
-        "type": {
-          "type": "string",
-          "const": "boot"
-        },
-        "mod": {
-          "type": "string"
-        },
-        "ismastersim": {
-          "type": "boolean"
-        },
-        "interval": {
-          "type": "number",
-          "minimum": 0.5,
-          "maximum": 30
-        },
-        "players": {
-          "type": "object",
-          "required": [
-            "count"
-          ],
-          "properties": {
-            "count": {
-              "type": "integer"
-            }
-          }
-        }
-      }
-    },
-    "State": {
-      "type": "object",
-      "description": "每 OBSERVER_INTERVAL 秒一条；故意不含实体（日志单行有长度上限）。tick 可与 nearby.tick 配对。",
-      "required": [
-        "type",
-        "observer"
-      ],
-      "properties": {
-        "type": {
-          "type": "string",
-          "const": "state"
-        },
-        "tick": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "周期编号。0.6.0+ 在顶层；更早的版本在 observer.tick，Bridge 用 record.tick ?? record.observer.tick 归一化"
-        },
-        "player": {
-          "$ref": "#/$defs/Player"
-        },
-        "inventory": {
-          "$ref": "#/$defs/Inventory"
-        },
-        "world": {
-          "$ref": "#/$defs/World"
-        },
-        "observer": {
-          "$ref": "#/$defs/Observer"
-        }
-      },
-      "not": {
-        "required": [
-          "entities"
-        ]
-      }
-    },
-    "Nearby": {
-      "type": "object",
-      "description": "每 OBSERVER_SCAN_SECONDS 扫一次，单独一条；tick 与同周期的 state 相同",
-      "required": [
-        "type",
-        "radius_tiles",
-        "scanned",
-        "returned",
-        "counts",
-        "scanned_at_tick"
-      ],
-      "properties": {
-        "type": {
-          "type": "string",
-          "const": "nearby"
-        },
-        "tick": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "radius_tiles": {
-          "type": "number",
-          "minimum": 2,
-          "maximum": 40
-        },
-        "scanned": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "returned": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "truncated": {
-          "type": "boolean",
-          "description": "因每类/总数上限被截断"
-        },
-        "trimmed": {
-          "type": "boolean",
-          "description": "因日志长度预算被裁剪"
-        },
-        "oversize": {
-          "type": "boolean"
-        },
-        "scanned_at_tick": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "counts": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "integer",
-            "minimum": 0
-          }
-        },
-        "entities": {
-          "type": "array",
-          "description": "预算不够被完全裁掉时不出现（配 oversize:true / returned:0）；Bridge 归一化成 []。",
-          "items": {
-            "$ref": "#/$defs/Entity"
-          }
-        }
-      }
-    },
-    "Entity": {
-      "type": "object",
-      "required": [
-        "prefab",
-        "category",
-        "tile_x",
-        "tile_z",
-        "distance"
-      ],
-      "properties": {
-        "prefab": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "category": {
-          "type": "string",
-          "enum": [
-            "player",
-            "hostile",
-            "creature",
-            "tree",
-            "rock",
-            "diggable",
-            "damageable",
-            "harvestable",
-            "item",
-            "structure"
-          ]
-        },
-        "tile_x": {
-          "type": "integer"
-        },
-        "tile_z": {
-          "type": "integer"
-        },
-        "distance": {
-          "type": "number",
-          "minimum": 0
-        },
-        "hp": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        },
-        "work_left": {
-          "type": "number",
-          "minimum": 0
-        },
-        "slot": {
-          "type": "integer",
-          "minimum": 1
-        }
+        "current": { "type": "number" },
+        "max": { "type": "number" },
+        "percent": { "type": ["number", "null"] }
       }
     },
     "Item": {
       "type": "object",
-      "required": [
-        "prefab",
-        "count"
-      ],
+      "required": ["prefab", "count"],
       "properties": {
-        "prefab": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "count": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "slot": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "uses_left": {
-          "type": "number"
-        },
-        "uses_max": {
-          "type": "number"
-        },
-        "freshness": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        },
-        "fuel": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        },
-        "armor": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        }
+        "prefab": { "type": "string" },
+        "name": { "type": "string" },
+        "count": { "type": "number", "minimum": 0 },
+        "percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "slot": { "type": "integer", "minimum": 1 },
+        "slot_key": { "type": "string" },
+        "food": { "type": "boolean" },
+        "in_container": { "type": "boolean" }
+      }
+    },
+    "EquipmentWornEntry": {
+      "type": "object",
+      "required": ["key", "item"],
+      "properties": {
+        "key": { "type": "string" },
+        "label": { "type": "string" },
+        "item": { "$ref": "#/$defs/Item" }
       }
     },
     "Inventory": {
-      "type": "object",
-      "required": [
-        "slots",
-        "used",
-        "items"
-      ],
+      "type": ["object", "null"],
+      "required": ["slots", "used", "is_full", "items"],
       "properties": {
-        "slots": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "used": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "is_full": {
-          "type": "boolean"
-        },
+        "slots": { "type": "integer", "minimum": 0 },
+        "used": { "type": "integer", "minimum": 0 },
+        "is_full": { "type": "boolean" },
         "items": {
-          "description": "Lua 空表会被编码成 {}，Bridge 需要把 {} 归一化成 []。",
           "oneOf": [
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Item"
-              }
-            },
-            {
-              "type": "object",
-              "maxProperties": 0
-            }
+            { "type": "array", "items": { "$ref": "#/$defs/Item" } },
+            { "type": "object", "maxProperties": 0 }
           ]
-        },
-        "equipment": {
-          "type": "object",
-          "properties": {
-            "hands": {
-              "$ref": "#/$defs/Item"
-            },
-            "head": {
-              "$ref": "#/$defs/Item"
-            },
-            "body": {
-              "$ref": "#/$defs/Item"
-            }
-          }
         }
       }
     },
-    "StatBlock": {
-      "type": "object",
+    "Equipment": {
+      "type": ["object", "null"],
       "properties": {
-        "current": {
-          "type": "number"
+        "slots": {
+          "type": "object",
+          "properties": {
+            "hands": { "oneOf": [{ "$ref": "#/$defs/Item" }, { "type": "null" }] },
+            "head": { "oneOf": [{ "$ref": "#/$defs/Item" }, { "type": "null" }] },
+            "body": { "oneOf": [{ "$ref": "#/$defs/Item" }, { "type": "null" }] }
+          }
         },
-        "max": {
-          "type": "number"
-        },
-        "percent": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        },
-        "dead": {
-          "type": "boolean"
+        "worn": {
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/EquipmentWornEntry" } },
+            { "type": "object" }
+          ]
         }
       }
     },
     "Player": {
-      "type": "object",
-      "required": [
-        "valid"
-      ],
+      "type": ["object", "null"],
       "properties": {
-        "valid": {
-          "type": "boolean"
-        },
-        "prefab": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "guid": {
-          "type": "integer"
-        },
-        "userid": {
-          "type": "string"
-        },
-        "is_ghost": {
-          "type": "boolean"
-        },
-        "position": {
-          "type": "object",
-          "required": [
-            "x",
-            "z",
-            "tile_x",
-            "tile_z"
-          ],
-          "properties": {
-            "x": {
-              "type": "number"
-            },
-            "y": {
-              "type": "number"
-            },
-            "z": {
-              "type": "number"
-            },
-            "tile_x": {
-              "type": "integer"
-            },
-            "tile_z": {
-              "type": "integer"
-            }
-          }
-        },
-        "health": {
-          "$ref": "#/$defs/StatBlock"
-        },
-        "hunger": {
-          "$ref": "#/$defs/StatBlock"
-        },
-        "sanity": {
-          "$ref": "#/$defs/StatBlock"
-        },
+        "health": { "$ref": "#/$defs/StatBlock" },
+        "hunger": { "$ref": "#/$defs/StatBlock" },
+        "sanity": { "$ref": "#/$defs/StatBlock" },
+        "in_light": { "type": "boolean" },
         "temperature": {
-          "type": "object",
-          "properties": {
-            "current": {
-              "type": "number"
-            }
-          }
+          "type": ["object", "null"],
+          "properties": { "value": { "type": "number" } }
         },
-        "moisture": {
-          "type": "object",
-          "properties": {
-            "value": {
-              "type": "number"
-            },
-            "percent": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 100
-            }
-          }
-        }
+        "wetness": {
+          "type": ["object", "null"],
+          "properties": { "value": { "type": "number" } }
+        },
+        "inventory": { "$ref": "#/$defs/Inventory" },
+        "equipment": { "$ref": "#/$defs/Equipment" }
       }
     },
     "World": {
-      "type": "object",
+      "type": ["object", "null"],
       "properties": {
-        "prefab": {
-          "type": "string"
-        },
-        "shard": {
-          "type": "string",
-          "enum": [
-            "master",
-            "caves"
-          ]
-        },
-        "cycles": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "TheWorld.state.cycles（0 基）"
-        },
-        "day": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "cycles + 1，玩家看到的天数"
-        },
-        "phase": {
-          "type": "string",
-          "enum": [
-            "day",
-            "dusk",
-            "night"
-          ]
-        },
-        "is_day": {
-          "type": "boolean"
-        },
-        "is_dusk": {
-          "type": "boolean"
-        },
-        "is_night": {
-          "type": "boolean"
-        },
-        "season": {
-          "type": "string",
-          "enum": [
-            "autumn",
-            "winter",
-            "spring",
-            "summer"
-          ]
-        },
-        "is_autumn": {
-          "type": "boolean"
-        },
-        "is_winter": {
-          "type": "boolean"
-        },
-        "is_spring": {
-          "type": "boolean"
-        },
-        "is_summer": {
-          "type": "boolean"
-        },
-        "elapsed_days_in_season": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "remaining_days_in_season": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "season_progress": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "temperature": {
-          "type": "number"
-        },
-        "time": {
-          "type": "object",
-          "properties": {
-            "of_day": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "in_phase": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            }
-          }
-        },
+        "status": { "type": "string" },
+        "day": { "type": "integer", "minimum": 1 },
+        "season": { "type": "string" },
+        "season_name": { "type": "string" },
+        "phase": { "type": "string" },
+        "phase_name": { "type": "string" },
+        "world_temperature": { "type": "number" },
+        "is_cave": { "type": "boolean" },
         "weather": {
           "type": "object",
           "properties": {
-            "is_raining": {
-              "type": "boolean"
-            },
-            "precipitation": {
-              "type": "number",
-              "minimum": 0
-            },
-            "precipitation_rate": {
-              "type": "number",
-              "minimum": 0
-            },
-            "wetness": {
-              "type": "number",
-              "minimum": 0
-            },
-            "is_wet": {
-              "type": "boolean"
-            },
-            "is_snowing": {
-              "type": "boolean"
-            },
-            "snow_level": {
-              "type": "number",
-              "minimum": 0
-            },
-            "is_snow_covered": {
-              "type": "boolean"
-            },
-            "is_acid_raining": {
-              "type": "boolean"
-            }
+            "is_raining": { "type": "boolean" },
+            "is_snowing": { "type": "boolean" },
+            "is_full_moon": { "type": "boolean" },
+            "is_winter": { "type": "boolean" }
           }
         },
-        "moon": {
-          "type": "object",
-          "properties": {
-            "phase": {
-              "type": "string"
-            },
-            "is_full_moon": {
-              "type": "boolean"
-            },
-            "is_new_moon": {
-              "type": "boolean"
-            },
-            "is_waxing_moon": {
-              "type": "boolean"
-            }
-          }
-        },
-        "cave": {
-          "type": "object",
-          "description": "只有 caves 分片才有",
-          "properties": {
-            "phase": {
-              "type": "string"
-            },
-            "is_day": {
-              "type": "boolean"
-            },
-            "is_dusk": {
-              "type": "boolean"
-            },
-            "is_night": {
-              "type": "boolean"
-            },
-            "moon_phase": {
-              "type": "string"
-            }
-          }
-        }
+        "world_configuration": { "type": ["object", "null"] }
       }
     },
-    "Observer": {
+    "NearbyEntity": {
       "type": "object",
-      "required": [
-        "interval",
-        "errors",
-        "players"
-      ],
+      "required": ["prefab"],
       "properties": {
-        "interval": {
-          "type": "number",
-          "minimum": 0.5,
-          "maximum": 30
+        "ref": { "type": "string" },
+        "handle": { "type": "string" },
+        "prefab": { "type": "string" },
+        "category": { "type": "string" },
+        "label": { "type": "string" },
+        "name": { "type": "string" },
+        "distance": { "type": "number", "minimum": 0 },
+        "position": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number" },
+            "z": { "type": "number" }
+          }
         },
-        "tick": {
-          "type": "integer",
-          "minimum": 1
+        "health": { "type": "number" },
+        "max_health": { "type": "number" },
+        "work_action": { "type": "string" },
+        "stack_size": { "type": "integer" },
+        "harvest_ready": { "type": "boolean" },
+        "is_burning": { "type": "boolean" },
+        "is_burnt": { "type": "boolean" },
+        "fuel_percent": { "type": "number" },
+        "targeting_you": { "type": "boolean" },
+        "stewer": { "type": "object" }
+      }
+    },
+    "Nearby": {
+      "type": ["object", "null"],
+      "properties": {
+        "runtime_id": { "$ref": "#/$defs/NullableString" },
+        "snapshot_id": { "$ref": "#/$defs/NullableString" },
+        "status": { "type": "string" },
+        "radius": { "type": "number" },
+        "scan_seconds": { "type": "number" },
+        "total_found": { "type": "integer", "minimum": 0 },
+        "total_returned": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "error": { "type": "string" },
+        "scan": { "type": "object" },
+        "buckets": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/NearbyEntity" }
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string" },
+                  "label": { "type": "string" },
+                  "items": { "type": "array", "items": { "$ref": "#/$defs/NearbyEntity" } }
+                }
+              }
+            }
+          ]
         },
+        "delta": { "type": "object" }
+      }
+    },
+    "WireIdentity": {
+      "type": "object",
+      "properties": {
+        "session_id": { "$ref": "#/$defs/NullableString" },
+        "cluster_id": { "$ref": "#/$defs/NullableString" },
+        "cluster_id_source": { "type": "string" },
+        "shard_id": { "$ref": "#/$defs/NullableString" },
+        "world_key": { "type": "string" },
+        "world_key_source": { "type": "string" }
+      }
+    },
+    "NormalizedIdentity": {
+      "type": "object",
+      "required": ["sessionId", "clusterId", "clusterIdSource", "shardId", "worldKey", "worldKeySource"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/NullableString" },
+        "clusterId": { "$ref": "#/$defs/NullableString" },
+        "clusterIdSource": { "type": "string" },
+        "shardId": { "$ref": "#/$defs/NullableString" },
+        "worldKey": { "$ref": "#/$defs/NullableString" },
+        "worldKeySource": { "type": "string" }
+      }
+    },
+    "WireActor": {
+      "type": ["object", "null"],
+      "required": ["actor_id", "valid", "alive", "is_ghost"],
+      "properties": {
+        "actor_id": { "type": "string" },
+        "actor_id_kind": { "type": "string" },
+        "actor_type": { "type": "string" },
+        "prefab": { "$ref": "#/$defs/NullableString" },
+        "name": { "$ref": "#/$defs/NullableString" },
+        "valid": { "type": "boolean" },
+        "alive": { "type": "boolean" },
+        "is_ghost": { "type": "boolean" },
+        "missing_components": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object", "maxProperties": 0 }
+          ]
+        },
+        "guid": { "type": ["integer", "string", "null"] },
+        "tile_x": { "$ref": "#/$defs/NullableNumber" },
+        "tile_z": { "$ref": "#/$defs/NullableNumber" },
+        "x": { "$ref": "#/$defs/NullableNumber" },
+        "y": { "$ref": "#/$defs/NullableNumber" },
+        "z": { "$ref": "#/$defs/NullableNumber" }
+      }
+    },
+    "NormalizedActor": {
+      "type": ["object", "null"],
+      "required": ["actorId", "actorIdKind", "actorType", "valid", "alive", "isGhost", "missingComponents"],
+      "properties": {
+        "actorId": { "$ref": "#/$defs/NullableString" },
+        "actorIdKind": { "type": "string" },
+        "actorType": { "type": "string" },
+        "prefab": { "$ref": "#/$defs/NullableString" },
+        "name": { "$ref": "#/$defs/NullableString" },
+        "valid": { "type": "boolean" },
+        "alive": { "type": "boolean" },
+        "isGhost": { "type": "boolean" },
+        "missingComponents": { "type": "array", "items": { "type": "string" } },
+        "tileX": { "$ref": "#/$defs/NullableNumber" },
+        "tileZ": { "$ref": "#/$defs/NullableNumber" },
+        "x": { "$ref": "#/$defs/NullableNumber" },
+        "y": { "$ref": "#/$defs/NullableNumber" },
+        "z": { "$ref": "#/$defs/NullableNumber" }
+      }
+    },
+    "WireObserver": {
+      "type": "object",
+      "required": ["snapshot_id", "sequence", "status"],
+      "properties": {
+        "snapshot_id": { "type": "string" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "timestamp": { "type": "number" },
+        "sampled_at": { "type": "number" },
+        "sample_age_ms": { "type": "number" },
+        "reused": { "type": "boolean" },
+        "status": { "type": "string" },
         "errors": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "version": {
-          "type": "string"
-        },
-        "last_error": {
-          "type": "string"
-        },
-        "players": {
-          "type": "object",
-          "required": [
-            "count"
-          ],
-          "properties": {
-            "count": {
-              "type": "integer"
-            }
-          }
-        },
-        "problems": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "GameState": {
-      "type": "object",
-      "description": "Bridge 把同 session + tick 的 state 与 nearby 合并后对外的规范结构",
-      "required": [
-        "schema_version",
-        "timestamp",
-        "side",
-        "shard",
-        "tick",
-        "observer"
-      ],
-      "properties": {
-        "schema_version": {
-          "type": "string",
-          "const": "1"
-        },
-        "timestamp": {
-          "type": "object",
-          "properties": {
-            "unix": {
-              "type": "integer"
-            },
-            "real_s": {
-              "type": "number"
-            },
-            "sim_tick": {
-              "type": "integer"
-            }
-          }
-        },
-        "session": {
-          "type": "string"
-        },
-        "side": {
-          "type": "string",
-          "enum": [
-            "server",
-            "client",
-            "unknown"
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object", "maxProperties": 0 }
           ]
         },
-        "shard": {
-          "type": "string",
-          "enum": [
-            "master",
-            "caves",
-            "unknown"
+        "unavailable_fields": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object", "maxProperties": 0 }
           ]
         },
-        "tick": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "player": {
-          "$ref": "#/$defs/Player"
-        },
-        "inventory": {
-          "$ref": "#/$defs/Inventory"
-        },
-        "world": {
-          "$ref": "#/$defs/World"
-        },
-        "nearby": {
-          "$ref": "#/$defs/NearbySection"
-        },
-        "observer": {
-          "$ref": "#/$defs/Observer"
-        }
+        "schema": { "type": "string", "const": "bws.state/1" }
       }
     },
-    "NearbySection": {
+    "NormalizedObserver": {
       "type": "object",
-      "description": "nearby 段（GameState 里的形状；wire 记录见 $defs/Nearby）",
+      "required": ["snapshotId", "sequence", "status", "errors", "unavailableFields"],
+      "properties": {
+        "snapshotId": { "$ref": "#/$defs/NullableString" },
+        "sequence": { "$ref": "#/$defs/NullableNumber" },
+        "status": { "type": "string" },
+        "errors": { "type": "array", "items": { "type": "string" } },
+        "unavailableFields": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "NormalizedDangerZone": {
+      "type": "object",
+      "required": ["x", "z", "radius", "source", "ageS", "ttlS"],
+      "properties": {
+        "x": { "$ref": "#/$defs/NullableNumber" },
+        "z": { "$ref": "#/$defs/NullableNumber" },
+        "radius": { "type": "number" },
+        "source": { "type": "string" },
+        "ageS": { "type": "number" },
+        "ttlS": { "type": "number" }
+      }
+    },
+    "WireData": {
+      "type": "object",
+      "required": ["schema", "observer"],
+      "properties": {
+        "schema": { "type": "string", "const": "bws.state/1" },
+        "identity": { "$ref": "#/$defs/WireIdentity" },
+        "actor": { "$ref": "#/$defs/WireActor" },
+        "player": { "$ref": "#/$defs/Player" },
+        "world": { "$ref": "#/$defs/World" },
+        "nearby": { "$ref": "#/$defs/Nearby" },
+        "character": { "type": ["object", "null"] },
+        "companion": { "type": ["object", "null"] },
+        "combat": { "type": ["object", "null"] },
+        "quest_guide": { "type": ["object", "null"] },
+        "danger_zones": { "type": "array" },
+        "warnings": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object", "maxProperties": 0 }
+          ]
+        },
+        "reflex": { "type": ["object", "null"] },
+        "observer": { "$ref": "#/$defs/WireObserver" },
+        "ready": { "type": "boolean" },
+        "dead": { "type": "boolean" },
+        "players": { "type": "integer", "minimum": 0 },
+        "tick": { "type": "integer", "minimum": 0 },
+        "mastersim": { "type": "boolean" },
+        "x": { "$ref": "#/$defs/NullableNumber" },
+        "z": { "$ref": "#/$defs/NullableNumber" },
+        "day": { "$ref": "#/$defs/NullableNumber" },
+        "phase": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "WireEnvelope": {
+      "type": "object",
+      "required": ["ready", "text", "data"],
+      "properties": {
+        "v": { "type": "integer" },
+        "seq": { "type": "integer", "minimum": 0 },
+        "t": { "type": "number" },
+        "mod": { "type": "string" },
+        "build": { "type": "string" },
+        "ready": { "type": "boolean" },
+        "text": { "type": "string" },
+        "data": { "$ref": "#/$defs/WireData" }
+      }
+    },
+    "NormalizedState": {
+      "type": "object",
       "required": [
-        "radius_tiles",
-        "entities"
+        "schema",
+        "ok",
+        "status",
+        "identity",
+        "actor",
+        "observer",
+        "errors",
+        "unavailableFields",
+        "dangerZones",
+        "warnings",
+        "text",
+        "textSource",
+        "stale"
       ],
       "properties": {
-        "radius_tiles": {
-          "type": "number",
-          "minimum": 2,
-          "maximum": 40
-        },
-        "scanned": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "returned": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "truncated": {
-          "type": "boolean"
-        },
-        "trimmed": {
-          "type": "boolean"
-        },
-        "scanned_at_tick": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "counts": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "integer",
-            "minimum": 0
-          }
-        },
-        "entities": {
+        "schema": { "type": "string", "const": "bws.state/1" },
+        "ok": { "type": "boolean" },
+        "status": { "type": "string" },
+        "sequence": { "$ref": "#/$defs/NullableNumber" },
+        "snapshotId": { "$ref": "#/$defs/NullableString" },
+        "observedAt": { "$ref": "#/$defs/NullableNumber" },
+        "sampledAt": { "$ref": "#/$defs/NullableNumber" },
+        "reused": { "type": "boolean" },
+        "sampleAgeMs": { "$ref": "#/$defs/NullableNumber" },
+        "mod": { "$ref": "#/$defs/NullableString" },
+        "build": { "$ref": "#/$defs/NullableString" },
+        "identity": { "$ref": "#/$defs/NormalizedIdentity" },
+        "actor": { "$ref": "#/$defs/NormalizedActor" },
+        "player": { "$ref": "#/$defs/Player" },
+        "world": { "$ref": "#/$defs/World" },
+        "nearby": { "$ref": "#/$defs/Nearby" },
+        "character": { "type": ["object", "null"] },
+        "companion": { "type": ["object", "null"] },
+        "combat": { "type": ["object", "null"] },
+        "quest_guide": { "type": ["object", "null"] },
+        "dangerZones": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/Entity"
-          }
-        }
+          "items": { "$ref": "#/$defs/NormalizedDangerZone" }
+        },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "reflex": { "type": ["object", "null"] },
+        "observer": { "$ref": "#/$defs/NormalizedObserver" },
+        "errors": { "type": "array", "items": { "type": "string" } },
+        "unavailableFields": { "type": "array", "items": { "type": "string" } },
+        "players": { "$ref": "#/$defs/NullableNumber" },
+        "mastersim": { "$ref": "#/$defs/NullableBoolean" },
+        "text": { "type": "string" },
+        "textSource": { "type": "string", "enum": ["lua", "legacy", "none"] },
+        "ageMs": { "$ref": "#/$defs/NullableNumber" },
+        "stale": { "type": "boolean" },
+        "path": { "$ref": "#/$defs/NullableString" },
+        "serverNow": { "type": "number" }
       }
     }
   }
