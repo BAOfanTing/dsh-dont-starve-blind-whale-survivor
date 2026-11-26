@@ -1,7 +1,7 @@
-// 第一阶段科技链（TARGET-REFRESH §4）：造出科学机器 → 站到它旁边 → 做第一阶段配方
+// 第一阶段科技链：造出科学机器 → 站到它旁边 → 做第一阶段配方
 //
 // 为什么要单独一个文件：
-//   §4 的验收不是"白名单里有没有 rope"，而是**整条链能不能走通**：
+//   科技链的核心验收不是"白名单里有没有 rope"，而是**整条链能不能走通**：
 //     ① build sciencemachine 能真的把 researchlab 放到地上（并且**必须有建筑实体**才算成功）
 //     ② 放下去之前/之后，craft rope 的科技判定会跟着变（recipe_locked → 放行）
 //     ③ 材料数字读的是原版 AllRecipes，不是我们抄的表
@@ -10,7 +10,7 @@
 // 证据类型：
 //   · UNIT        —— Node 侧 build 核对（必须有建筑实体，材料变少不算）
 //   · INTEGRATION —— fengari 里跑真实 crafting.lua 的 build_by_ctx + guard 的 craft 分支
-//                    （假实体，**不是真机**；真机验收见 docs/TARGET-REFRESH.md）
+//                    （假实体，**不是真机**；真机命令见 docs/TESTING.md）
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

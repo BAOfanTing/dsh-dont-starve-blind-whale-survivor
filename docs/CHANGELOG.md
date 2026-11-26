@@ -57,7 +57,7 @@
   阈值 25）且血量 ≥60% 时，温蒂贴到武器射程内与阿比盖尔一起输出（复用通用出手逻辑）；
   没武器 / 血低 / 夜里举火把时仍只站位。新增 `COMPANION_MELEE_ASSIST` 日志与 `BATTLE-LUA-13`。
 - 说明：`npm test` 只证明源码逻辑；真实游戏场景 A（普通蜘蛛）与 C/D（伴生失效、危险中断）仍待补，
-  记录见 `docs/R8.5-WENDY-DEFENSE.md` §7。
+  记录见 `docs/archive/phases/R8.5-WENDY-DEFENSE.md` §7。
 
 ---
 
@@ -293,7 +293,7 @@
   - 实例共享：`run_skill` 与自动调度共享同一个 `SkillExecutor` 实例。
   - 日志规范化：统一三层日志 `[TASK]`, `[ORCHESTRATOR]`, `[SKILL]`。
 - **文档更新**：
-  - 更新 `docs/ARCHITECTURE.md`、`docs/STATUS.md`、`docs/archive/audit/REFACTOR_ROADMAP.md`（将 ISSUE-01 与 ISSUE-02 标记为已解决）。
+  - 更新 `docs/ARCHITECTURE.md`、`docs/archive/phases/STATUS.md`、`docs/archive/audit/REFACTOR_ROADMAP.md`（将 ISSUE-01 与 ISSUE-02 标记为已解决）。
 - **测试指标**：
   - 全量 939 项单元与集成测试 100% 通过（0 失败、0 跳过）。
 

@@ -1,388 +1,75 @@
-# 测试
+# 测试与验证说明
 
-> 最后更新同步至 PHASE-R / R8.5（插件 0.12.0 / 模组 0.41.3）。下方分阶段历史实测表仅作历史记录参考。
-
----
-
-## 1. 最快的一条
-
-```powershell
-powershell -ExecutionPolicy Bypass -File test.ps1
-```
-
-它会：找 Node → 缺 `fengari`/`luaparse` 就装上 → 跑全部单测。
-最新一次全量实测：**1231+ passed / 0 failed，退出码 0**。
-
-等价的直接命令（不用 PowerShell 包装）：
-
-```powershell
-npm test
-# 或
-node --test --test-force-exit "tests/*.test.mjs"
-```
-
-> `--test-force-exit` 不能省：有的测试会留定时器，不加会挂住不退出。
+> 所有命令均可在仓库根目录直接执行；真机验证命令需本地已打开《饥荒联机版》并房主读档进世界。
 
 ---
 
-## 2. 测试分六类
+## 1. 静态门禁与自动化测试
 
-| 类 | 需要的环境 | 命令 | 数量 | 状态 |
-|---|---|---|---|---|
-| **单元 / 沙箱** | 只要 Node | `npm test`（`node --test --test-force-exit "tests/*.test.mjs"`） | **1231+** | ✅ 全绿（0 failed） |
-| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在全量里 | ✅ 已跑 |
-| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在全量里 | ✅ 已跑 |
-| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在全量里 | ✅ 已跑 |
-| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6（`verify-live.mjs`） | 独立真机脚本 | ⏳ 需进世界 |
-| **端到端（模型→游戏）** | 游戏 + DSH 会话 + API Key | 见 §6.5 | — | 见 `docs/R8.5-WENDY-DEFENSE.md` §6 |
+```bash
+npm run lint         # Node 语法 + Lua 语法（luaparse）+ 工具表面 / 契约一致性检查
+npm run check:docs   # 校验 README.md 中的动作/本地工具计数与全部工具名是否与代码一致
+npm test             # 全套单元测试与集成测试（node --test tests/**/*.test.mjs）
+```
 
-趋势：479（M2.2.1）→ 531（SURVIVAL-02）→ 607（SURVIVAL-02.1）→ 735（TARGET-REFRESH 前）→
-824（CHOP-CHAIN + SCIENCE-CHAIN）→ **1231+（PHASE-R / R8.5）**。测试只增不减。
+Windows PowerShell 下也可用 `./test.ps1` 运行完整测试集；按模块域单独运行可直接指定子目录，例如：
 
-> **测试类型怎么分**（本轮新增的用例都在文件名/用例名里标了）：
-> · **UNIT** —— 不跑 Lua、不跑游戏：枚举/参数/核对/熔断/笔记文件（`stale-circuit`、`world-memory`
->   的 Node 部分、`target-nearest` 的 TN-1..5/11/12/13、`recipe-parity` 的 RP-1..6）。
-> · **INTEGRATION** —— fengari 里跑**真实** `nearby/targetrules/guard/actions`，但世界是假实体
->   （`target-nearest` TN-6..10/14、`target-handle`、`food-rescue`、`recipe-parity` RP-7..10、
->   `world-memory` WM-8）。
-> · **RUNTIME** —— 只有 `tools/verify-live.mjs nearest` 与 §6.6 的端到端能算；**不吃单测结果冒充**。
+```bash
+node --test --test-force-exit "tests/control/*.test.mjs"
+node --test --test-force-exit "tests/lua/*.test.mjs"
+```
 
 ---
 
-## 3. 单测覆盖了什么（按主题）
+## 2. 测试目录结构（按模块域组织）
 
-```powershell
-node --test --test-force-exit "tests/*.test.mjs"       # 全部
-node --test --test-force-exit "tests/m2_3-harvest.test.mjs"   # 只跑 harvest
-node --test --test-force-exit "tests/m2_*.test.mjs"    # 只跑 M2 系列
+```text
+tests/
+  helpers/   # 共用测试夹具与 fengari Lua 运行时加载器（helpers, target-harness, reflex-harness, lua-mod-harness, lua-harness）
+  bridge/    # 文件桥、HTTP 通道、MCP Server、动态工具列表、会话日志、client 构建与插件安装
+  control/   # Control Lease、两阶段换手与 ACK、Stop 协调器、Dispatcher、stale 熔断、unknown/unverified 对账
+  planner/   # plan 纯函数、任务看板 DAG、阻塞生命周期、任务-技能编排、世界记忆、Autopilot 隔离、建筑与配方
+  skills/    # SkillExecutor、复合技能（establish-home / gather-resources / survival-stabilize）、游戏数据与配方一致性
+  autodev/   # 会话分析（session-oracle）、自动评分与护栏（guardrails）、自动迭代闭环
+  lua/       # 生产 Lua 模块在 fengari 下的行为、规则校验（guard/pickup/harvest/eat/equip/target/reflex/battle）与 API 约束
 ```
 
-| 主题 | 文件 | 盯的是什么 |
+---
+
+## 3. 验证等级与诚实标注
+
+| 等级 | 含义 | 运行前提 |
 |---|---|---|
-| 工具表一致性 | `tool-parity.test.mjs` | 工具名唯一、可见动作 === dispatcher 白名单、reflex/macros 用到的 Lua 动作没被删、本地工具（含 `update_notes`）不走 dispatcher |
-| **实时目标选择** | `target-nearest.test.mjs`（15 例） | target_kind 固定枚举、Node↔Lua 枚举**逐条**一致、动作与类别不许错配、快照变了仍能找到燧石、没目标/够不着的原因、Node↔Lua 动作白名单一致、"没有自己的执行通道" |
-| **稳定句柄** | `target-handle.test.mjs`（10 例） | 跨扫描句柄稳定、`#1` 换目标时句柄不跟着跑、目标消失→`target_gone`、换世界后旧句柄失效、句柄不可伪造、成熟度/距离复核一条没省 |
-| **stale 熔断** | `stale-circuit.test.mjs`（8 例） | 第一次明确状态、第二次熔断且**不发命令**、成功/换引用/换世界清零、句柄路径不走快照校验、缺参必拒 |
-| **食物救援链** | `food-rescue.test.mjs`（12 例） | Reflex 吃掉后按**真实背包**判断、失败回执列出真实可吃物与正确 prefab 名、生蘑菇不进 AUTO_SAFE、地面南瓜/多汁浆果实时找到、未成熟不能采 |
-| **配方与建造证据** | `recipe-parity.test.mjs`（10 例） | rope/boards/backpack/spear/armorwood 两边同时开放且逐条一致、材料读原版 AllRecipes、科技交给 `KnowsRecipe`、建造不再接受"材料变少"弱证据 |
-| **第一阶段科技链** | `science-chain.test.mjs`（14 例） | build sciencemachine → researchlab 别名、必须有建筑实体、缺料逐个报（不是"材料不够"）、**材料先判科技后判**、`CanBuild` 认身边科学机器、从零材料到机器的完整链 |
-| **砍树/挖矿执行细节** | `chop-chain.test.mjs`（11 例） | 要砍 4 下必须连砍到倒（不能只 push 一次干等）、树倒变树桩也算完成、**砍/挖完要顺手把产物捡起来**、太远要报 out_of_range 而不是"推不动"、没工具立刻 no_tool |
-| 插件入口 | `plugin.test.mjs`、`client.test.mjs`、`install.test.mjs` | 配置项、预设、装模组、`dst` 入口工具 |
-| 模组自身 | `lua-mod.test.mjs`、`lua.test.mjs` | `modmain` 能加载、20 个 `modimport`、所有 Lua 语法、版本号一致 |
-| 状态与观察 | `m1_1-actor-observer`、`m1_2-regressions`、`m1_4-*`（5）、`m14-watch-counters` | Actor Provider、字段契约、Delta、截断、扫描计时 |
-| 控制与安全 | `m2-control-dispatcher`、`m2-lua-guard`、`m2_0_1_lease_security`、`m2_0_2_authority_channel`、`m2_0_2_lease_ack` | 白名单、命令协议、租约换手 ACK 的五条硬条件、权威性通道 |
-| 动作 | `m2_1-pickup-lua`、`m2_1-pickup-node`、`m2_2-actionable-nearby`、`m2_3-harvest`（30 例） | 白名单、目标校验、距离、成熟度、结果核对 |
-| MCP / 桥 / Agent | `mcp.test.mjs`、`bridge.test.mjs`、`agent.test.mjs` | Streamable HTTP + SSE、文件桥读写、F8 循环 |
-| 生存优先级与火源 | `survival-02-1-priority.test.mjs`（56 例） | prep_light 状态机、材料保护、P0/P1 抢占、防抖、死亡重置、白天不点火、按整夜囤料、燃料账、没草→firepit 破局、有界找料、固定巢穴不挡收纳、捡地上现成材料、unequip 不丢物品、缺料不许抢占死锁、端到端 做火把→收纳→夜里举起、饥饿/温度抢占前预判、**黄昏不举/入夜才举时序** |
-| 旁路会话记录器 | `session-recorder.test.mjs`（8 例）+ `session-log.test.mjs`（8 例） | 只读时间线、去重、增量日志、GBK 兜底、不改写桥文件；**插件内置 SessionLog 覆盖写、数字 t 兜底、源定位、新会话重置** |
+| `UNIT` | Node 纯逻辑与规则校验（无游戏进程） | 仅需 Node.js |
+| `INTEGRATION` | 假文件桥 / HTTP 服务器 + `fengari` 加载生产 Lua 运行 | 仅需 Node.js |
+| `RUNTIME` | 真机运行游戏并校验实时状态/文件桥/动作执行 | 本地 DST 开房读档 |
+| `END_TO_END` | 真实模型（DSH MCP 或 F8）驱动真机运行整套生存任务 | 本地 DST + API Key / DSH |
+
+文档与报告不得把 `UNIT` / `INTEGRATION` 的通过表述为真机或端到端通过。
 
 ---
 
-## 4. Lua 测试怎么跑的（别以为是假 Lua）
+## 4. 真机与自动化验证工具
 
-`tests/lua-mod.test.mjs` 用 **fengari**（Lua 5.3 的 JS 实现）真的去 `luaL_loadstring` 了
-`modmain.lua` 和全部 `scripts/whale/*.lua`，并注入假的 `GLOBAL`（`TUNING`、`TheSim`、`ThePlayer`…）。
+### 4.1 单动作与状态观察（RUNTIME）
 
-所以它能抓到：语法错误、`modimport` 顺序错、沙箱里误用 `GLOBAL.io`、
-`pcall == nil`（模组沙箱里必须 `local pcall = GLOBAL.pcall`）、版本兜底值漂移。
-
-**它抓不到**：真实游戏里的组件行为、真实动画打断、真实 `FindEntities` 结果。
-那些只能在 §6 的真机里验。
-
----
-
-## 5. MCP 测试怎么跑的
-
-`tests/mcp.test.mjs` 起一个**真的 HTTP 服务器**（`lib/mcp-server.js` 的 `apply`），
-用 `fetch` 发 JSON-RPC（`initialize` / `tools/list` / `tools/call`），并读 SSE 流。
-假游戏（`FakeGame`）会在临时目录里写/读状态、命令、结果文件。
-
-覆盖：协议握手、`tools/list` 按执行模式暴露工具（Autopilot 为 5 个高层工具，Assisted/Manual 为全量 44 个 = 5 本地 + 39 动作）且名字唯一、未开放工具被拒、
-动作结果原样返回、`get_state` 读不到游戏时的提示。
-
----
-
-## 6. 真实游戏测试（RUNTIME）—— 本次 **NOT_RUN**
-
-### 6.1 前置
-
-1. 游戏开着，读档进了世界（本地主机）。
-2. 模组已装：`node tools/install-mod.mjs`（输出里看 `installedVersion`）。
-3. 状态文件在更新：
-
-   ```powershell
-   $save = "C:\Users\<你>\OneDrive\文档\Klei\DoNotStarveTogether\<steamid>\Cluster_2\Master\save"
-   (Get-Item "$save\whale_state.json").LastWriteTime    # 应该是几秒内
-   ```
-
-4. **一定要传 `--bridgeDir`**：自动定位会挑 mtime 最新的分片，可能选到 `Cluster_1` 的旧档。
-
-### 6.2 启动产品 MCP（如果要用 MCP 那条路）
-
-```powershell
-node tools/start-mcp.mjs        # 默认 18090
+```bash
+node tools/verify-live.mjs state                      # 读取一次实时状态快照
+node tools/verify-live.mjs nearest flint --wait 5     # 等待 5 秒后执行实时选目标拾取
+node tools/verify-live.mjs lookup axe                 # 验证无副作用信息查询
+node tools/watch-state.mjs                            # 实时打印状态与事件流
+node tools/watch-counters.mjs                         # 实时监控动作与反射计数器
+node tools/unpause.mjs                                # 手动解除服务器暂停
 ```
 
-> 改过 `lib/` 下的 Node 代码后**必须重启**这个进程，否则跑的还是旧代码。
+### 4.2 会话录制与自动验收（END_TO_END / AUTODEV）
 
-### 6.3 分动作验证脚本（统一整合为 verify-live.mjs）
+- **会话录制**：启用插件「自动写会话日志」后，在插件目录 `latestLogs/` 下生成 `session.txt`、`session.jsonl` 与 `server_log.txt`（每次启动或新会话覆盖写入）；也可独立运行 `node tools/session-recorder.mjs`。
+- **分层真机套件**：`node tools/run-e2e-suite.mjs` / `node tools/run-live-tier1.mjs`（需本地世界与配套重置命令，详见 [AUTODEV.md](AUTODEV.md)）。
+- **自动化质检闭环**：
 
-```powershell
-node tools/verify-live.mjs lease                                            # 验证租约通路
-node tools/verify-live.mjs pickup                                           # 验证拾取
-node tools/verify-live.mjs harvest --bridgeDir "<save>" --harvest           # 验证采摘
-node tools/verify-live.mjs move                                             # 验证移动
-node tools/verify-live.mjs stop                                             # 验证停止
-node tools/verify-live.mjs nearby --bridgeDir "<save>"                      # 验证附近观察
-node tools/verify-live.mjs kinds                                            # 列出合法 target_kind
-node tools/verify-live.mjs nearest flint --wait 5                           # ★ TARGET-REFRESH 真机验收
-node tools/verify-live.mjs nearest tree                                     #   砍树（需斧头）
-node tools/verify-live.mjs nearest ordinary_rock                            #   挖矿（需镐）
-node tools/verify-live.mjs nearest safe_ground_food                         #   取安全食物
-node tools/verify-live.mjs nearest ripe_food_plant                          #   采成熟植株
+```bash
+npm run analyze        # 确定性解析 latestLogs 生成 .runtime/issue-report.json
+npm run autodev        # dry 模式：静态门禁 + 日志质检 + 生成 AUTODEV_SUMMARY.md
+npm run autodev:live   # live 模式：重装模组并执行分层真机测试（可选 --allow-git --agent-cmd）
 ```
-
-`nearest` 是 TARGET-REFRESH 的**核心真机验收**：脚本故意先等 `--wait` 秒（默认 5，模型思考的量级），
-再下发一个**不带 `#N` / `snapshot_id`** 的实时目标选择动作，并打印等待前后的 Nearby 快照 id ——
-用来证明"快照确实变了，动作仍然准确执行并且核对通过"。退出码 0 = PASS。
-
-手测（会话里直接下工具，对应任务书的最终验收）：
-
-| 场景 | 期望 |
-|---|---|
-| 等 5~10 秒后 `pickup_nearest {"target_kind":"flint"}` | 成功，燧石进背包（`verified.prefab=flint`） |
-| 等 5~10 秒后 `chop_nearest {"target_kind":"tree"}` | 树被砍倒，`log` 进背包 |
-| 等 5~10 秒后 `mine_nearest {"target_kind":"gold_vein"}` | 石头挖碎，出金块/石头 |
-| 等 5~10 秒后 `pickup_food` / `harvest_nearest {"target_kind":"ripe_food_plant"}` | 拿到安全食物（生蘑菇不算） |
-| `get_state` 取一个「句柄h…」，隔 10 秒再 `pickup {"target_handle":"h…"}` | 成功；目标没了则 `target_gone`（**不会**换成别的东西） |
-| 连着两次 `pickup {"target_ref":"#1","snapshot_id":"<过期帧>"}` | 第二次 `stale_snapshot_circuit_open`，游戏里**零动作** |
-| 背包没食物时 `eat {"food":"carrot"}` | 回执列出"背包里现在真正能吃的" |
-| 远离科学机器 `craft {"recipe":"rope"}` / 站在旁边再试 | `recipe_locked`（提示先建科学机器）/ 成功 |
-
-> 注：早期独立的 `verify_move.mjs` 与 `verify_stop.mjs` 已统一并入 `tools/verify-live.mjs move` / `tools/verify-live.mjs stop`（逐帧去重采样）。
-
-### 6.3.1 真机跑之前的三步准备（缺一步就会失败）
-
-```powershell
-# 1) 游戏暂停着的话，先解除（窗口失焦会暂停，主机暂停会让命令轮询全停）
-node tools/unpause.mjs
-
-# 2) 确认状态文件在更新（年龄应该是几百毫秒，不是几百秒）
-(Get-Item "<save>\whale_state.json").LastWriteTime
-
-# 3) 改过 lib/ 下的 Node 代码，就必须重启 MCP，否则 tools/list 还是旧的
-node tools/start-mcp.mjs               # 后台跑；然后 http://127.0.0.1:18090/status 应该 HTTP 200
-```
-
-确认产品入口暴露的工具表（Assisted/Manual 应为 44 个 = 5 本地 + 39 动作，Autopilot 为 5 个高层工具；数量以 `TOOLS` 与 `ACTION_SPECS` 为准）：
-
-```powershell
-# JSON-RPC：initialize → tools/list
-node --input-type=module -e "..."      # 或直接用 tests/mcp.test.mjs 里的 rpc() 写法
-```
-
-### 6.6 真实 LLM 闭环（END_TO_END）
-
-这是唯一能证明"模型真的能玩"的测试：真实模型读状态 → 自己选工具 → 游戏真执行 → 再读状态核对。
-
-**前置**
-
-1. 游戏开着、读档进世界（模组版本要和仓库一致，改过 Lua 就必须重进世界）。
-2. 本机有可用的 OpenAI 兼容端点（当前用户环境是 `http://127.0.0.1:8788/v1`）。
-   凭据**只从用户已有配置读**（`~/.dsh/.credentials.yaml` 的 `LOCAL_API_KEY`），
-   **绝不打印、绝不写进仓库或日志**。
-3. 单控制者：跑之前不要按 F8，也不要让别的客户端同时下动作。
-
-**跑法**
-
-```powershell
-# 预算：最多 20 次模型工具调用；Lease 内部等待不计入，但会记录等待时长
-$env:AGENT01_MAX_CALLS='20'
-node .runtime/agent01-run.mjs
-```
-
-脚本**只做**这些事（不替模型决策）：启动产品 `AiRunner`、配置端点、统计调用次数、
-记录每次工具名与参数、执行预算、汇总游戏状态。工具选择完全由模型决定。
-
-**怎么确认"游戏真的变了"**（不能只看 accepted）
-
-| 动作 | 判据 |
-|---|---|
-| `move_to` | `get_state` 里的「位置：(x,z)」变了 |
-| `pickup` | 背包里对应 prefab 的数量 +1，且目标从「附近」里消失 |
-| `harvest` | 背包浆果 +1 **或** 同一株（prefab+坐标）`harvest_ready` 由 true 变 false |
-| `stop` | 回执是「停下了」，且随后位置不再变化 |
-
-**等级怎么标**
-
-- 只有单测 → **UNIT**
-- 真实游戏在跑、脚本（不是 LLM）下动作 → **RUNTIME**
-- 真实模型自己决定调什么、并且用真实状态核对过结果 → **END_TO_END**
-
-**注意**：`get_state` 文本里有两个 id，别搞混 ——
-第一行「状态快照序列号 s…」只是给人看的序号；
-`pickup`/`harvest` 的 `snapshot_id` 要填「附近」段开头那个 **Nearby 快照 ID（r…-n…）**。
-
-### 6.7 SURVIVAL-01：完整基础生存闭环（END_TO_END）
-
-跑法（预算 40 次工具调用）：
-
-```powershell
-$env:SURVIVAL_MAX_CALLS='40'
-node .runtime/survival01-run.mjs
-```
-
-脚本只做这些：启动产品 `AiRunner`、配端点、计数、记录每次工具与前后状态、执行预算。
-**不替模型决定**用哪个工具、选哪个目标。
-
-**逐动作判据**（不能只看回执文字）：
-
-| 动作 | 必须看到 |
-|---|---|
-| `gather` | 背包 `cutgrass`/`twigs` 增加，或同一株从「可收」变成「未成熟」 |
-| `pickup` | 背包对应 prefab +N |
-| `harvest` | 背包 `berries` +N，同一株 `harvest_ready` true → false |
-| `eat` | 饥饿值上涨，**或**该食物数量减少 |
-| `craft` | 材料减少 **且** 成品进背包（`torch`/`axe`/`pickaxe` 数量 +1） |
-| `equip` | 装备栏 hand 真的变成它 |
-
-脚本会把每次动作的"前后"（位置 / 背包 / 手持 / 饥饿）打进日志，并写
-`.runtime/survival01-actions.json` 便于核对。
-
-**注意**：`craft` 和 `equip` 只在**世界加载了 0.18.0 之后**才存在；
-如果状态文件的 `mod` 还是旧版本，说明没重读世界，这时跑出来的结果不算数。
-
-### 6.4 观察类脚本（不改世界）
-
-```powershell
-node tools/watch-state.mjs            # 每帧状态变化
-```
-
-### 6.5 端到端（模型真的下指令）
-
-在 DSH 会话里选中「大肥鱼饿不死」预设（或打开「在所有会话里提供 dst 入口工具」），
-让模型自己调 `get_state` → `move_to` → `pickup` / `harvest`。
-**本次瘦身没有做这一步**（`NOT_RUN`）——它需要真实模型配额和一段连续游戏时间。
-
-### 6.8 SURVIVAL-02.1：生存优先级 / 火源提前准备 / 紧急抢占（RUNTIME）
-
-**前置（缺一不可）**
-
-1. 游戏里模组版本必须是 **0.32.1**（看状态文件 `mod` 字段，或服务器日志
-   `Loading mod: DontStarveWhaleSurvivor ... Version:0.32.1`）。
-2. **`REFLEX` 必须是 `true`**：检查 `Cluster_1/{Master,Caves}/modoverrides.lua`。
-   旧存档默认是 `false`（本阶段把真实死因查出来的关键一条，见 `STATUS.md` §3.5.3），
-   改完必须**重新读档**才生效。
-3. 世界不暂停（窗口在前台 / 关掉"思考时暂停"），状态文件年龄应在几百毫秒级。
-
-**怎么判"能活过夜"（不靠感觉，看真实状态与诊断日志）**
-
-| 检查点 | 证据 |
-|---|---|
-| 白天提前做火把 | server_log 里出现 `[Reflex] craft_torch: started=true` 且随后 `result=succeeded inventory_confirmed=true`（或 `in_hand=true`）；`get_state` 背包/手持出现 torch |
-| 火把材料没被斧头抢 | 做出火把前，斧头目标不出现（`prep_light` 优先）；日志里没有"树枝被扣去做斧头、火把材料不够" |
-| 黄昏装备 | `get_state` 装备栏 hands = torch；诊断 `light_check: has_usable_light=true` |
-| 第一夜不被黑暗/暗影怪打死 | 角色存活且 `get_state` 里 phase 从 night 回到 day，血量没有持续下降到 0 |
-| 饥饿/生命处理 | 饥饿 <35% 时出现 `[Reflex] eat:`，或 `[Reflex] priority=P1 reason=hunger_emergency` |
-| 任务抢占 | 被攻击时 `[Reflex] protection: current_job=... interrupt=true reason=under_attack`，旧指令收到回执 |
-| 反射真开着 | `get_state` 顶部**没有**"⚠ 保命反射被关掉了"这句 |
-
-> 若只跑到某个白天/夜晚就中断，如实写"观测到第 N 天/夜"，不要把没跑到的第二夜说成跑到了。
-> 注意**世界配置**：Cluster_1 是 `darkness=nonlethal`（黑暗打不死），Cluster_2 是 `darkness=default`
-> （黑暗**会**打死人）。所以"没死"本身不等于"光照对了"，必须同时看理智有没有崩、暗影怪有没有刷出来。
-
-### 6.9 旁路会话记录器（排查用，`npm run record`）
-
-只看文件桥与游戏日志，**只读、不写桥、不下任何游戏指令、不改协议、不加游戏工具**。
-把「谁下了什么动作 / 游戏回了什么 / 反射做了什么 / 状态变成什么」汇成一条时间线。
-
-```powershell
-npm run record -- --bridgeDir "<...\Cluster_2\Master\save" `
-  --serverLog "<...\Cluster_2\Master\server_log.txt" `
-  --chat "<...\Cluster_2\Master\backup\server_chat_log" `
-  --out .runtime/session-record.jsonl --seconds 1800 --from-start
-```
-
-产物：`<out>.jsonl`（结构化，一行一个事件）+ 同名 `.txt`（一行一条，人眼直接看）。
-事件类型：`cmd`（动作名/参数/发起方）、`result`（ok/text）、`state`（三维/手持/背包/位置/天数）、
-`reflex`（`[Reflex]` 日志）、`death`（死亡播报，单独标出）、`game_log`（启动/重连/暂停等）、`note`（人工打点）。
-
-| 开关 | 作用 |
-|---|---|
-| `--from-start` | 连启动前已有的历史日志也收进来（排查已发生的事故时必开） |
-| `--seconds N` | 跑 N 秒后自动停并写一条 `recorder stopped` |
-| `--once` | 只扫一次就退出 |
-| `--note "文字"` | 插一条人工标注后退出（给时间线打点，例如「开始第一夜」） |
-| `--stateEvery MS` | 状态采样间隔（默认 5000ms） |
-
-为什么这样设计：命令与回执是**单槽文件**、会被覆盖，只有持续轮询才留得下来；
-日志要按文件偏移增量读，并处理服务端日志轮转/截断；同一条命令按 id 去重。
-单测见 `tests/session-recorder.test.mjs`（7 例，含"记录器绝不改写桥文件"）。
-
----
-
-## 7. 标记规范（别把没跑的说成跑了）
-
-- 只跑过单测 → 只能说 **UNIT 通过**。
-- 真实游戏跑过 → 才能说 **RUNTIME 通过**，并写清版本号。
-- 没跑 → 写 **`NOT_RUN`**，不要写"应该没问题"。
-- 换过代码但只跑了旧版本的真机 → 那是旧版本的证据，不能算新版本的。
-
-诚实结论（截至 TARGET-REFRESH，模组 **0.39.0** / 插件 **0.10.0**；下表历史动作项仍是旧版本的证据，未继承）：
-
-| 项 | 结论 |
-|---|---|
-| 单测 **824** 项（含 CHOP-CHAIN 11 + SCIENCE-CHAIN 14） | **UNIT + INTEGRATION：通过**（824/824，0 failed） |
-| 原安全测试（Control Lease / Guard / ACK / Handover） | **UNIT + INTEGRATION：通过**（一条未改，全绿） |
-| 干净检出（没有 `dist`/`bwc_config`/`.runtime`）后跑单测 | **通过**（479/479，M2.2.1 与 STABILITY-01 都验过） |
-| 真实游戏：模组加载（两个分片无 Lua 错误） | **RUNTIME：通过**（0.38.x 的证据；0.39.0 待重进世界复核） |
-| 真实游戏：`get_state` / `nearby` | **RUNTIME：通过**（9 桶、`#N` 唯一、上限生效） |
-| 真实游戏：`stop` / `move_to` / `pickup` / `harvest` | **RUNTIME：通过**（pickup 5/5、harvest 13 PASS/0 FAIL、stop 3/3、move 4 PASS） |
-| 真实游戏：安全底座（lease / ACK / 权威副本） | **RUNTIME：通过**（11/11） |
-| 真实游戏：**实时目标选择**（`verify-live.mjs nearest`） | **NOT_RUN**（需要游戏读档进世界；见 §6.3 与 TARGET-REFRESH.md 的验收清单） |
-| 真实游戏：MCP `tools/list` | **RUNTIME：通过**（旧版 7 个；0.39.0 应为 39 个，待复核） |
-| 真实游戏：**F8 内置 AI** | **NOT_RUN**（HUD 自报「没配 API Key」；无法在不接管键鼠的前提下模拟 F8） |
-| 端到端（真实 LLM 长跑） | **NOT_RUN** |
-
-### 7.1 点火烧树（`use action=LIGHT`）真机证据 —— 模组 0.41.3
-
-| 项 | 结论 |
-|---|---|
-| `use action=LIGHT` 点燃常青树 | **RUNTIME：通过**（连续 3 次回执「点燃了 常青树」并核对通过） |
-| `get_state` 显示 `着火中` | **RUNTIME：通过**（`#16 常青树(81,-42) 距0.2 可砍 着火中`） |
-| `get_state` 显示 `已烧焦` | **RUNTIME：通过**（同一棵树稍后变为 `已烧焦`） |
-| 木炭掉落 | **RUNTIME：通过**（`probe charcoal` → 20 格内 1 个；`pickup_nearest` 拿到 `charcoal+1`） |
-| 火势蔓延 | **RUNTIME：观察到**（火从树蔓延到树苗/草/浆果丛/种子） |
-| 点燃后自动撤离 | **UNIT + INTEGRATION：通过**（LIGHT-7/8；真机复测待进世界） |
-
-**本轮真机踩到的 4 个问题（都已修）**：
-
-1. **`guard.lua` 调用不存在的 `U.g` → 专用服务器崩溃**
-   `guard.lua:819: attempt to call field 'g' (a nil value)` 冒到引擎层，整个服务器进程终止、客户端掉线。
-   修：改用 `GLOBAL.EQUIPSLOTS`；并给 `bridge.lua` 的 `guard.validate` / `Whale.actions.Start` 都包上 `pcall`，
-   一条命令写错最多失败一次，不会拖垮存档。
-2. **`installMod` 只比文件大小 → 修复从未真正同步到游戏**
-   `sameTree` 用 `statSync().size` 判断"是否最新"，等长改动被漏判，游戏里一直跑旧代码。
-   修：逐文件 `Buffer.equals` 比对内容（`tests/install.test.mjs` 新增等长改动回归用例）。
-3. **`StopCoordinator.reset()` 在隔离时永不恢复**
-   `stop` 超时进入隔离后，即使租约文件已是 `released`、状态文件正常刷新，`reset()` 仍直接返回 false，
-   导致模型连 `harvest_nearest` 都发不出去（角色在青蛙围攻中掉到 13% 血也救不了）。
-   修：`reset()` 先调 `tryRecover()`（它会校验锁是否真的释放），锁还握着才继续拒绝。
-4. **点燃后站在原地 → 被蔓延的火烧死**
-   真机：温蒂点着树后不动，火顺着周围草/浆果丛烧过来，30 血被烧到 0，死亡变灵魂。
-   修：点火成功后自动进入 `fleeing` 阶段，背对火源撤到 6 格外（8 方向挑可站立点）；
-   走位**只推一次**（每 tick 重推会 Clear 掉寻路，和砍树那次的"顿一下"同一个坑）。
-
-> 附带修掉一个**测试夹具**缺陷：`tests/target-harness.mjs` 的 `get()` 调 `lua_getglobal` 后没配对 `lua_pop`，
-> 每读一个全局泄漏一格 Lua 栈，连读七八次就把 C 栈顶穿、报成 `stack overflow`——
-> 看起来像被测代码有递归，其实只是夹具漏了 pop。
-
----
-
-## 8. 加新测试时
-
-1. 新动作 → `tests/tool-parity.test.mjs` 会自动检查"可见动作 === dispatcher 白名单"，
-   所以**先加白名单再加工具**，否则测试会红（这是故意的）。
-2. 新 Lua 模块 → `tests/lua-mod.test.mjs` 会检查 `modimport` 数量与顺序。
-3. 新状态字段 → 优先加进 `tests/m1_4-nearby.test.mjs` 或 `m1_1-actor-observer.test.mjs`。
-4. 新拒绝码 → 加进对应 `m2_*.test.mjs` 的负向用例，并且**必须**断言"没有写命令文件"。

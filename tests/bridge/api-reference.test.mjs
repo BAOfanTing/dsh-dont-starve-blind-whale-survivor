@@ -127,12 +127,12 @@ test('API-2：use 的白名单必须是真实动作（不能照抄不存在的 O
 })
 
 test('API-3：API 文档和参考表都在仓库里，且提到的工具都存在', () => {
-  const docs = ['docs/game-api.md', 'docs/reference/动作表.md', 'docs/reference/合成表.md']
+  const docs = ['docs/GAME_API.md', 'docs/reference/动作表.md', 'docs/reference/合成表.md']
   for (const d of docs) {
     assert.ok(existsSync(join(REPO, d)), `应该有 ${d}`)
   }
-  // game-api.md 里教的核对命令必须真的能跑
-  const api = readFileSync(join(REPO, 'docs/game-api.md'), 'utf8')
+  // GAME_API.md 里教的核对命令必须真的能跑
+  const api = readFileSync(join(REPO, 'docs/GAME_API.md'), 'utf8')
   assert.match(api, /tools\/api-lookup\.mjs/, '文档应该教怎么用 api-lookup')
   assert.ok(existsSync(join(REPO, 'tools', 'api-lookup.mjs')), 'api-lookup.mjs 必须存在')
   assert.ok(existsSync(join(REPO, 'tools', 'dump-reference.mjs')), 'dump-reference.mjs 必须存在')

@@ -1,7 +1,7 @@
 # 架构（当前有效）
 
-> 本文只描述**现在真正在跑**的系统。历史架构（A 栈的 TypeScript bridge / mcp-server / agent、
-> HTTP 18788 那一套）已全部归档，见 [`archive/README.md`](archive/README.md)。
+> 本文只描述**当前系统**的真实结构与不变量。早期设计原型与历史阶段报告已全部归档，
+> 见 [`archive/README.md`](archive/README.md) 与 `docs/archive/phases/`。
 >
 > 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.41.3）+ `lib/`（DSH 插件，0.12.0）
 
@@ -39,10 +39,11 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  skills/        复合技能：gather-resources / establish-home / survival-stabilize 等         │
 │  actions/       动作规格与快照查询：按领域拆分的动作规格 / 背包与装备的统一读取             │
 │  control.js     Control Lease（本机文件锁 + 跨进程互斥 + 换手 ACK）                        │
-│  bridge.js      文件桥客户端：找目录、读状态、写命令、读结果、权威性判定                     │
+│  bridge.js      桥接客户端：找目录、读状态、写命令（文件桥 + Localhost HTTP 通道）             │
+│  http-server.js Localhost HTTP 通道：低延迟直推命令与回执接收                             │
 │  state/snapshot.js  把 whale_state.json 归一化成同一份快照（文本渲染 / 字段校正）           │
 │  mcp-server.js  MCP 服务器（HTTP，默认 18090）        agent.js  F8 内置 AI 循环             │
-│  index.js       插件入口：配置、预设、入口工具、自动装模组                                   │
+│  index.js + dsh/ 插件入口与宿主适配：config / preset / gateway / session-hooks              │
 └───────────────────────────────────────┬─────────────────────────────────────────────────┘
                                         │  本机文件桥（游戏存档目录 / 模组目录）
                     ┌───────────────────┴───────────────────┐
@@ -56,7 +57,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │                                                                                          │
 │  observe.lua    把世界翻成文字（时间/位置/三维/背包/附近/威胁）→ 写 state                  │
 │  nearby.lua     结构化附近：9 个桶、带 #N 引用、带 snapshot_id、带 delta、带稳定句柄 h…             │
-│  targetrules.lua ★ TARGET-REFRESH：固定 target_kind 枚举 + 实时找最近目标 + 稳定句柄注册表          │
+│  targetrules.lua ★ 目标规则：固定 target_kind 枚举 + 实时找最近目标 + 稳定句柄注册表                │
 │  actor.lua      Actor Provider：只认"本地主机、活着、非灵魂"的那个玩家                     │
 │  bridge.lua     读命令、写结果、维护租约回执（含 job_cleared）                             │
 │  guard.lua      ★ 第二道闸：白名单 + 参数 + 目标 + 租约 + 代际 + 权限，逐条复核             │
@@ -104,7 +105,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 ### 4.2 为什么用文件而不是 socket
 
 饥荒的 Lua 沙箱不提供监听能力。文件桥是唯一在"模组不能开端口"前提下的可行方案，
-代价是**延迟**（状态最多 1 秒旧）和**单槽覆盖**（见 `STATUS.md` 已知问题）。
+代价是**延迟**（状态最多 1 秒旧）和**单槽覆盖**（可能被保命反射覆盖，由上层 `unknown` 对账状态机兜底）。
 
 ---
 
@@ -127,7 +128,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 - **引用**：每个条目有 `#N`，**只在当前 `snapshot_id` 内有效**。
   `snapshot_id = <runtime_id>-n<扫描序号>`：`runtime_id` 区分进程/世界，`n` 区分第几次扫描。
   世界重载后 `runtime_id` 变，旧引用自动作废。
-- **稳定句柄（TARGET-REFRESH）**：能操作的目标还会带一个 `handle`（形如 `h1a`）。
+- **稳定句柄**：能操作的目标还会带一个 `handle`（形如 `h1a`）。
   它**不含 GUID**，键是 `prefab + 格子坐标`，所以同一个目标在多次扫描之间句柄不变；
   这一帧没扫到（= 目标没了/被捡走）就立刻作废，并记下"为什么失效"（`target_gone` / `target_taken` /
   `in_limbo`），让回执能说实话而不是含糊的 `unknown_handle`。`#N` 仍然只是**当前观察里的展示编号**。
@@ -167,8 +168,8 @@ TOOLS = [advance_task, get_state, get_guide, update_notes, run_skill]   ← 本�
 - F8 的 `agent.js` 和 MCP 的 `mcp-server.js` 都调**同一个** `executeTool()` 和**同一份** `TOOLS`。
 - 所以"F8 能做的事"和"MCP 能做的事"必然一致，不存在两条链路。
 - dispatcher 的白名单 `OPEN_ACTIONS = Object.keys(ACTION_SPECS)` 是唯一开关：工具表里有的动作，
-  这里不放行也会被拒；两边完全对齐（`tool-parity.test.mjs` 盯着）。
-- `RULES` 里的能力清单**从 `ACTION_SPECS` 生成**，不再手写数字（`prompt-parity.test.mjs` 盯着），
+  这里不放行也会被拒；两边完全对齐（`tests/bridge/tool-parity.test.mjs` 盯着）。
+- `RULES` 里的能力清单**从 `ACTION_SPECS` 生成**，不再手写数字（`tests/bridge/prompt-parity.test.mjs` 盯着），
   所以加一个动作不会出现"代码能用、说明书还说没有"的漂移。
 
 ---
@@ -250,11 +251,10 @@ dispatch({tool, args, owner})
 
 ---
 
-## 12. TARGET-REFRESH：目标引用（三层，安全边界一条没少）
+## 12. 目标引用（三层，安全边界一条没少）
 
-真机日志（session.txt，Mod 0.38.4）里 94 次工具调用有 23 次 `pickup` + 3 次 `chop` + 2 次 `harvest`
-全是 `stale_snapshot`：`#N` 只在**一帧扫描**内有效，而模型一轮思考 30~60 秒 —— 拿到引用时那一帧早换了。
-修法不是放宽校验（那会操作错目标），而是给模型**不会过期**的引用方式：
+由于 `#N` 只在**一帧扫描**内有效，而模型一轮思考可能耗时数十秒，纯 `#N` 引用在等待期间容易因附近重扫而失效（`stale_snapshot`）。
+因此系统在保留 `#N` 校验的同时，提供**不会因扫描翻页而过期**的引用方式：
 
 | 方式 | 模型给什么 | 谁选目标 | 有效期 | 典型动作 |
 |---|---|---|---|---|
@@ -264,7 +264,7 @@ dispatch({tool, args, owner})
 
 - **㋐/㋑ 的实现都在 `scripts/whale/targetrules.lua`**（固定枚举 + 候选判定 + 最近目标 + 句柄注册表），
   它是目标类别的**唯一真来源**；Node 侧 `lib/actions/target-kinds.js` 是同一份枚举，
-  有 `tests/target-nearest.test.mjs` 逐条 parity 断言盯着。
+  有 `tests/lua/target-nearest.test.mjs` 逐条 parity 断言盯着。
 - **㋑ 的硬要求**：句柄不含 GUID；绑定 `runtime_id|session_id|actor_id`（换世界整体作废）；
   只能由 Lua 发放（查不到 = `unknown_handle`）；**执行前必须重新解析真实实体**；
   过期一律给准确原因（`target_gone` / `target_taken` / `in_limbo`），**绝不自动替换成别的对象**。
@@ -291,10 +291,9 @@ dispatch({tool, args, owner})
 9. 目标校验（存在性、白名单、状态、距离、组件权限）
 10. 动作执行与结果确认（以真实状态为准）
 
-M2.2.1 的瘦身**只删了模型可见但永远被拒的工具定义**，上面 10 条一条没动（有测试守着）。
-TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然只有一个 Dispatcher 出口、
-一个 Guard、一条 `BufferedAction → push()`；句柄与实时选目标都只是**在 Guard 内部换了解析方式**
-（`tests/target-nearest.test.mjs` 的 TN-13 盯着"没有自己的执行通道"）。
+所有动作裁剪与多方式目标引用**均不削弱上述 10 条安全边界，也不建第二套通道**：
+仍然只有一个 Dispatcher 出口、一个 Guard、一条 `BufferedAction → push()`；
+句柄与实时选目标只是**在 Guard 内部换了解析方式**（`tests/lua/target-nearest.test.mjs` 的 TN-13 守护单一执行通道）。
 
 ---
 
@@ -317,14 +316,14 @@ TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然�
 - **省 token 的注入方式**：`get_state` 文本末尾输出完整计划，JSON 模式放在 `plan` 字段；
   F8 每轮只注入一行紧凑计划，只有目标切换时才展开完整版。
 - F8 与 MCP 通过 `lib/index.js` 的 `sharedPlan` 共用同一份计划，换入口不会重新规划。
-- **注意（0.12.0）**：`plan.js` 已删除旧的 `build_science_machine` 目标（"材料齐 + 附近没机器 → 就地 build"）。
-  科技/基地建造改由下节「层级规划层」驱动，并由 `executeTool('build')` 的家园门槛拒绝在营地/家范围外建造。
+- **注意**：`plan.js` 已移除就地建科学机器逻辑。
+  科技/基地建造统一由下节「层级规划层」驱动，并由 `executeTool('build')` 的家园门槛拒绝在营地/家范围外建造。
 
 ---
 
-## 15. 长期记忆按世界分开（TARGET-REFRESH）
+## 15. 长期记忆按世界分开
 
-真机踩到：换了存档之后笔记里还留着旧基地 `(21,-81)`，而角色其实在 `(-21,-5)`。
+为了避免切换存档后把旧世界的基地坐标当成当前位置：
 
 - Lua 侧 `observe.lua` 输出 `identity.world_key` / `world_key_source`：
   `cluster:<cluster_id>/shard:<shard_id>`，**读不到才**退回 `session:<session_id>` 并如实标注来源。
@@ -335,9 +334,9 @@ TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然�
 
 ---
 
-## 16. 层级规划层（Planner，0.12.0）
+## 16. 层级规划层（Planner）
 
-在 `plan.js`（短期生存优先级）之上，新增一层"长期 → 中期 → 短期"的规划，解决"没有长期目标 / 任务互相打断 / 失败重试 / 家园缺失"。
+在 `plan.js`（短期生存优先级）之上，提供"长期 → 中期 → 短期"三层规划，解决长期目标衔接、任务依赖、失败重试与家园建造约束。
 
 ```
 长期：lib/planner/development-stages.js   阶段 0..6，完成条件只看快照+记忆（完成才推进、锁存）
@@ -363,9 +362,9 @@ TARGET-REFRESH 新增的两种引用方式**也不建第二套通道**：仍然�
 
 ---
 
-## 17. Phase G：统一决策出口（Decision Arbiter）+ Skill Executor
+## 17. 统一决策出口（Decision Arbiter）+ Skill Executor
 
-这一层解决两个问题：① `get_state` 过去同时渲染 `plan.js` 与 `planner-core` 两套「下一步」；② Skills 只会生成任务建议、不会真正执行。
+这一层解决两个问题：① `get_state` 统一输出唯一「当前计划」；② 复合技能可通过 `SkillExecutor` 真实串行下发原子动作并核验快照证据。
 
 ### 17.1 唯一决策出口
 ```
@@ -395,7 +394,7 @@ lib/skills/gather-resources-adapter.js 资源收集任务看板展开适配器�
 lib/planner/task-skill-orchestrator.js 任务与技能编排器（Orchestrator，连接 TaskBoard 与 SkillExecutor）
 lib/skills/index.js                   装配并幂等注册全部技能
 ```
-- **核心架构职责收敛 (Phase R.2)**：
+- **核心架构职责边界**：
   - **Planner**：长期发展阶段、里程碑判定、任务生成规则与优先级策略；不下发动作。
   - **Task Board**：高阶任务注册、依赖 DAG、任务优先级、状态与完成凭证；不再维护复合技能的内部步骤。
   - **Skill Executor**：复合技能执行引擎，管理技能实例生命周期、步骤流转、原子动作下发、真实快照核验与有界重试。
@@ -410,9 +409,9 @@ lib/skills/index.js                   装配并幂等注册全部技能
   - `[ORCHESTRATOR] DISPATCH / RESUME / RECOVER`
   - `[SKILL] START / RESUME / STEP_START / ACTION_DISPATCH / STEP_VERIFIED / STEP_FAILED / PAUSED / FINISHED`
 
-### 17.3 任务身份与技能实例生命周期（Phase R.6 重构）
+### 17.3 任务身份与技能实例生命周期
 
-在 Phase R.6 中，彻底修复了 Task Board、TaskSkillOrchestrator 与 Skill Executor 之间的实例身份混淆与生命周期缺陷：
+Task Board、TaskSkillOrchestrator 与 Skill Executor 之间的实例身份与生命周期隔离规范如下：
 
 #### 17.3.1 核心概念分离
 - **Task (`task_id`)**：高阶规划任务的权威标识（如 `gather_log`, `gather_rocks`, `gather_goldnugget`）。描述“做什么、依赖谁、目标是什么、完成凭证是什么”。
@@ -465,18 +464,18 @@ flowchart TD
 ### 17.4 模块化扩展规范
 新增技能只需在 `lib/skills/` 下实现一个 `{id,name,preconditions,steps[{id,title,isDone,nextAction}],completion,retry_policy,timeout_policy}` 并在 `index.js` 注册一行；不修改 Planner。`fight_spider` 继续用 Lua Battle Director，不在 Node 重写蜘蛛战斗。
 
-### 17.4.1 自主执行运行时集成（Phase R.7 重构）
-引入 `WorldRuntimeManager` 作为统一的世界级执行上下文管理器，接通 MCP 调度链路。
+### 17.4.1 自主执行运行时集成
+`WorldRuntimeManager` 作为统一的世界级执行上下文管理器，接通 MCP 调度链路。
 
 - **WorldRuntimeManager**：实现世界级并发互斥锁（Mutex），保证单角色同一时间仅推进一个任务，隔离不同世界的实例记忆。
 - **advance_task**：打通 `LLM → advance_task → Orchestrator.tick() → SkillExecutor → Dispatcher` 的完整自主执行链路。
 - **执行模式控制**：通过 `executionMode` 实现 `Autopilot`（持续自主：模型只制定高层目标，用 `advance_task` 推进任务看板，原子动作由内部执行链执行）、`Assisted`（用户目标驱动，模型用完整原子动作）与 `Manual`（单次指令，模型用完整原子动作）三种运行模式。
-- **R8.4 工具收口**：`toolList(mode)` 对 Autopilot 只暴露 `advance_task / get_state / get_guide / update_notes / stop`（`AUTOPILOT_TOOL_WHITELIST`）；Assisted/Manual 暴露完整工具集。`executeTool` 在进入 `dispatcher` 之前再做一道纵深防御：Autopilot 下直调原子动作/`run_skill` 回固定文案 `Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。`。该闸门只作用于**模型直调层**，`SkillExecutor → Dispatcher` 的内部派发（internal）不经过 `executeTool`，绝不被误伤。
+- **Autopilot 工具收口**：`toolList(mode)` 对 Autopilot 只暴露 `advance_task / get_state / get_guide / update_notes / stop`（`AUTOPILOT_TOOL_WHITELIST`）；Assisted/Manual 暴露完整工具集。`executeTool` 在进入 `dispatcher` 之前再做一道纵深防御：Autopilot 下直调原子动作/`run_skill` 回固定文案 `Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。`。该闸门只作用于**模型直调层**，`SkillExecutor → Dispatcher` 的内部派发（internal）不经过 `executeTool`，绝不被误伤。
 
 ### 17.4.2 与执行通道的关系（安全边界不变）
-技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。Phase G-R7 只新增「编排层」，未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。
+技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。编排层与技能层未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。
 
-### 17.5 执行安全与生存稳定性机制（Phase R.7.2 收尾）
+### 17.5 执行安全与生存稳定性机制
 
 #### 17.5.1 Mutex 所有权与 Generation 令牌模型
 为了彻底消除并发竞态与旧任务 finally 释放新任务锁的风险，`WorldRuntime` 采用递增 generation 与所有权持有者校验：
@@ -489,12 +488,12 @@ flowchart TD
 - **取消信号全链路穿透**：通过 `AbortController` 产生的 `signal` 贯穿：
   `WorldRuntime → Orchestrator → SkillExecutor → Dispatcher → GameBridge.call`
   各层在等待前与等待中均感知 `signal.aborted`，快速短路退出；
-- **底层动作打断与 Reflex 保命**：向底层下发唯一 `stop` 动作清理玩家控制状态与行动队列；同时在 Lua `core.lua` 中严格校验抢占矩阵（R8.5 起集中到 `A.may_preempt()`）：
+- **底层动作打断与 Reflex 保命**：向底层下发唯一 `stop` 动作清理玩家控制状态与行动队列；同时在 Lua `core.lua` 中严格校验抢占矩阵（集中到 `A.may_preempt()`）：
   普通动作与用户 stop 绝不打断关键生存逃跑或急救；唯一例外是**防御交接**（`cmd_id="defense"`）可以受控接管 Reflex flee，
   且黑暗照明（`light_priority`）、回血（`heal_priority`）、召唤进行中（`summon_in_progress`）一律拒绝交接。
   交接时显式清空旧 `job` 与 `BufferedAction`，保证不会同时存在两个动作。
 
-#### 17.5.2.1 战斗 / 伴生职责边界（R8.5）
+#### 17.5.2.1 战斗 / 伴生职责边界
 
 只有三层，且共用同一套 Actions / Dispatcher：
 
@@ -518,7 +517,7 @@ flowchart TD
 - **需求驱动评估**：`food-candidate-selector.js` 严格区分 `hunger`、`health`、`sanity` 目标需求。在饥饿需求下过滤饱食度为 0 的物品（如花瓣 `petals`），杜绝误吃；综合考虑营养缺口匹配度与新鲜度（`freshness * 50`）；
 - **失败类型甄别与熔断恢复**：`reflex_active`、`actor_busy`、`result_timeout`、`awaiting_reconciliation` 属于调度或等待状态，不计入熔断器失败计数；目标熔断只依赖冷却时间 `blockedUntil`，冷却到期自动放行，彻底消除永久拉黑；维护 120s TTL 与 50 条上限容量自愈清理。
 
-### 17.6 复合执行链控制权与运行时可靠性治理 (Phase R.7.3)
+### 17.6 复合执行链控制权与运行时可靠性治理
 
 #### 17.6.1 复合技能控制权身份透传 (Control Ownership Propagation)
 - **调用级无状态透传**：`{ owner, ownerInstanceId }` 不作为 `WorldRuntime` 单例实例的可变属性常驻，而是严格跟随每一次 `advance_task` / `run_skill` / `executeTask` 异步闭包从顶层传递到底层：
@@ -537,7 +536,7 @@ flowchart TD
 - **HTTP 待提取队列即时剔除**：在 `GameBridge` 中挂载 `signal` 取消监听器，当下发前已被取消或排队期间收到 abort 信号时，立即从 `pendingHttpCommands` 队列中移除，杜绝已被取消的命令被游戏端轮询取出执行；
 - **锁释放超时 Quarantine 屏障**：`WorldRuntime.stop()` 在等待持有锁任务退出时设定有界超时（最高 5 秒）；若超时持有者仍未退出，则激活 `quarantined = true` 与 `cancelRequested = true`，形成强制隔离屏障，所有后续任务均无法获取锁；直到原任务持有者真实退出并在 `finally` 中释放锁时，隔离屏障才自愈解除。
 
-### 17.7 统一任务执行核心与 F8 / DSH 接入一致性 (Phase R.7.4)
+### 17.7 统一任务执行核心与 F8 / DSH 接入一致性
 
 #### 17.7.1 两条入口、一套核心
 - **F8 内置 AI**：`模型 → AiRunner → callTool() → runTool() → executeTool() → Planner/Runtime/Executor/Dispatcher`；

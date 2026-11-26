@@ -24,7 +24,7 @@
 
 ## 画面上的小窗
 
-模组在客户端挂了一个 widget（画面左边，三个状态球下面），每秒读一次插件写出来的 `whale_hud.json`：
+模组在客户端挂了一个 widget（屏幕右上角），每秒读一次插件写出来的 `whale_hud.json`：
 
 - 标题行：`大肥鱼 ● 在玩（第 N 步）` / `大肥鱼 ○ 停着`；
 - `正在做：` 当前工具调用（哪个动作、什么参数）；
@@ -52,15 +52,16 @@
 
 这样做的代价是每次动作多几十毫秒的延迟（可以忽略），好处是不用改游戏、不用注入进程、不会因为网络被防火墙拦。
 
-## 思考时暂停世界（已废弃）
+## 思考时暂停世界
 
-> 当前版本已停用“思考时自动暂停世界”（见 `docs/STATUS.md`；`bridge.lua` 已忽略暂停请求，相关配置项仅保留兼容性）。
+插件默认开启「思考超时暂停世界」（`freezeTime: true`，`idleSeconds: 5`，可在设置里调节 1~120 秒或关闭）：
 
-饥荒是实时生存：早期版本曾提供「思考时暂停世界」开关（通过 `whale_pause.json` 与 `SetServerPaused` 暂停主机），但在多人、客户端与动作节拍下容易卡住事件调度，现已下线。
+- 当处于 F8 自动运行或 DSH 会话思考中、无工具在执行且无待消费命令，并且等待超过 `idleSeconds`（上限 180 秒看门狗保护）时，`shouldPauseOnThinking()` 返回 `true`，通过 `whale_pause.json`（及 HTTP 控制字段）请求暂停房主世界；
+- `bridge.lua` 使用 `DoStaticPeriodicTask` 独立驱动暂停轮询（避免 `SetServerPaused(true)` 冻结普通 `DoPeriodicTask` 导致无法恢复），一旦有新动作或新命令到达立刻解除暂停。
 
 ## 自动装模组
 
-插件每 60 秒检查一次：`<游戏>/mods/DontStarveWhaleSurvivor` 在不在、版本一样不一样，不一样就整个复制过去；同时保证 `mods/modsettings.lua` 里有 `ModManager:ForceEnableMod("DontStarveWhaleSurvivor")`（确保启用；只追加，不覆盖你自己写的内容）。游戏开着时文件被占用，会等关掉后再装。
+插件每 60 秒检查一次：`<游戏>/mods/DontStarveWhaleSurvivor` 在不在、版本一样不一样，不一样就整个复制过去；同时保证 `mods/modsettings.lua` 里有 `ForceEnableMod("DontStarveWhaleSurvivor")`（确保启用；只追加，不覆盖你自己写的内容）。游戏开着时文件被占用，会等关掉后再装。
 
 ## 模型回复坏了自动续玩
 
@@ -80,15 +81,15 @@
 
 配置结构需要 `@deepseek-ai/schemastery`。用 `link:` 装时插件会去 `DSH_HOME` 的 profile 目录和 DSH 程序目录里找；找不到也不会加载失败，只是配置卡片读不到设置，插件按默认值工作。
 
-改了 `lib/index.js` 的 `Config` 以后跑 `npm run build:client` 重新生成配置卡片，测试会检查它是不是最新的。
+改了 `lib/dsh/config.js`（由 `lib/index.js` 导出）的 `Config` 以后跑 `npm run build:client` 重新生成配置卡片，测试会检查它是不是最新的。
 
 ## 测试
 
 ```bash
-node --test "tests/*.test.mjs"
+npm test
 ```
 
-不需要打开游戏：用一个「假游戏」（只会读写那几个 json 文件）测文件桥和 MCP 服务器；用 `fengari`（Lua 虚拟机的 JS 实现）真跑一遍 `json.lua`；用 `luaparse` 检查所有 Lua 文件的语法。
+不需要打开游戏：用例覆盖 `tests/` 下各模块域（假文件桥与 HTTP/MCP 服务器、`fengari` 实跑生产 Lua 规则、`luaparse` 语法校验、Dispatcher / Control Lease / Planner / Skills / Autodev 等）。
 
 ## 常见问题
 

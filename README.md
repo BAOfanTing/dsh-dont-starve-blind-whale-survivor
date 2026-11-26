@@ -4,7 +4,7 @@
 
 这是一个 DSH 插件，自带饥荒 Lua 模组、本机 MCP 服务器和文件桥。也可以不接 DSH，直接在游戏里按 F8 让内置 AI 自己玩。
 
-已完成的阶段：活过第一晚 · 基础工具与资源采集 · 制作科学机器 · 第一阶段科技（背包/长矛/木甲） · 紧急避险与动态逃生 · 层级规划（发展阶段 / 任务看板） · 家园选址与建造约束 · 自主执行运行时集成 (Autopilot Runtime) · 角色 Profile 与阿比盖尔伴生 (Wendy Companion) · **温蒂伴生战斗闭环（蜘蛛/青蛙防御，R8.5）**
+核心能力：基础生存与资源采集 · 层级规划（发展阶段 / 任务看板） · 家园选址与建造约束 · 自主执行运行时 (Autopilot) · 角色 Profile 与温蒂伴生防御（阿比盖尔召唤、蜘蛛/青蛙应对与花朵回收）。
 
 ---
 
@@ -99,7 +99,7 @@
 
 ## 游戏里的快捷键
 
-画面左边（三个状态球下面）有个小窗：
+屏幕右上角有个状态小窗：
 
 ```
 大肥鱼 ● 在玩（第 37 步）
@@ -222,8 +222,8 @@ F8 开/停 · F7 显示/隐藏小窗
 背包满了时原生会把浆果丢在地上。看回执里的说明，必要时另外调 `pickup`（它不会自动捡）。
 
 **版本号为什么有两个？**
-`modinfo.lua` 的 `0.40.x` 是**游戏内模组**的版本；`package.json` 的 `0.10.x` 是**DSH 插件**的版本。
-两者故意不同步，详见 [STATUS.md](docs/STATUS.md)。
+`modinfo.lua` 的 `0.41.x` 是**游戏内模组**的版本；`package.json` 的 `0.12.x` 是**DSH 插件**的版本。
+两者独立演进，详见 [CHANGELOG.md](docs/CHANGELOG.md)。
 
 **改了插件代码后没生效**
 `lib/` 下的 Node 代码改完要重启 DSH（MCP 服务器在插件进程里）。
@@ -247,14 +247,12 @@ npm run autodev:live       # LIVE：真正重装模组 + 分层真机测试（�
 
 | 文档 | 看什么 |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 现在这套系统怎么搭的（一张图 + 各层职责 + 安全边界） |
-| [docs/TARGET-REFRESH.md](docs/TARGET-REFRESH.md) | 目标引用过期与食物阻塞的修复方案 + 真机验收清单 |
-| [docs/STATUS.md](docs/STATUS.md) | 当前能力、验证等级、已知问题、还没做什么 |
-| [docs/NATIVE_REUSE.md](docs/NATIVE_REUSE.md) | 哪些能力用了饥荒原版的、哪些是自己写的、为什么（含源码行号与许可证分析） |
-| [docs/TESTING.md](docs/TESTING.md) | 怎么跑测试（命令都验过） |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构总览：各层职责、执行链、控制租约与安全边界 |
+| [docs/GAME_API.md](docs/GAME_API.md) | 饥荒联机版模组 API 实测速查、Lua 模块对应关系与 `api-lookup` 用法 |
+| [docs/TESTING.md](docs/TESTING.md) | 静态门禁、测试目录结构、验证等级与真机工具用法 |
 | [docs/AUTODEV.md](docs/AUTODEV.md) | 全自动游玩测试闭环：质检员 Oracle、分层 E2E、自动修复与回滚护栏 |
-| [docs/dsh-plugin.md](docs/dsh-plugin.md) | 插件形态说明（预设、入口工具、配置项） |
-| [docs/R8.5-WENDY-DEFENSE.md](docs/R8.5-WENDY-DEFENSE.md) | 温蒂伴生战斗闭环：Reflex→Battle 接线、召唤交接、avoid_melee、青蛙策略、花朵保护与回收 |
+| [docs/dsh-plugin.md](docs/dsh-plugin.md) | 插件形态说明（预设、入口工具、配置项、思考暂停机制） |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | 历史版本与架构演进记录（阶段报告已归档于 [docs/archive/](docs/archive/README.md)） |
 
 ---
 

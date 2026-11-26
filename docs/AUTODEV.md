@@ -155,7 +155,7 @@ node tools/auto-dev-loop.mjs --live --allow-git --agent-cmd "claude -p"
 
 ---
 
-## 6. 落地路线（对应任务书三步）
+## 6. 当前就绪度与扩展接入
 
 1. **马上能用**：`npm run autodev` / `npm run analyze` 已可用——静态门禁 + 把现有日志压成
    `issue-report.json` 跑通。

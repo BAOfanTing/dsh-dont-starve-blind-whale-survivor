@@ -3,7 +3,7 @@
 这份文档里的每一条都是**在真机上跑过、或者到游戏源码里核对过**的，不是凭单机版的经验抄的。
 踩过的坑都写在每条下面（"⚠"），项目的修法记在 `## 踩坑总表` 里。
 
-游戏版本：`api_version = 10` 的《Don't Starve Together》（2026-11 的线上版本，`scripts.zip` 5660 万字节）。
+游戏版本：`api_version = 10` 的《Don't Starve Together》。
 
 ---
 
@@ -58,7 +58,7 @@ U.g("ACTIONS")   -- ✔ 有就给表，没有给 nil，不炸
 
 白名单（这些一定存在，可以直接写）：`pcall` `tonumber` `error` `type` `tostring` `print` `math` `table` `string` `pairs` `ipairs`、`Vector3` `BufferedAction` `ACTIONS` `EQUIPSLOTS`。
 
-> 测试 `tests/tool-parity.test.mjs` 会拦"除白名单外直接写 `GLOBAL.xxx`"。
+> 测试 `tests/bridge/tool-parity.test.mjs` 会拦"除白名单外直接写 `GLOBAL.xxx`"。
 
 ### 1.2 没有 `TheSim:GetTime()`，秒表自己维护
 
@@ -323,7 +323,7 @@ inst:ListenForEvent("actionsuccess", function(inst, data) ... end)   -- data.act
 inst:ListenForEvent("actionfailed", function(inst, data) ... end)    -- data.action / data.reason
 ```
 
-**连砍**（官方"按住 F 连砍"的机制）：`playercontroller.remote_controls[CONTROL_ACTION] = true`
+**连砍**（官方"按住 F 连砍"的机制）：`playercontroller.remote_controls[CONTROL_ACTION] = 0`（松开时置为 `nil`）
 ——状态机会自己在 `TimeEvent` 里重推同一个动作。本项目 `hold_action` 用的就是它。
 
 **成功判据要看游戏里的真实变化**，不要只看"我推了动作"：
@@ -463,20 +463,24 @@ configuration_options = { { name = "INTERVAL", label = "…", hover = "…",
 ## 10. 本项目的 Lua 侧结构（对应关系）
 
 ```
-scripts/whale/
-├─ json.lua     纯 Lua 的 JSON 编解码（沙箱里不保证有游戏自带的 json）
-├─ util.lua     U.g / U.try / U.call / U.now / 背包 / 容器 / 挑工具 / 世界状态   ← 本文档的落地
-├─ observe.lua  状态 → 给 AI 看的文字（[编号] + 坐标 + 能做什么）
-├─ actions.lua  30 个动作的状态机（BufferedAction + PushAction + 结果事件）
-├─ bridge.lua   文件桥（双通道 + 分片规则）+ 主循环 + 看门狗
-└─ client.lua   走路动画 RPC / 小窗 / F8（AI 开停）·F7（开关小窗）/ 可选暂停
+DontStarveWhaleSurvivor/
+├─ modmain.lua          模组入口：Server 钩子 + Client HUD / F7 / F8 快捷键
+└─ scripts/whale/
+   ├─ json.lua          纯 Lua 的 JSON 编解码（沙箱里不保证有游戏自带的 json）
+   ├─ util.lua          U.g / U.try / U.call / U.now / 背包 / 容器 / 挑工具 / 世界状态
+   ├─ observe.lua       状态 → 给 AI 看的文字与结构化快照（配合 nearby.lua）
+   ├─ actor.lua         Actor Provider（本地主机、活着、非灵魂）
+   ├─ guard.lua         第二道闸：白名单 / 参数 / 目标 / 租约复核（规格见 guard_specs.lua）
+   ├─ actions.lua       动作分发器与 actions/*.lua（39 个对外动作状态机，BufferedAction + PushAction）
+   ├─ battle.lua        伴生/风筝战斗导演（配合 reflex.lua 保命反射与 character/）
+   ├─ bridge.lua        文件桥 + HTTP 桥 + 主循环 + 看门狗 + 思考暂停（DoStaticPeriodicTask）
+   └─ hud.lua           右上角 HUD 小窗（读 whale_hud.json）
 ```
 
 改模组时请顺手做两件事：
 
 1. `node tools/api-lookup.mjs <符号>` 核对一下要用的 API 在这个版本里真的存在；
-2. 跑 `node --test "tests/*.test.mjs"` 和 `node tools/lua-check.mjs`（前者会拦"直接读 GLOBAL"、
-   "拿 nil 判断成功"、"多返回值被截断"这类真机踩过的坑）。
+2. 跑 `npm test`（其中 `tests/lua/` 与 `tests/bridge/tool-parity.test.mjs` 会校验 Lua 语法、"直接读 GLOBAL"、"拿 nil 判断成功"、"多返回值被截断"以及双端契约一致性）。
 
 ## 两个"必须这么做"的机制（真机踩出来的，别再改回去）
 
@@ -505,7 +509,7 @@ doer.components.locomotor:PushAction(ba, true)
 -- 然后"按住动作键"
 pc = doer.components.playercontroller
 pc.remote_controls = pc.remote_controls or {}
-pc.remote_controls[CONTROL_ACTION] = true      -- 引擎自己在状态机里连砍
+pc.remote_controls[CONTROL_ACTION] = 0         -- 引擎自己在状态机里连砍（松开时置 nil）
 ```
 
 **反例（我们踩过）**：外部每 0.25 秒 `BufferedAction(...)` 重建再推 —— 重建会打断 SG，
