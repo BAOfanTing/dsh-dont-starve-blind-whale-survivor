@@ -1,6 +1,6 @@
 # 测试
 
-> 这里只写**真的跑得通**的命令。每条命令都在 M2.2.1 期间实际执行过（除标注 `NOT_RUN` 的）。
+> 最后更新同步至 PHASE-R / R8.5（插件 0.12.0 / 模组 0.41.3）。下方分阶段历史实测表仅作历史记录参考。
 
 ---
 
@@ -11,7 +11,7 @@ powershell -ExecutionPolicy Bypass -File test.ps1
 ```
 
 它会：找 Node → 缺 `fengari`/`luaparse` 就装上 → 跑全部单测。
-最后一次实测（SCIENCE-CHAIN + CHOP-CHAIN）：**824 passed / 0 failed，退出码 0**。
+最新一次全量实测：**1231+ passed / 0 failed，退出码 0**。
 
 等价的直接命令（不用 PowerShell 包装）：
 
@@ -27,17 +27,17 @@ node --test --test-force-exit "tests/*.test.mjs"
 
 ## 2. 测试分六类
 
-| 类 | 需要的环境 | 命令 | 数量 | 本次 |
+| 类 | 需要的环境 | 命令 | 数量 | 状态 |
 |---|---|---|---|---|
-| **单元 / 沙箱** | 只要 Node | `node --test tests/*.test.mjs` | **824** | ✅ 已跑（824/824，0 failed） |
-| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在 797 里 | ✅ 已跑 |
-| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在 797 里 | ✅ 已跑 |
-| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在 797 里 | ✅ 已跑 |
-| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6（含 `verify-live.mjs nearest`） | 脚本，不算进 797 | ⏳ 待进世界 |
-| **端到端（模型→游戏）** | 游戏 + DSH 会话 + API Key | 见 §6.5 | — | **NOT_RUN** |
+| **单元 / 沙箱** | 只要 Node | `npm test`（`node --test --test-force-exit "tests/*.test.mjs"`） | **1231+** | ✅ 全绿（0 failed） |
+| **Lua 语法与加载** | Node + fengari | `node --test tests/lua-mod.test.mjs` | 含在全量里 | ✅ 已跑 |
+| **MCP（真 HTTP + SSE）** | Node（起临时服务器） | `node --test tests/mcp.test.mjs` | 含在全量里 | ✅ 已跑 |
+| **文件桥** | Node（临时目录 + 假游戏） | `node --test tests/bridge.test.mjs` | 含在全量里 | ✅ 已跑 |
+| **真实游戏（RUNTIME）** | 游戏开着 + 模组装着 | 见 §6（`verify-live.mjs`） | 独立真机脚本 | ⏳ 需进世界 |
+| **端到端（模型→游戏）** | 游戏 + DSH 会话 + API Key | 见 §6.5 | — | 见 `docs/R8.5-WENDY-DEFENSE.md` §6 |
 
 趋势：479（M2.2.1）→ 531（SURVIVAL-02）→ 607（SURVIVAL-02.1）→ 735（TARGET-REFRESH 前）→
-**824（CHOP-CHAIN 11 + SCIENCE-CHAIN 14 等）**。测试只增不减。
+824（CHOP-CHAIN + SCIENCE-CHAIN）→ **1231+（PHASE-R / R8.5）**。测试只增不减。
 
 > **测试类型怎么分**（本轮新增的用例都在文件名/用例名里标了）：
 > · **UNIT** —— 不跑 Lua、不跑游戏：枚举/参数/核对/熔断/笔记文件（`stale-circuit`、`world-memory`
@@ -97,7 +97,7 @@ node --test --test-force-exit "tests/m2_*.test.mjs"    # 只跑 M2 系列
 用 `fetch` 发 JSON-RPC（`initialize` / `tools/list` / `tools/call`），并读 SSE 流。
 假游戏（`FakeGame`）会在临时目录里写/读状态、命令、结果文件。
 
-覆盖：协议握手、`tools/list` 暴露 39 个工具（3 本地 + 36 动作）且名字唯一、未开放工具被拒、
+覆盖：协议握手、`tools/list` 按执行模式暴露工具（Autopilot 为 5 个高层工具，Assisted/Manual 为全量 44 个 = 5 本地 + 39 动作）且名字唯一、未开放工具被拒、
 动作结果原样返回、`get_state` 读不到游戏时的提示。
 
 ---
@@ -159,10 +159,7 @@ node tools/verify-live.mjs nearest ripe_food_plant                          #   
 | 背包没食物时 `eat {"food":"carrot"}` | 回执列出"背包里现在真正能吃的" |
 | 远离科学机器 `craft {"recipe":"rope"}` / 站在旁边再试 | `recipe_locked`（提示先建科学机器）/ 成功 |
 
-⚠️ **`verify_move.mjs` 的 ⑤-3 会假报失败**：它"ack 前后各读一次位置"，而状态文件每秒才写一次、
-位置在帧里成段跳变，于是把一次 2 格跳变算成"Abort 后还在走"。
-**以 `verify_stop.mjs` 为准**（逐帧去重采样）：实测 Abort 后 6 帧位置不变 = 真的停住了。
-详见 `STATUS.md` §5 #12。
+> 注：早期独立的 `verify_move.mjs` 与 `verify_stop.mjs` 已统一并入 `tools/verify-live.mjs move` / `tools/verify-live.mjs stop`（逐帧去重采样）。
 
 ### 6.3.1 真机跑之前的三步准备（缺一步就会失败）
 
@@ -174,10 +171,10 @@ node tools/unpause.mjs
 (Get-Item "<save>\whale_state.json").LastWriteTime
 
 # 3) 改过 lib/ 下的 Node 代码，就必须重启 MCP，否则 tools/list 还是旧的
-node tools/m2_0_2_start_mcp.mjs        # 后台跑；然后 http://127.0.0.1:18090/status 应该 HTTP 200
+node tools/start-mcp.mjs               # 后台跑；然后 http://127.0.0.1:18090/status 应该 HTTP 200
 ```
 
-确认产品入口暴露的工具表（应该是 39 个、名字唯一；数量以 `ACTION_SPECS` 为准）：
+确认产品入口暴露的工具表（Assisted/Manual 应为 44 个 = 5 本地 + 39 动作，Autopilot 为 5 个高层工具；数量以 `TOOLS` 与 `ACTION_SPECS` 为准）：
 
 ```powershell
 # JSON-RPC：initialize → tools/list
@@ -346,6 +343,39 @@ npm run record -- --bridgeDir "<...\Cluster_2\Master\save" `
 | 真实游戏：MCP `tools/list` | **RUNTIME：通过**（旧版 7 个；0.39.0 应为 39 个，待复核） |
 | 真实游戏：**F8 内置 AI** | **NOT_RUN**（HUD 自报「没配 API Key」；无法在不接管键鼠的前提下模拟 F8） |
 | 端到端（真实 LLM 长跑） | **NOT_RUN** |
+
+### 7.1 点火烧树（`use action=LIGHT`）真机证据 —— 模组 0.41.3
+
+| 项 | 结论 |
+|---|---|
+| `use action=LIGHT` 点燃常青树 | **RUNTIME：通过**（连续 3 次回执「点燃了 常青树」并核对通过） |
+| `get_state` 显示 `着火中` | **RUNTIME：通过**（`#16 常青树(81,-42) 距0.2 可砍 着火中`） |
+| `get_state` 显示 `已烧焦` | **RUNTIME：通过**（同一棵树稍后变为 `已烧焦`） |
+| 木炭掉落 | **RUNTIME：通过**（`probe charcoal` → 20 格内 1 个；`pickup_nearest` 拿到 `charcoal+1`） |
+| 火势蔓延 | **RUNTIME：观察到**（火从树蔓延到树苗/草/浆果丛/种子） |
+| 点燃后自动撤离 | **UNIT + INTEGRATION：通过**（LIGHT-7/8；真机复测待进世界） |
+
+**本轮真机踩到的 4 个问题（都已修）**：
+
+1. **`guard.lua` 调用不存在的 `U.g` → 专用服务器崩溃**
+   `guard.lua:819: attempt to call field 'g' (a nil value)` 冒到引擎层，整个服务器进程终止、客户端掉线。
+   修：改用 `GLOBAL.EQUIPSLOTS`；并给 `bridge.lua` 的 `guard.validate` / `Whale.actions.Start` 都包上 `pcall`，
+   一条命令写错最多失败一次，不会拖垮存档。
+2. **`installMod` 只比文件大小 → 修复从未真正同步到游戏**
+   `sameTree` 用 `statSync().size` 判断"是否最新"，等长改动被漏判，游戏里一直跑旧代码。
+   修：逐文件 `Buffer.equals` 比对内容（`tests/install.test.mjs` 新增等长改动回归用例）。
+3. **`StopCoordinator.reset()` 在隔离时永不恢复**
+   `stop` 超时进入隔离后，即使租约文件已是 `released`、状态文件正常刷新，`reset()` 仍直接返回 false，
+   导致模型连 `harvest_nearest` 都发不出去（角色在青蛙围攻中掉到 13% 血也救不了）。
+   修：`reset()` 先调 `tryRecover()`（它会校验锁是否真的释放），锁还握着才继续拒绝。
+4. **点燃后站在原地 → 被蔓延的火烧死**
+   真机：温蒂点着树后不动，火顺着周围草/浆果丛烧过来，30 血被烧到 0，死亡变灵魂。
+   修：点火成功后自动进入 `fleeing` 阶段，背对火源撤到 6 格外（8 方向挑可站立点）；
+   走位**只推一次**（每 tick 重推会 Clear 掉寻路，和砍树那次的"顿一下"同一个坑）。
+
+> 附带修掉一个**测试夹具**缺陷：`tests/target-harness.mjs` 的 `get()` 调 `lua_getglobal` 后没配对 `lua_pop`，
+> 每读一个全局泄漏一格 Lua 栈，连读七八次就把 C 栈顶穿、报成 `stack overflow`——
+> 看起来像被测代码有递归，其实只是夹具漏了 pop。
 
 ---
 

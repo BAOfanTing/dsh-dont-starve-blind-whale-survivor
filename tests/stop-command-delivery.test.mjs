@@ -9,10 +9,24 @@ import { join } from 'node:path'
 
 import { GameBridge } from '../lib/bridge.js'
 
-test('STOP-DELIVERY-01: 下发前已 abort 的命令不会进入 pendingHttpCommands', async () => {
+/**
+ * ★ 真机环境下的测试隔离（2026-11-25 修正）：
+ *   这里原来写 `new GameBridge({ dirs: [tempDir] })` —— 但构造函数**没有** `dirs` 这个参数，
+ *   它会被忽略，于是 bridge 照常去翻本机真实存档目录。结果：
+ *     · 真实 `whale_result.json` 里残留的 `id` 恰好等于测试用的 `cmd-1`，
+ *       `call()` 轮询时读到它并**正常 resolve**，`assert.rejects` 就报 "Missing expected rejection"；
+ *     · 游戏开着时必红，关着时偶发绿，属于典型的测试污染。
+ *   正确做法：`bridgeDir` + `lockDir: true` —— 只认这一个目录，绝不碰真实存档。
+ */
+function isolatedBridge() {
   const tempDir = mkdtempSync(join(tmpdir(), 'bws-bridge-'))
-  const bridge = new GameBridge({ dirs: [tempDir] })
+  const bridge = new GameBridge({ bridgeDir: tempDir, lockDir: true })
   bridge.httpConnected = true
+  return bridge
+}
+
+test('STOP-DELIVERY-01: 下发前已 abort 的命令不会进入 pendingHttpCommands', async () => {
+  const bridge = isolatedBridge()
 
   const controller = new AbortController()
   controller.abort()
@@ -29,9 +43,7 @@ test('STOP-DELIVERY-01: 下发前已 abort 的命令不会进入 pendingHttpComm
 })
 
 test('STOP-DELIVERY-02: 排队中的 HTTP 命令被 abort 时立即从 pendingHttpCommands 剔除，不投递给 Lua', async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), 'bws-bridge-'))
-  const bridge = new GameBridge({ dirs: [tempDir] })
-  bridge.httpConnected = true
+  const bridge = isolatedBridge()
 
   const controller = new AbortController()
   const commandId = 'cmd-test-abort-delivery-02'
@@ -58,9 +70,7 @@ test('STOP-DELIVERY-02: 排队中的 HTTP 命令被 abort 时立即从 pendingHt
 })
 
 test('STOP-DELIVERY-03: 正常命令与已取消命令混合时，仅清理已取消命令', async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), 'bws-bridge-'))
-  const bridge = new GameBridge({ dirs: [tempDir] })
-  bridge.httpConnected = true
+  const bridge = isolatedBridge()
 
   const controller1 = new AbortController()
   const controller2 = new AbortController()

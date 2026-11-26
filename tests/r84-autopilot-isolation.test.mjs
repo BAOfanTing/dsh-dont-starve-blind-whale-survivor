@@ -96,14 +96,15 @@ test('TEST-06: Assisted / Manual 不按模式拦截原子动作（不是权限�
   }
 })
 
-test('TEST-07: buildInstructions(autopilot) 用高层驱动手册，且删掉冲突文案', () => {
+test('TEST-07: buildInstructions(autopilot) 用高层驱动手册，不硬塞原子向主攻略与冲突文案', () => {
   const auto = buildInstructions({ main: '主攻略正文' }, 'autopilot')
   assert.match(auto, /advance_task/, '要讲 advance_task')
   assert.match(auto, /budget_exhausted|stop_reason/, '要教怎么读回执')
   assert.ok(!/能用的动作共\s*\d+\s*个/.test(auto), '不再展示完整动作清单')
   assert.ok(!auto.includes('完整原子动作工具集'), '不得再说"拥有完整原子工具集"')
   assert.ok(!auto.includes('任务看板只是建议'), '不得再说"任务看板只是建议"')
-  assert.ok(auto.includes('主攻略正文'), '主攻略仍要带上')
+  assert.ok(!auto.includes('主攻略正文'), 'Autopilot 不再硬塞原子向主攻略')
+  assert.ok(!auto.includes('## 游戏常识'), 'Autopilot 不包含游戏常识/主攻略段')
 })
 
 test('TEST-08: buildInstructions(assisted/manual) 保留完整原子动作手册', () => {

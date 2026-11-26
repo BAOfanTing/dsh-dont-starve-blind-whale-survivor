@@ -1,6 +1,6 @@
 # 当前状态
 
-> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 **0.41.3**)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)｜完成统一任务执行核心可靠性与 F8/DSH 接入一致性治理 (Phase R.7.4)｜完成 Autopilot 高层任务驱动与原子工具收口 (Phase R8.4)｜**完成温蒂伴生战斗闭环（蜘蛛/青蛙防御、召唤交接、avoid_melee、花朵回收，Phase R8.5）**｜全量自动化测试 **1225/1225 全部通过** (0 失败、0 跳过)｜真实游戏验收另见 `docs/R8.5-WENDY-DEFENSE.md` §6｜**以代码和真实运行状态为准**，不凭计划推断。
+> 最后更新：PHASE-R 治理阶段 (插件 0.12.0 / 模组 **0.41.3**)｜完成 Task Board 与 Skill Executor 架构收敛 (Phase R.2)｜完成 World Memory schema 规范与自愈升级 (Phase R.3)｜完成 Planner 决策仲裁与 plan.js 纯粹化 (Phase R.4)｜完成 Task 身份与技能实例生命周期重构 (Phase R.6)｜完成自主执行运行时集成 (Phase R.7)｜完成执行安全与生存稳定性收尾 (Phase R.7.2)｜完成复合执行链控制权与运行时可靠性治理 (Phase R.7.3)｜完成统一任务执行核心可靠性与 F8/DSH 接入一致性治理 (Phase R.7.4)｜完成 Autopilot 高层任务驱动与原子工具收口 (Phase R8.4)｜**完成温蒂伴生战斗闭环（蜘蛛/青蛙防御、召唤交接、avoid_melee、花朵回收，Phase R8.5）**｜全量自动化测试 **1231+ 项全部通过** (0 失败、0 跳过)｜真实游戏验收另见 `docs/R8.5-WENDY-DEFENSE.md` §6｜**以代码和真实运行状态为准**，不凭计划推断。
 
 ---
 
@@ -59,7 +59,7 @@ DSH MCP:     模型 → MCP Client → executeTool() → runTool() → executeTo
 
 | 位置 | 版本 | 含义 |
 |---|---|---|
-| `DontStarveWhaleSurvivor/modinfo.lua` | **0.41.1** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
+| `DontStarveWhaleSurvivor/modinfo.lua` | **0.41.3** | **游戏内 Lua 模组的版本**。每改一次模组 Lua 就升一位。 |
 | `package.json` | **0.12.0** | **DSH 插件（Node 侧）的版本**。跟着插件功能走。 |
 
 两个版本号描述两个交付物：模组装进游戏 `mods/`，插件装进 DSH。给 AI 报告的状态以模组版本为准。
@@ -208,7 +208,7 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 
 ## 2. 现在能做什么
 
-### 2.1 模型可见的工具（43 个 = 5 本地 + 38 动作）
+### 2.1 模型可见的工具（44 个 = 5 本地 + 39 动作；Autopilot 模式按白名单收敛为 5 个高层工具）
 
 > 权威清单：`lib/actions/specs/*.js` 的 `ACTION_SPECS`。`OPEN_ACTIONS`、`TOOLS`、`RULES` 均从它派生，有 `tool-parity` / `prompt-parity` 测试保障。
 
@@ -340,7 +340,7 @@ sleep                          在帐篷/睡袋里睡一觉（回血回理智）
 - `gather_resources`：按真实缺口采集；中间产物依赖（缺 boards 先补 log 再 craft，不会一直砍树）；超出预算失败。
 
 ### 7.4 G5 集成与日志
-- `run_skill` 作为**本地工具**暴露（`TOOLS` 43 个 = 5 本地 + 38 动作）；内部仍走唯一 dispatcher，并对 `build` 复用 `guardBuild` 家乡门槛。
+- `run_skill` 作为**本地工具**暴露（`TOOLS` 44 个 = 5 本地 + 39 动作）；内部仍走唯一 dispatcher，并对 `build` 复用 `guardBuild` 家乡门槛。
 - F8（`agent.js`→`callTool`→`runTool`）与 DSH（`mcp-server`→`executeTool`→`runTool`）**共用同一 `ctx.planner` 与同一 dispatcher 链**，`run_skill` 两者都能用。
 - 日志统一：`[PLANNER] DECISION/GOAL_SELECTED/TASK_SELECTED/TASK_BLOCKED`（decision 输出）与 `[SKILL] START/RESUME/STEP_START/ACTION_DISPATCH/STEP_VERIFIED/STEP_FAILED/PAUSED/FINISHED`（executor 输出），均带 world_key / task_id / skill_id / step_id / 进度 / 结果。
 

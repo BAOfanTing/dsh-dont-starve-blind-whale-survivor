@@ -20,8 +20,8 @@ const LABELS = {
   baseUrl: ['ai', '模型接口地址'],
   model: ['ai', '内置 AI 用哪个模型'],
   aiMaxTokens: ['ai', '内置 AI 每次最多输出多少 token'],
-  freezeTime: ['play', '思考时暂停世界'],
-  idleSeconds: ['play', '多久没动作就暂停（秒）'],
+  freezeTime: ['play', '思考超时暂停世界'],
+  idleSeconds: ['play', '思考多少秒后暂停世界'],
   extraInstructions: ['play', '额外要求'],
   mainGuide: ['guide', '攻略·主攻略'],
   surviveGuide: ['guide', '攻略·生存'],
@@ -36,7 +36,7 @@ const LABELS = {
   autoInstallMod: ['install', '自动安装和更新饥荒模组'],
   sessionLogEnabled: ['session', '自动写会话日志（覆盖写）'],
   sessionLogDir: ['install', '日志目录（留空用插件目录下 latestLogs）'],
-  executionMode: ['play', '执行模式（Autopilot/Assisted/Manual）'],
+  executionMode: ['play', '执行模式（Assisted/Autopilot/Manual）'],
 }
 
 const GROUPS = [
@@ -63,6 +63,7 @@ export async function buildFields() {
       key,
       group: label[0],
       label: label[1],
+      ...(label[2] ? { hidden: true } : {}),
       kind,
       ...(meta.min !== undefined ? { min: meta.min } : {}),
       ...(meta.max !== undefined ? { max: meta.max } : {}),
@@ -160,7 +161,7 @@ window.__ModuleLoader__.load({
 \t\t\t\tsetCleared({});
 \t\t\t}, [revision]);
 
-\t\t\tif (props.view === "summary") return "端口、游戏目录、思考时暂停、攻略和会话预设等设置";
+\t\t\tif (props.view === "summary") return "端口、游戏目录、执行模式、攻略和会话预设等设置";
 \t\t\tif (!form) return h("p", { style: hint }, "DSH 还没把这个插件的设置交给页面：确认插件在运行，或者重启一次 DSH。");
 \t\t\tif (state.status === "loading") return h("p", { style: hint }, "正在读取设置…");
 \t\t\tif (state.status !== "ready" || !state.value) return h("p", { style: hint }, "这个插件的设置现在读不到（DSH 没有对这个页面开放它）。");
@@ -213,7 +214,7 @@ window.__ModuleLoader__.load({
 \t\t\treturn h("div", null,
 \t\t\t\tGROUPS.map(([id, title]) => h("section", { key: id, style: box },
 \t\t\t\t\th("h4", { style: { margin: "0 0 4px" } }, title),
-\t\t\t\t\tFIELDS.filter((f) => f.group === id).map(row))),
+\t\t\t\t\tFIELDS.filter((f) => f.group === id && !f.hidden).map(row))),
 \t\t\t\th("div", { style: { display: "flex", alignItems: "center", gap: 12, position: "sticky", bottom: 0, padding: "8px 0" } },
 \t\t\t\t\th("button", { type: "button", style: button, disabled: disabled || changed.length === 0 || errors.length > 0, onClick: save },
 \t\t\t\t\t\tsaving ? "保存中…" : changed.length > 0 ? "保存 " + changed.length + " 项改动" : "保存"),

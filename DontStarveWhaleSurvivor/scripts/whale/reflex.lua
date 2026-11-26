@@ -1053,6 +1053,9 @@ local function sync_inflight()
     end
 end
 
+local companion_state
+local companion_log
+
 local function confirm_pending(p)
     if pending == nil then return end
     local job = Whale.job
@@ -1209,7 +1212,7 @@ local COMPANION_FLOWER_RADIUS = 16
 local COMPANION_LOG_GAP = 20
 
 --- 伴生状态（唯一来源仍是 character/companion.lua）
-local function companion_state(p)
+companion_state = function(p)
     local ch = Whale ~= nil and Whale.character or nil
     if ch == nil or ch.GetCompanionState == nil then return nil end
     local ok, st = pcall(function() return ch.GetCompanionState(p) end)
@@ -1219,7 +1222,7 @@ end
 
 local companion_log_at = {}
 
-local function companion_log(tag, text)
+companion_log = function(tag, text)
     local now = U.now()
     local prev = companion_log_at[tag]
     if prev ~= nil and (now - prev) < COMPANION_LOG_GAP then return end

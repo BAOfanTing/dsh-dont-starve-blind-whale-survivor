@@ -265,8 +265,10 @@ test('TN-12：Node 白名单与 Lua 白名单逐条一致（新增动作不许�
 test('TN-13：新动作**没有**自己的执行通道（仍然过一个 guard + 一个命令出口）', () => {
   const bridge = readFileSync(join(MOD, 'scripts', 'whale', 'bridge.lua'), 'utf8')
   // 仍然只有一条路：guard.validate → actions.Start
-  assert.match(bridge, /guard\.validate\(cmd\)/, 'bridge 必须还是先过 guard')
-  assert.match(bridge, /Whale\.actions\.Start\(/, '动作仍然由 actions.Start 起')
+  // 注意：两者现在都包在 pcall 里（防单个命令的 Lua 错误把服务器带崩），
+  // 所以这里只断言"仍然经由它们"，不限定是否被 pcall 包裹。
+  assert.match(bridge, /guard\.validate/, 'bridge 必须还是先过 guard')
+  assert.match(bridge, /Whale\.actions\.Start/, '动作仍然由 actions.Start 起')
   // 新动作的类别只是**透传**给执行层，不做特殊分支
   assert.match(bridge, /target_kind = cmd\.args ~= nil and cmd\.args\.target_kind/)
   // bridge 里不能出现"绕过 guard 直接执行新动作"的分支

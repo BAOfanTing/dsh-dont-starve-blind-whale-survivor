@@ -456,6 +456,17 @@ local function describe(ent, actor, category, item_kind)
         if ok and percent ~= nil then block.fuel_percent = math.floor(percent * 100) end
     end
 
+    local burn = comp(ent, "burnable")
+    if burn ~= nil or has_tag(ent, "burnt") or has_tag(ent, "fire") then
+        local ok_b, burning = pcall(function() return burn ~= nil and burn:IsBurning() == true end)
+        if (ok_b and burning == true) or (has_tag(ent, "fire") and comp(ent, "fueled") == nil) then
+            block.is_burning = true
+        end
+        if has_tag(ent, "burnt") then
+            block.is_burnt = true
+        end
+    end
+
     local stewer = comp(ent, "stewer")
     if stewer ~= nil then
         local cooking = false
@@ -557,6 +568,8 @@ local function entry_view(entry)
         is_harvestable = b.is_harvestable,
         harvest_ready = b.harvest_ready,
         work_action = b.work_action,
+        is_burning = b.is_burning,
+        is_burnt = b.is_burnt,
     }
 end
 
@@ -619,6 +632,12 @@ local function compute_delta(full, kept_set, key)
             if before.work_action ~= nil and now.work_action ~= nil
                 and before.work_action ~= now.work_action then
                 fields.work_action = { from = before.work_action, to = now.work_action }
+            end
+            if (before.is_burning == true) ~= (now.is_burning == true) then
+                fields.is_burning = { from = before.is_burning == true, to = now.is_burning == true }
+            end
+            if (before.is_burnt == true) ~= (now.is_burnt == true) then
+                fields.is_burnt = { from = before.is_burnt == true, to = now.is_burnt == true }
             end
             local field_count = 0
             for _ in pairs(fields) do field_count = field_count + 1 end

@@ -5,6 +5,7 @@ local tonumber = GLOBAL.tonumber or tonumber
 local tostring = tostring or (GLOBAL and GLOBAL.tostring)
 
 local ACTIONS = GLOBAL.ACTIONS
+local EQUIPSLOTS = GLOBAL.EQUIPSLOTS
 local Vector3 = GLOBAL.Vector3
 local BufferedAction = GLOBAL.BufferedAction
 
@@ -21,13 +22,16 @@ local push = A.push
 local find_container = A.find_container
 local find_by_name = A.find_by_name
 local snapshot_counts = A.snapshot_counts
+local tile_away = A.tile_away
+local walk_to = A.walk_to
+local hold_control = A.hold_control
 
 --- 通用交互：对目标尝试这几个动作之一
 --- 只允许这几个（不给模型任意 ACTIONS 名字）
 ---
 --- ⚠️ 这份名单**必须是游戏 ACTIONS 表里真实存在的**。
 --- 真机核对（docs/reference/动作表.md，由 tools/dump-reference.mjs 从游戏本体导出）：
----   ✅ ACTIVATE / ACTIVATE_CONTAINER / READ / PICKUP / PICK / OPEN_CRAFTING / CLOSESPELLBOOK
+---   ✅ ACTIVATE / ACTIVATE_CONTAINER / READ / PICKUP / PICK / OPEN_CRAFTING / CLOSESPELLBOOK / LIGHT
 ---   ❌ OPEN / CLOSE / USE / TAKEITEM —— **游戏里没有这几个动作**
 --- 旧实现的白名单里写了 OPEN/USE/TAKEITEM/CLOSE，照抄会得到"动作不存在"，已修正。
 local USE_ALLOWED = {
@@ -38,8 +42,110 @@ local USE_ALLOWED = {
     "READ",               -- 读书
     "PICKUP",             -- 捡起
     "OPEN_CRAFTING",      -- 打开制作台
+    "LIGHT",              -- 点火/点燃（需手里或背包里有火把等可点火物品）
 }
 A.USE_ALLOWED = USE_ALLOWED
+
+local function is_usable_lighter(item)
+    if item == nil or not item:IsValid() then return false end
+    if item.components == nil or item.components.lighter == nil then return false end
+    local fueled = item.components.fueled
+    if fueled ~= nil then
+        local ok_e, empty = pcall(function() return fueled:IsEmpty() end)
+        if ok_e and empty == true then return false end
+    end
+    return true
+end
+
+local function find_lighter(p)
+    local inv = p ~= nil and p.components ~= nil and p.components.inventory or nil
+    if inv == nil then return nil end
+    local hand = inv:GetEquippedItem(EQUIPSLOTS.HANDS)
+    if is_usable_lighter(hand) then return hand end
+    local best, best_score = nil, -1
+    inv:ForEachItem(function(item)
+        if not is_usable_lighter(item) then return end
+        local score = 1
+        if item.prefab == "torch" then score = score + 10 end
+        local fueled = item.components.fueled
+        if fueled ~= nil and fueled.GetPercent ~= nil then
+            local ok_p, pct = pcall(function() return fueled:GetPercent() end)
+            if ok_p and type(pct) == "number" then score = score + pct end
+        end
+        if score > best_score then
+            best, best_score = item, score
+        end
+    end)
+    return best
+end
+
+local function target_is_burning(target)
+    if target == nil or not target:IsValid() then return false end
+    local burn = target.components ~= nil and target.components.burnable or nil
+    if burn ~= nil then
+        local ok_b, burning = pcall(function() return burn:IsBurning() end)
+        if ok_b and burning == true then return true end
+    end
+    return target:HasTag("fire") == true
+end
+
+local function check_ignitable(target)
+    if target == nil or not target:IsValid() then return false, "entity_gone" end
+    if target:HasTag("burnt") then return false, "already_burnt" end
+    if target_is_burning(target) then return false, "already_burning" end
+    if target:HasTag("fueldepleted") and not target:HasTag("burnableignorefuel") then
+        return false, "target_not_ignitable"
+    end
+    local burn = target.components ~= nil and target.components.burnable or nil
+    if target:HasTag("canlight") or (burn ~= nil and burn.canlight ~= false) then
+        return true, nil
+    end
+    return false, "target_not_ignitable"
+end
+
+A.find_lighter = find_lighter
+A.check_ignitable = check_ignitable
+
+--- 点火后必须撤离的安全距离（格）。
+--- ★ 真机事故（2026-11-26）：用 use action=LIGHT 点燃常青树后，角色**站在原地不动**，
+---   火顺着周围的草/浆果丛连成片烧过来，温蒂从 30 血被烧到 0 —— 直接烧死变灵魂。
+---   原版玩家点完火会立刻跑开，这不是"操作习惯"，是**点火这件事的必要组成部分**：
+---   燃烧会向相邻可燃物传播（propagator），而角色自己也会被火烧。
+---   所以撤离写在执行层里，不依赖模型每次都记得。
+local LIGHT_FLEE_TILES = 6
+
+--- 找一个"背对火堆、能站人"的撤离点。
+--- 优先正后方（远离目标方向）；8 方向里挑第一个可站立的，避免直接跳海里。
+local function flee_point_from(p, target, tiles)
+    local px, _, pz = U.pos(p)
+    local tx, _, tz = U.pos(target)
+    if px == nil or pz == nil then return nil end
+    if tx == nil or tz == nil then return nil end
+    local dx, dz = px - tx, pz - tz
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len < 0.001 then
+        -- 站在火点正中心：退化成固定方向（朝西南，避开常见营地朝向）
+        dx, dz, len = -1, 1, math.sqrt(2)
+    end
+    dx, dz = dx / len, dz / len
+    local dist = tiles * U.TILE
+    -- 先试正后方，再左右各偏 45°，最后试正侧向
+    local angles = { 0, 0.785, -0.785, 1.571, -1.571, 2.356, -2.356, 3.1416 }
+    for _, a in ipairs(angles) do
+        local ca, sa = math.cos(a), math.sin(a)
+        local nx = dx * ca - dz * sa
+        local nz = dx * sa + dz * ca
+        local wx, wz = px + nx * dist, pz + nz * dist
+        if U.is_passable(wx, wz) then
+            local gx, gz = U.tile_of(wx, wz)
+            return gx, gz
+        end
+    end
+    return nil
+end
+
+A.flee_point_from = flee_point_from
+A.LIGHT_FLEE_TILES = LIGHT_FLEE_TILES
 
 JOBS.use = function(j, p)
     local ctx = j.ctx or {}
@@ -69,12 +175,57 @@ JOBS.use = function(j, p)
         j.data.label = U.pretty(target)
         j.data.phase_start = U.now()
         j.data.before = snapshot_counts(p)
-        push(p, BufferedAction(p, target, ACTIONS[chosen], nil))
+
+        local invobject = nil
+        if chosen == "LIGHT" then
+            local ok_ign, why_ign = check_ignitable(target)
+            if not ok_ign then
+                if why_ign == "already_burnt" then
+                    return "fail", "already_burnt: " .. j.data.label .. " 已经烧焦了"
+                elseif why_ign == "already_burning" then
+                    return "fail", "already_burning: " .. j.data.label .. " 已经在燃烧了"
+                end
+                return "fail", "target_not_ignitable: " .. j.data.label .. " 不能被点燃"
+            end
+            local lighter = find_lighter(p)
+            if lighter == nil then
+                return "fail", "no_lighter: 手里和背包里没有火把等点火物品（先 craft torch）"
+            end
+            if lighter.components ~= nil and lighter.components.equippable ~= nil and A.equip_if_needed ~= nil then
+                A.equip_if_needed(p, lighter)
+            end
+            invobject = lighter
+        end
+
+        push(p, BufferedAction(p, target, ACTIONS[chosen], invobject))
         j.step = "acting"
         return "run"
     end
 
     if j.step == "acting" then
+        if j.data.action_id == "LIGHT" then
+            -- ① 还没确认点着：等游戏把它烧起来
+            local lit = (not target:IsValid()) or target_is_burning(target) or target:HasTag("burnt")
+            if lit then
+                j.data.ignited = true
+                j.data.ignited_at = U.now()
+                -- ② 立刻规划撤离：点着火之后人就该离开，别等火烧过来
+                local gx, gz = flee_point_from(p, target, LIGHT_FLEE_TILES)
+                if gx ~= nil then
+                    j.data.flee_tx, j.data.flee_tz = gx, gz
+                    j.data.flee_pushed = true
+                    walk_to(p, gx, gz)
+                    j.step = "fleeing"
+                    return "run"
+                end
+                -- 找不到可站立点（被围死/贴海）：原地报成功，但明确告诉模型赶紧自己跑
+                return "done", string.format("点燃了 %s（⚠ 四周没有可撤的空地，立刻 move_to 离开，别站在火边）", j.data.label)
+            end
+            if U.now() - j.data.phase_start > 10 then
+                return "fail", string.format("light_failed: 没能点燃 %s（可能太远、被挡住或无法点燃）", j.data.label)
+            end
+            return "run"
+        end
         local after = snapshot_counts(p)
         -- 交互成功的判据：背包变了 / 目标消失 / 超时前游戏没报错
         local changed = false
@@ -89,6 +240,36 @@ JOBS.use = function(j, p)
         end
         if U.now() - j.data.phase_start > 8 then
             return "done", string.format("对 %s 用了 %s（没有可见变化）", j.data.label, j.data.action_id)
+        end
+        return "run"
+    end
+
+    -- ★ 点火后的撤离阶段（真机事故 2026-11-26：点完火站在原地，被蔓延的火烧死）
+    if j.step == "fleeing" then
+        local away = (j.data.flee_tx ~= nil) and tile_away(p, j.data.flee_tx, j.data.flee_tz) or 0
+        local burning = false
+        if p.components ~= nil and p.components.burnable ~= nil then
+            local ok_b, b = pcall(function() return p.components.burnable:IsBurning() end)
+            burning = ok_b and b == true
+        end
+        local too_long = U.now() - (j.data.ignited_at or j.data.phase_start) > 8
+        if away <= 1.5 or too_long or burning then
+            hold_control(p, false)
+            local tail = ""
+            if burning then
+                tail = "（⚠ 你身上着火了，快跑/找水）"
+            elseif away > 1.5 then
+                tail = string.format("（只撤到 %.1f 格，可能被挡住，注意别站火边）", away)
+            end
+            return "done", string.format("点燃了 %s，并撤到 %.0f 格外%s",
+                j.data.label, math.max(0, LIGHT_FLEE_TILES - away), tail)
+        end
+        -- ★ 只推一次走位，别每 tick 重推：`loco:PushAction`/GoToPoint 会 Clear 掉正在走的寻路，
+        --   每帧重推等于一直把路取消掉（和砍树那次的"顿一下"同一个坑），
+        --   而且在测试桩里还会和 client_walk 互相回调打成栈溢出。
+        if not j.data.flee_pushed then
+            j.data.flee_pushed = true
+            walk_to(p, j.data.flee_tx, j.data.flee_tz)
         end
         return "run"
     end

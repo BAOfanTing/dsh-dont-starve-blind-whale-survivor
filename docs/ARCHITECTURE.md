@@ -3,7 +3,7 @@
 > 本文只描述**现在真正在跑**的系统。历史架构（A 栈的 TypeScript bridge / mcp-server / agent、
 > HTTP 18788 那一套）已全部归档，见 [`archive/README.md`](archive/README.md)。
 >
-> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.41.1）+ `lib/`（DSH 插件，0.12.0）
+> 对应代码：`DontStarveWhaleSurvivor/`（Lua 模组，0.41.3）+ `lib/`（DSH 插件，0.12.0）
 
 ---
 
@@ -23,7 +23,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  ① DSH 会话：模型 → MCP 工具（Streamable HTTP + SSE）                                      │
 │  ② 游戏里按 F8：插件内置 AI → 同一套工具定义                                               │
 └───────────────────────────────────────┬─────────────────────────────────────────────────┘
-                                        │  工具 = lib/tools.js 的 TOOLS（43 个 = 5 本地 + 38 动作）
+                                        │  工具 = lib/tools.js 的 TOOLS（44 个 = 5 本地 + 39 动作）
                                         ▼
 ┌──────────────────────────── DSH 插件进程（Node，lib/）────────────────────────────────────┐
 │                                                                                          │
@@ -32,7 +32,7 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │     └─ 动作      → dispatcher.dispatch()  ────────────────┐                               │
 │                                                            │                               │
 │  dispatcher.js  ①参数与快照校验 ②拿控制租约 ③写命令 ④等结果 ⑤核对真实状态  ◄── 唯一允许    │
-│                 （白名单：ACTION_SPECS 的全部 38 个动作）                      下发动作的地方 │
+│                 （白名单：ACTION_SPECS 的全部 39 个动作）                      下发动作的地方 │
 │                                                                                          │
 │  planner/       决策系统：planner-core (决策树) / task-board (任务调度) /                  │
 │                 decision-arbiter (统一决策出口) / world-memory (按世界持久化)             │
@@ -61,8 +61,8 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 │  bridge.lua     读命令、写结果、维护租约回执（含 job_cleared）                             │
 │  guard.lua      ★ 第二道闸：白名单 + 参数 + 目标 + 租约 + 代际 + 权限，逐条复核             │
 │  native.lua     ★ 原版能力薄封装：真实照明 / 原版 RunAway 几何 / 玩家 ATTACK 动作            │
-│  actions.lua    动作实现：BufferedAction + locomotor:PushAction（和玩家点鼠标同一条路）     │
-│  chores.lua     ★ 内部保命与家务（不直接暴露给模型，Node 侧通过 dispatcher 下发原子动作）      │
+│  actions.lua    动作分发器（scripts/whale/actions/*.lua）：BufferedAction + locomotor:PushAction │
+│  battle.lua     伴生/风筝战斗导演（蜘蛛/猎犬/青蛙策略、防御交接与脱离保护）                 │
 │  macros.lua     宏（仍在，但**不对模型开放**）                                             │
 │  reflex.lua     保命反射：血少/天黑/火灭/贴脸时自己动手；解决不了就上报紧急需求               │
 │  hud.lua        游戏内 HUD；config.lua 配置（夹到安全区间）                                │
@@ -138,11 +138,11 @@ DSH 不能直接把鼠标点进游戏，饥荒的 Lua 模组也不能监听端�
 
 ---
 
-## 7. 工具表面（43 个）与共用链路
+## 7. 工具表面（44 个；Autopilot 模式下暴露 5 个高层工具）与共用链路
 
 ```
 TOOLS = [advance_task, get_state, get_guide, update_notes, run_skill]   ← 本地：调度 / 读快照 / 写笔记 / 复合技能
-      + ACTION_SPECS 的 38 个动作                                       ← 必须过 dispatcher
+      + ACTION_SPECS 的 39 个动作                                       ← 必须过 dispatcher
 ```
 
 动作按领域放在 `lib/actions/specs/`：
@@ -150,11 +150,11 @@ TOOLS = [advance_task, get_state, get_guide, update_notes, run_skill]   ← 本�
 | 文件 | 动作 | 数量 |
 |---|---|---|
 | `movement.js` | move_to / stop / seek | 3 |
-| gathering.js | pickup_nearest / pickup_food / harvest_nearest / chop_nearest / mine_nearest / pickup / harvest / gather / gather_area / chop / mine / dig / hammer | 13 |
+| `gathering.js` | pickup_nearest / pickup_food / harvest_nearest / chop_nearest / mine_nearest / pickup / harvest / gather / gather_area / chop / mine / dig / hammer | 13 |
 | `crafting.js` | craft / build / cook | 3 |
 | `survival.js` | eat / equip / unequip / drop / fuel / wait / sleep | 7 |
 | `interaction.js` | use / container_take / container_put / give | 4 |
-| `combat.js` | attack / kill / fight_spider | 3 |
+| `combat.js` | attack / kill / fight_spider / summon_companion | 4 |
 | `info.js` | recipes / lookup / probe / inspect | 4 |
 | `social.js` | say | 1 |
 
@@ -162,7 +162,7 @@ TOOLS = [advance_task, get_state, get_guide, update_notes, run_skill]   ← 本�
 所有 `verify()` 都基于它做前后比对。
 
 - 这 5 个**本地工具**不进 dispatcher 的原子动作白名单：`get_state` / `get_guide` 只读快照与攻略；
-  **`update_notes` 会写本地文件**（覆盖 `~/.dsh/plugins-data/…/notes.md`，空字符串 = 清空）；
+  **`update_notes` 会写本地文件**（按世界写入 `~/.dsh/plugins-data/…/notes/<world-key>.md`，取不到 `world_key` 时退回 `notes.md`，空字符串 = 清空）；
   `advance_task` / `run_skill` 是调度与复合技能入口，内部再经 dispatcher 下发原子动作。
 - F8 的 `agent.js` 和 MCP 的 `mcp-server.js` 都调**同一个** `executeTool()` 和**同一份** `TOOLS`。
 - 所以"F8 能做的事"和"MCP 能做的事"必然一致，不存在两条链路。
@@ -216,7 +216,7 @@ dispatch({tool, args, owner})
 顺序（任一不满足就 `Report(false, reason)`，**一条动作都不执行**）：
 
 1. 协议/版本、`command_id` 存在且不重复（防重放）
-2. 动作在白名单里（`move_to` / `stop` / `pickup` / `harvest`）
+2. 动作在白名单里（`guard_specs.lua` 的 39 个动作，与 `ACTION_SPECS` 逐条对齐）
 3. 命令没过期、租约有效（`lease_id` / `generation` / `authority_epoch` / `runtime_id`）
 4. 这个角色归我管（本地主机、活着、非灵魂）、没有别的任务在跑
 5. 参数逐个校验（类型/范围/长度/格式），**多余参数直接拒**
@@ -465,7 +465,7 @@ flowchart TD
 ### 17.4 模块化扩展规范
 新增技能只需在 `lib/skills/` 下实现一个 `{id,name,preconditions,steps[{id,title,isDone,nextAction}],completion,retry_policy,timeout_policy}` 并在 `index.js` 注册一行；不修改 Planner。`fight_spider` 继续用 Lua Battle Director，不在 Node 重写蜘蛛战斗。
 
-### 17.3.2 自主执行运行时集成（Phase R.7 重构）
+### 17.4.1 自主执行运行时集成（Phase R.7 重构）
 引入 `WorldRuntimeManager` 作为统一的世界级执行上下文管理器，接通 MCP 调度链路。
 
 - **WorldRuntimeManager**：实现世界级并发互斥锁（Mutex），保证单角色同一时间仅推进一个任务，隔离不同世界的实例记忆。
@@ -473,7 +473,7 @@ flowchart TD
 - **执行模式控制**：通过 `executionMode` 实现 `Autopilot`（持续自主：模型只制定高层目标，用 `advance_task` 推进任务看板，原子动作由内部执行链执行）、`Assisted`（用户目标驱动，模型用完整原子动作）与 `Manual`（单次指令，模型用完整原子动作）三种运行模式。
 - **R8.4 工具收口**：`toolList(mode)` 对 Autopilot 只暴露 `advance_task / get_state / get_guide / update_notes / stop`（`AUTOPILOT_TOOL_WHITELIST`）；Assisted/Manual 暴露完整工具集。`executeTool` 在进入 `dispatcher` 之前再做一道纵深防御：Autopilot 下直调原子动作/`run_skill` 回固定文案 `Autopilot 模式下不允许模型直接调用原子动作，请使用 advance_task 推进当前 Task Board 任务。`。该闸门只作用于**模型直调层**，`SkillExecutor → Dispatcher` 的内部派发（internal）不经过 `executeTool`，绝不被误伤。
 
-### 17.4 与执行通道的关系（安全边界不变）
+### 17.4.2 与执行通道的关系（安全边界不变）
 技能**不新建执行系统**：移动/采集/制作仍复用既有原子动作与 dispatcher → Control Lease → Lua Guard → `BufferedAction→PushAction`。Phase G-R7 只新增「编排层」，未放宽任何校验、未加第二条命令通道。F8/DSH 依旧共用同一 `executeTool()` 与 `TOOLS`。
 
 ### 17.5 执行安全与生存稳定性机制（Phase R.7.2 收尾）

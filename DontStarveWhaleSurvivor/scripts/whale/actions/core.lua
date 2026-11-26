@@ -75,7 +75,7 @@ end
 ---   其余非 defense 指令 → Reflex 动作     : 一律不可打断（保留历史 P0 保护）
 ---
 --- @return ok(boolean), reason(string|nil), detail(table|nil)
-local function may_preempt(cur, new_id, args)
+local function may_preempt(cur, new_id, args, new_name)
     if cur == nil then return true, nil end
 
     if new_id == A.DEFENSE_ID then
@@ -104,9 +104,12 @@ local function may_preempt(cur, new_id, args)
         return true, "preempt_ordinary"
     end
 
-    -- 非防御指令：Reflex 动作一律不可被打断（保留历史 P0 保护，绝不放开）
+    -- 非防御指令：Reflex 与正在进行的伴生防御不被普通动作打断（stop 显式中止除外）
     if cur.cmd_id == "reflex" then
         return false, "reflex_active: 正在保命抢占中，请勿打断 Reflex"
+    end
+    if cur.cmd_id == A.DEFENSE_ID and new_name ~= "stop" then
+        return false, "defense_active: 正在进行伴生防御，请稍候或先 stop"
     end
     return true, nil
 end
@@ -566,6 +569,13 @@ function A.run_sub(m, name, args)
     return status, text
 end
 
+local INSTANT_NON_INTRUSIVE = {
+    inspect = true,
+    recipes = true,
+    lookup = true,
+    probe = true,
+}
+
 function A.Start(name, args, cmd_id, ctx)
     -- R8.1：租约换手冻结期间，禁止任何 reflex 通道启动新动作（防止其它路径绕过冻结）
     if cmd_id == "reflex" and Whale ~= nil and Whale.bridge ~= nil
@@ -581,12 +591,35 @@ function A.Start(name, args, cmd_id, ctx)
     end
     local p = U.player()
     if p == nil then return false, "现在没有玩家（游戏可能还在读档）" end
+    -- 只读信息查询与聊天播报：单次同步完成，不打断当前正在执行的移动/工作/防御/Reflex 任务
+    if INSTANT_NON_INTRUSIVE[name] == true then
+        local temp_job = {
+            name = name,
+            args = args or {},
+            cmd_id = cmd_id,
+            step = "start",
+            data = {},
+            ctx = ctx or {},
+            t0 = U.now(),
+        }
+        local ok_run, status, text = pcall(fn, temp_job, p)
+        if not ok_run then
+            if Whale.bridge ~= nil and Whale.bridge.Report ~= nil then
+                Whale.bridge.Report(false, "动作异常：" .. tostring(status), cmd_id)
+            end
+            return true, nil
+        end
+        if Whale.bridge ~= nil and Whale.bridge.Report ~= nil then
+            Whale.bridge.Report(status == "done", text or "", cmd_id)
+        end
+        return true, nil
+    end
     if job ~= nil then
         -- ★ R8.5：抢占矩阵（唯一判定处）。以前这里是"reflex 一律不许被打断"，
         --   导致 Reflex flee 正在跑时，伴生防御永远接不上（真机：青蛙追击 →
         --   flee 反复启动 → advance_task 一直被 reflex_active 阻断）。
         --   现在只对"防御交接"按明确矩阵放行，其余保护一条没放宽。
-        local ok_pre, why_pre = may_preempt(job, cmd_id, args)
+        local ok_pre, why_pre = may_preempt(job, cmd_id, args, name)
         if not ok_pre then
             return false, why_pre or "job_running"
         end

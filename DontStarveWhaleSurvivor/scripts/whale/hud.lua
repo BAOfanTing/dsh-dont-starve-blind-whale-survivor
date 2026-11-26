@@ -354,6 +354,7 @@ end
 install_walk_rpc()
 
 function H.BindKeys()
+    if H._keys_bound then return end
     local ok = pcall(function()
         GLOBAL.TheInput:AddKeyHandler(function(key, down)
             if not down then return end
@@ -364,7 +365,11 @@ function H.BindKeys()
             end
         end)
     end)
-    if not ok then Whale.util.log("绑快捷键失败") end
+    if ok then
+        H._keys_bound = true
+    else
+        Whale.util.log("绑快捷键失败")
+    end
 end
 
 --- 把 HUD 挂到 PlayerHud 屏幕上。
@@ -405,7 +410,6 @@ function H.Attach(screen, player)
     attached = true
     -- P0：无洞穴单机监听服(ismastersim 且客户端)下 bridge.start_client 可能不触发，这里幂等补绑一次快捷键
     if not H._keys_bound then
-        H._keys_bound = true
         pcall(H.BindKeys)
     end
     if root ~= nil then

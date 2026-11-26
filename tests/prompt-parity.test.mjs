@@ -36,11 +36,14 @@ test('RULES 里点名的每个动作都真的存在，且每个动作都被提�
   }
 })
 
-test('攻略不再声称"只有 7 个工具 / 砍不了树 / 做不了工具"', () => {
+test('攻略不再声称"只有 7 个工具 / 砍不了树 / 做不了工具"，也不含过时或错误描述', () => {
   assert.ok(!/只有这 7 个工具/.test(guide), '攻略里的工具数量必须更新')
   assert.ok(!/AI 现在砍不了树/.test(guide), 'chop 已经开放')
   assert.ok(!/AI 现在做不了/.test(guide), 'craft 已经开放')
   assert.ok(!/存东西（未开放）/.test(guide), 'container_* 已经开放')
+  assert.ok(!/思考时暂停/.test(guide), '思考时暂停已停用，攻略不再保留')
+  assert.ok(!/3\s*石头\s*\+\s*6\s*木炭/.test(guide), 'cookpot 配方是 3 cutstone，不能写 3 石头')
+  assert.ok(!/twiggy_tree[^\n]*白桦/.test(guide), 'twiggy_tree 是多枝树，不是白桦')
   assert.match(guide, /chop/, '攻略要提到砍树动作')
   assert.match(guide, /container_put/, '攻略要提到存东西')
 })

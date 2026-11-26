@@ -45,7 +45,7 @@ GLOBAL.FOODTYPE = { ROUGHAGE = "ROUGHAGE", SEEDS = "SEEDS", GEARS = "GEARS", VEG
 GLOBAL.ACTIONS = {
   CHOP = { id = "CHOP" }, MINE = { id = "MINE" }, DIG = { id = "DIG" }, HAMMER = { id = "HAMMER" },
   PICK = { id = "PICK" }, PICKUP = { id = "PICKUP" }, HARVEST = { id = "HARVEST" },
-  ATTACK = { id = "ATTACK" },
+  ATTACK = { id = "ATTACK" }, LIGHT = { id = "LIGHT" },
 }
 GLOBAL.TheNet = { GetSessionIdentifier = function() return "sess-T" end,
                   GetClusterID = function() return "cluster-A" end }
@@ -196,7 +196,7 @@ GLOBAL.pcall = pcall
 GLOBAL.tonumber = tonumber
 GLOBAL.error = error
 GLOBAL.os = { time = function() return math.floor(NOW_MS / 1000) end, clock = function() return 0 end }
-GLOBAL.BufferedAction = function(doer, target, action) return { doer = doer, target = target, action = action, options = {} } end
+GLOBAL.BufferedAction = function(doer, target, action, invobject) return { doer = doer, target = target, action = action, invobject = invobject, options = {} } end
 pcall = nil
 tonumber = nil
 error = nil
@@ -244,8 +244,12 @@ export async function loadTargets({ entities = [], items = [], knowsRecipe = tru
     }
   }
   const get = (n) => {
+    // ★ 必须配对 lua_pop：`lua_getglobal` 会往 Lua 栈压一个值。
+    //   原来只 get 不 pop，每读一个全局就泄漏一格栈 ——
+    //   测试里连续 get 七八次之后 C 栈被顶穿，报成莫名其妙的 `stack overflow`，
+    //   看起来像是被测代码有递归，其实只是夹具漏了 pop（LIGHT-5 就是被这个坑住的）。
     lua.lua_getglobal(L, to_luastring(n))
-    try { return to_jsstring(lua.lua_tostring(L, -1)) } catch { return '' }
+    try { return to_jsstring(lua.lua_tostring(L, -1)) } catch { return '' } finally { lua.lua_pop(L, 1) }
   }
   run(STUB)
   run(luaIoFiles({ 'whale_io_lease.json': testAuthority() }))

@@ -790,6 +790,46 @@ function G.validate(cmd)
                 return false, "target_not_fuelable", nil
             end
         end
+        if action == "use" and cmd.args ~= nil and string.upper(tostring(cmd.args.action or "")) == "LIGHT" then
+            if ent:HasTag("burnt") then
+                return false, "already_burnt", nil
+            end
+            local burn = ent.components ~= nil and ent.components.burnable or nil
+            local is_burning = (burn ~= nil and U.try(function() return burn:IsBurning() end) == true) or ent:HasTag("fire")
+            if is_burning then
+                return false, "already_burning", nil
+            end
+            local fuel_bad = ent:HasTag("fueldepleted") and not ent:HasTag("burnableignorefuel")
+            local can_light = (not fuel_bad) and (ent:HasTag("canlight") or (burn ~= nil and burn.canlight ~= false))
+            if not can_light then
+                return false, "target_not_ignitable", nil
+            end
+            local inv = actor ~= nil and actor.components ~= nil and actor.components.inventory or nil
+            if inv == nil then return false, "missing_component:inventory", nil end
+            local has_lighter = false
+            local function lighter_ok(it)
+                if it == nil or it.components == nil or it.components.lighter == nil then return false end
+                local f = it.components.fueled
+                if f ~= nil then
+                    local ok_e, empty = pcall(function() return f:IsEmpty() end)
+                    if ok_e and empty == true then return false end
+                end
+                return true
+            end
+            local eqslots = GLOBAL.EQUIPSLOTS
+            if eqslots ~= nil and eqslots.HANDS ~= nil and inv.GetEquippedItem ~= nil then
+                local hand = inv:GetEquippedItem(eqslots.HANDS)
+                if lighter_ok(hand) then has_lighter = true end
+            end
+            if not has_lighter and inv.ForEachItem ~= nil then
+                inv:ForEachItem(function(it)
+                    if not has_lighter and lighter_ok(it) then has_lighter = true end
+                end)
+            end
+            if not has_lighter then
+                return false, "no_lighter", { hint = "手里和背包里没有火把等点火物品，先 craft torch" }
+            end
+        end
         -- 距离：交互类不要太远（4 格内比较稳，比 workable 的 6 格更保守）
         local d = U.dist(actor, ent)
         if d ~= nil and d > 4 * 4 then return false, "out_of_range", nil end

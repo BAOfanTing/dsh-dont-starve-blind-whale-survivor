@@ -632,6 +632,8 @@ function O.Render(data)
                         end
                         if item.stack_size ~= nil and item.stack_size > 1 then text = text .. " ×" .. tostring(item.stack_size) end
                         if item.work_action ~= nil then text = text .. " 可" .. tostring(WORK_LABELS[item.work_action] or item.work_action) end
+                        if item.is_burning == true then text = text .. " 着火中" end
+                        if item.is_burnt == true then text = text .. " 已烧焦" end
                         if item.harvest_ready == false then
                             -- P0-7：优先看真实成熟度；已采空/未成熟的植株绝不能显示成"可采/可收"
                             text = text .. " 未成熟（现在不能采）"
@@ -698,6 +700,12 @@ function O.Render(data)
                 if fields.is_harvestable ~= nil then what[#what + 1] = "可采集状态变了" end
                 if fields.harvest_ready ~= nil then what[#what + 1] = "成熟度变化" end
                 if fields.work_action ~= nil then what[#what + 1] = "可作业状态变了" end
+                if fields.is_burning ~= nil then
+                    what[#what + 1] = fields.is_burning.to == true and "着火了" or "火灭了"
+                end
+                if fields.is_burnt ~= nil and fields.is_burnt.to == true then
+                    what[#what + 1] = "已烧焦"
+                end
                 if fields.category ~= nil then what[#what + 1] = "分类变了" end
                 bits[#bits + 1] = "变化 " .. tostring(item.ref) .. " " .. tostring(item.label or item.prefab)
                     .. ("" .. (#what > 0 and ("（" .. table.concat(what, "、") .. "）") or ""))

@@ -328,6 +328,7 @@ dispatch_command = function(cmd)
     if id == nil then return end
     -- 同一 id 只处理一次
     if id == last_cmd_id then return end
+    if client_set_paused ~= nil then client_set_paused(false) end
     last_cmd_id = id
     local action = tostring(cmd.action or "")
     log("收到指令 " .. id .. "：" .. action)
@@ -342,7 +343,17 @@ dispatch_command = function(cmd)
         B.Report(false, "安全校验层缺失，拒绝执行", id, "guard_missing")
         return
     end
-    local ok_cmd, reason, detail = guard.validate(cmd)
+    -- ★ 真机事故（2026-11-25）：这里原来是裸调用 `guard.validate(cmd)`。
+    --   某次 guard 内部的一行写错（`U.g("EQUIPSLOTS")`，util 没有 g）抛了 Lua 错误，
+    --   异常一路冒到引擎层 → **整个专用服务器进程崩溃**，客户端掉线、存档被迫重进。
+    --   一条命令的校验写错不该有这么大的代价：这里兜住，把错误变成一条普通的拒绝回执。
+    local ok_call, ok_cmd, reason, detail = pcall(guard.validate, cmd)
+    if not ok_call then
+        local err = tostring(ok_cmd)
+        log("guard 校验异常 " .. id .. "：" .. err)
+        B.Report(false, "安全校验层异常，已拒绝执行：" .. err, id, "guard_error")
+        return
+    end
     if not ok_cmd then
         log("拒绝指令 " .. id .. "：" .. tostring(reason))
         -- TARGET-REFRESH：被拒时把可操作的说明一起回给模型（合法 target_kind 清单、
@@ -358,7 +369,8 @@ dispatch_command = function(cmd)
     guard.accept(cmd)
 
     -- M2.1：guard 已把 #N 解析成真实实体（detail.target），这里只负责传下去
-    local started, err = Whale.actions.Start(
+    -- ★ 与上面 guard.validate 同理：动作层抛错也只能变成一条失败回执，绝不让服务器崩。
+    local ok_start, started, err = pcall(Whale.actions.Start,
         action,
         type(cmd.args) == "table" and cmd.args or {},
         id,
@@ -408,6 +420,12 @@ dispatch_command = function(cmd)
             kiting = detail ~= nil and detail.kiting or nil,
         }
     )
+    if not ok_start then
+        local msg = "动作层异常，已拒绝执行：" .. tostring(started)
+        log(msg)
+        B.Report(false, msg, id, "action_error")
+        return
+    end
     if not started then
         local r = "action_start_failed"
         if err ~= nil and string.find(tostring(err), "reflex_active") then
@@ -574,7 +592,9 @@ send_http_exchange = function(immediate_state)
                         end
                     end
                 end
-                if type(data.commands) == "table" and #data.commands > 0 then
+                local got_cmds = type(data.commands) == "table" and #data.commands > 0
+                if got_cmds then
+                    if client_set_paused ~= nil then client_set_paused(false) end
                     for _, cmd in ipairs(data.commands) do
                         dispatch_command(cmd)
                     end
@@ -583,7 +603,7 @@ send_http_exchange = function(immediate_state)
                     apply_settings(data.settings)
                 end
                 if data.pause ~= nil and client_set_paused ~= nil then
-                    client_set_paused(data.pause == true)
+                    client_set_paused((data.pause == true) and (not got_cmds))
                 end
             end
             -- 全双工自驱动：如果刚收到了指令或状态有重大变化，主动链式调度下一次轮询，极速收敛指令执行流
@@ -663,10 +683,21 @@ local function server_tick()
     step("写状态", function() B.WriteState(false) end)
 end
 
+local paused_by_us = false
+local pause_tick_started = false
+local start_pause_tick = nil
+
 function B.start_server(world)
+    if GLOBAL.SetServerPaused ~= nil then
+        pcall(function() GLOBAL.SetServerPaused(false) end)
+    end
+    if GLOBAL.TheNet ~= nil and GLOBAL.TheNet.SetAutopaused ~= nil then
+        pcall(function() GLOBAL.TheNet:SetAutopaused(false) end)
+    end
     B.WriteState(true)
     server_tick_task = world:DoPeriodicTask(TICK, server_tick)
     server_last_tick_at = bridge_now()
+    if start_pause_tick ~= nil then start_pause_tick() end
     print("[大肥鱼饿不死] 文件桥已启动（服务端）：写 " .. tostring(FILES.state))
 end
 
@@ -691,23 +722,51 @@ function B.KeepAlive()
     end
 end
 
--- ─────────────────── 客户端：AI 思考时暂停世界 ───────────────────
--- 客户端单独一小段：它读外面写的“要不要暂停”，然后调 SetServerPaused。
--- 只有自己开的世界（房主）才有权限，失败就安静放弃。
+-- ─────────────────── AI 思考暂停控制（StaticPeriodicTask，暂停期间继续唤醒） ───────────────────
+-- 必须在服务端与客户端都挂载 StaticPeriodicTask：
+--   SetServerPaused(true) 会暂停 world:DoPeriodicTask（导致 server_tick 停摆），
+--   只有 DoStaticPeriodicTask 在暂停状态下仍每 0.25s 轮询解冻文件与 HTTP，确保不会再次卡死。
 
-local paused_by_us = false
+local function has_pending_work()
+    if pending_result_data ~= nil then return true end
+    if Whale ~= nil and Whale.actions ~= nil and Whale.actions.Current ~= nil then
+        local cur = Whale.actions.Current()
+        if cur ~= nil then return true end
+    end
+    return false
+end
 
 client_set_paused = function(want)
-    -- 整体禁用主动暂停世界：永远只允许解冻(false)，绝不暂停(true)
-    if want == true then return end
-    if GLOBAL.SetServerPaused ~= nil then
-        pcall(function() GLOBAL.SetServerPaused(false) end)
+    local target = (want == true)
+    -- 动作执行期间或有结果待上报时绝不暂停世界
+    if target and has_pending_work() then
+        target = false
     end
-    paused_by_us = false
+    if target then
+        if not paused_by_us and GLOBAL.SetServerPaused ~= nil then
+            pcall(function() GLOBAL.SetServerPaused(true) end)
+            paused_by_us = true
+        end
+    else
+        if paused_by_us then
+            if GLOBAL.SetServerPaused ~= nil then
+                pcall(function() GLOBAL.SetServerPaused(false) end)
+            end
+            paused_by_us = false
+        end
+    end
 end
 
 local function client_tick()
     local ok, err = pcall(function()
+        if paused_by_us and has_pending_work() then
+            client_set_paused(false)
+            return
+        end
+        -- 暂停时 world:DoPeriodicTask 会停摆；用静态任务继续轮询 HTTP，确保解冻/新指令立刻唤醒
+        if paused_by_us and http_cfg.enabled and not http_inflight then
+            send_http_exchange()
+        end
         local text = io_read(FILES.io_pause)
         if text == nil or text == "" then
             ps_read(FILES.pause, function(data)
@@ -727,8 +786,22 @@ local function client_tick()
             if want ~= paused_by_us then client_set_paused(want) end
         end
     end)
-    if not ok then U.log("客户端循环出错：" .. tostring(err)) end
+    if not ok then U.log("暂停轮询出错：" .. tostring(err)) end
 end
+
+start_pause_tick = function()
+    if pause_tick_started then return end
+    pause_tick_started = true
+    local w = U.world()
+    if (w ~= nil and w.DoStaticPeriodicTask ~= nil)
+        or (GLOBAL.staticScheduler ~= nil and GLOBAL.staticScheduler.ExecutePeriodic ~= nil) then
+        U.DoStaticPeriodicTask(0.25, client_tick)
+    end
+end
+
+function B.SetPaused(want) client_set_paused(want) end
+function B.IsPausedByUs() return paused_by_us end
+function B.PauseTick() client_tick() end
 
 function B.start_client(world)
     if GLOBAL.SetServerPaused ~= nil then
@@ -737,7 +810,7 @@ function B.start_client(world)
     if GLOBAL.TheNet ~= nil and GLOBAL.TheNet.SetAutopaused ~= nil then
         pcall(function() GLOBAL.TheNet:SetAutopaused(false) end)
     end
-    Whale.util.DoStaticPeriodicTask(0.5, client_tick)
+    start_pause_tick()
     -- 客户端的快捷键：F8 让内置 AI 开始/停下，F7 只开关小窗
     if Whale.hud ~= nil and Whale.hud.BindKeys ~= nil then
         Whale.hud.BindKeys()

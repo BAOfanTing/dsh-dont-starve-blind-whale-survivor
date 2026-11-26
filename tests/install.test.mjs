@@ -66,6 +66,29 @@ test('找不到游戏时说清楚怎么填', () => {
   assert.match(result.message, /游戏目录/)
 })
 
+// ★ 真机 bug（2026-11-25）：sameTree 原来只比文件大小。
+//   修 `guard.lua` 时把 `U.g("EQUIPSLOTS")` 换成 `GLOBAL.EQUIPSLOTS`，字节数不同但
+//   另一处等长改动让整棵树被判成"已是最新" → 游戏里跑的还是旧代码 →
+//   `guard.lua:819 attempt to call field 'g' (a nil value)`，点火命令全部卡死。
+test('目标目录里同名文件内容不同（即使大小一样）也必须重新安装', () => {
+  const game = fakeGame()
+  installMod({ gameDir: game, onlyGameDir: true })
+
+  // 把已安装的一份文件改成**等长但内容不同**，模拟"改了实现但字节数没变"
+  const installed = join(game, 'mods', MOD_NAME, 'scripts', 'whale', 'guard.lua')
+  const text = readFileSync(installed, 'utf8')
+  const broken = text.replace('GLOBAL.EQUIPSLOTS', 'GLOBAL.EQUIPSLOTX')
+  assert.equal(broken.length, text.length, '前提：这次改动必须是等长的（正是旧实现漏判的情形）')
+  assert.notEqual(broken, text)
+  writeFileSync(installed, broken, 'utf8')
+
+  const result = installMod({ gameDir: game, onlyGameDir: true })
+  assert.equal(result.state, 'installed', '内容不一致就必须重装，不能因为大小相同就跳过')
+  const repaired = readFileSync(installed, 'utf8')
+  assert.ok(repaired.includes('GLOBAL.EQUIPSLOTS'), '重装后必须是仓库里的正确内容')
+  assert.ok(!repaired.includes('GLOBAL.EQUIPSLOTX'))
+})
+
 test('modStatus 能看到装了什么版本', () => {
   const game = fakeGame()
   installMod({ gameDir: game, onlyGameDir: true })

@@ -518,57 +518,150 @@ JOBS.cook = function(j, p)
                 return "done", string.format("锅里已经在煮了（还有 %d 秒），等一会儿再来拿", math.floor(left))
             end
         end
-        -- ② 没在煮 → 放材料
+        -- ② 没在煮 → 放材料（4 格原子性保护：不足 4 样不拆包/不半填，放置失败则全部退回背包）
+        local inv = p.components ~= nil and p.components.inventory or nil
+        if inv == nil then return "fail", "no_inventory: 没有背包组件" end
+        local num_slots = 4
+        if container ~= nil and container.GetNumSlots ~= nil then
+            local ok_ns, ns = pcall(function() return container:GetNumSlots() end)
+            if ok_ns and type(ns) == "number" and ns > 0 then num_slots = ns end
+        end
+        local existing_in_pot = 0
+        if container ~= nil then
+            if container.NumItems ~= nil then
+                local ok_ni, ni = pcall(function() return container:NumItems() end)
+                if ok_ni and type(ni) == "number" then existing_in_pot = ni end
+            elseif container.GetItemInSlot ~= nil then
+                for slot = 1, num_slots do
+                    local ok_s, it_s = pcall(function() return container:GetItemInSlot(slot) end)
+                    if ok_s and it_s ~= nil then existing_in_pot = existing_in_pot + 1 end
+                end
+            end
+        end
+        local needed = math.max(0, num_slots - existing_in_pot)
+        if needed == 0 then
+            if stewer ~= nil then
+                local ok_can, can_c = true, true
+                if stewer.CanCook ~= nil then
+                    ok_can, can_c = pcall(function() return stewer:CanCook() end)
+                end
+                if ok_can and can_c == false then
+                    return "fail", "cook_put_failed: 锅已满但无法开始烹饪"
+                end
+                pcall(function() stewer:StartCooking(p) end)
+            end
+            return "done", "锅里已装满 4 样材料，开始煮了（等 40 秒左右再来拿）"
+        end
+
         local want = ctx.cook_items
-        local list = {}
+        local plan_items = {}
+        local avail_remaining = {}
+        local function item_matches_query(item, query)
+            if item == nil or not item:IsValid() then return false end
+            local needle = string.lower(tostring(query))
+            local prefab = string.lower(tostring(item.prefab or ""))
+            local name = string.lower(tostring(U.pretty(item) or ""))
+            return prefab == needle or name == needle or string.find(name, needle, 1, true) ~= nil
+        end
         if want ~= nil and tostring(want) ~= "" then
-            local used_nonstack = {}
+            local all_items = {}
+            pcall(function()
+                inv:ForEachItem(function(it)
+                    if it ~= nil and it:IsValid() then all_items[#all_items + 1] = it end
+                end)
+            end)
             for name in string.gmatch(tostring(want), "[^,%s]+") do
-                local item = U.find_item(p, name)
-                if item ~= nil then
-                    local unit = one_unit(item)
-                    if unit ~= nil and unit == item and used_nonstack[tostring(item)] then
-                        -- 非堆叠物品重复名（同一件）：跳过，避免重复引用
-                    elseif unit ~= nil then
-                        if unit == item then used_nonstack[tostring(item)] = true end
-                        list[#list + 1] = unit
+                for _, it in ipairs(all_items) do
+                    if item_matches_query(it, name) then
+                        local key = tostring(it)
+                        if avail_remaining[key] == nil then avail_remaining[key] = U.count(it) end
+                        if avail_remaining[key] > 0 then
+                            avail_remaining[key] = avail_remaining[key] - 1
+                            plan_items[#plan_items + 1] = it
+                            break
+                        end
                     end
                 end
-                if #list >= 4 then break end
+                if #plan_items >= needed then break end
             end
         else
-            -- 自动挑：带 cookable 的肉/菜
-            local inv = p.components ~= nil and p.components.inventory or nil
-            if inv ~= nil then
-                pcall(function()
-                    inv:ForEachItem(function(item)
-                        if #list >= 4 then return end
-                        if item == nil or not item:IsValid() then return end
-                        local cookable = item.components ~= nil and item.components.cookable or nil
-                        if cookable == nil then return end
-                        local meat = item:HasTag("meat")
-                        local veggie = item:HasTag("veggie")
-                        if meat or veggie then list[#list + 1] = item end
-                    end)
+            -- 自动挑：带 cookable 的肉/菜，同一堆叠按数量展开到凑齐 needed 为止
+            pcall(function()
+                inv:ForEachItem(function(item)
+                    if #plan_items >= needed then return end
+                    if item == nil or not item:IsValid() then return end
+                    local cookable = item.components ~= nil and item.components.cookable or nil
+                    if cookable == nil then return end
+                    local meat = item:HasTag("meat")
+                    local veggie = item:HasTag("veggie")
+                    if meat or veggie then
+                        local n = math.min(needed - #plan_items, U.count(item))
+                        for _ = 1, n do
+                            plan_items[#plan_items + 1] = item
+                        end
+                    end
                 end)
+            end)
+        end
+        if #plan_items == 0 then return "fail", "no_ingredients: 背包里没有能下锅的材料" end
+        if #plan_items < needed then
+            return "fail", string.format("need_4_ingredients: 烹饪锅必须放满 %d 样食材才能开始煮（锅内已有 %d 样，背包可用仅 %d 样）",
+                num_slots, existing_in_pot, #plan_items)
+        end
+
+        local placed_units = {}
+        local function rollback_placed()
+            for _, u in ipairs(placed_units) do
+                if u ~= nil and u:IsValid() then
+                    pcall(function()
+                        if container ~= nil and container.RemoveItem ~= nil then
+                            container:RemoveItem(u, true)
+                        end
+                        inv:GiveItem(u, nil, p:GetPosition())
+                    end)
+                end
             end
         end
-        if #list == 0 then return "fail", "no_ingredients: 背包里没有能下锅的材料" end
-        local added = 0
-        for _, item in ipairs(list) do
-            local unit = one_unit(item)
+
+        for _, src_item in ipairs(plan_items) do
+            local unit = one_unit(src_item)
             if unit ~= nil and unit:IsValid() and container ~= nil then
-                local ok = pcall(function()
+                local ok, given = pcall(function()
                     local ii = unit.components ~= nil and unit.components.inventoryitem or nil
                     if ii ~= nil and ii.RemoveFromOwner ~= nil then ii:RemoveFromOwner() end
-                    container:GiveItem(unit, nil, pot:GetPosition())
+                    return container:GiveItem(unit, nil, pot:GetPosition())
                 end)
-                if ok then added = added + 1 end
+                if ok and given ~= false then
+                    placed_units[#placed_units + 1] = unit
+                end
             end
         end
-        if added == 0 then return "fail", "cook_put_failed: 材料放不进锅里（锅满了？）" end
-        if stewer ~= nil then pcall(function() stewer:StartCooking(p) end) end
-        j.data.added = added
+
+        local pot_ready = (#placed_units == needed)
+        if pot_ready and container ~= nil and container.IsFull ~= nil then
+            local ok_f, is_full = pcall(function() return container:IsFull() end)
+            if ok_f and is_full == false then pot_ready = false end
+        end
+        if pot_ready and stewer ~= nil and stewer.CanCook ~= nil then
+            local ok_c, can_cook = pcall(function() return stewer:CanCook() end)
+            if ok_c and can_cook == false then pot_ready = false end
+        end
+        if not pot_ready then
+            rollback_placed()
+            return "fail", "need_4_ingredients: 烹饪锅未填满 4 格，已将食材退回背包"
+        end
+
+        if stewer ~= nil then
+            pcall(function() stewer:StartCooking(p) end)
+            if stewer.IsCooking ~= nil then
+                local ok_ck, cooking_now = pcall(function() return stewer:IsCooking() end)
+                if ok_ck and cooking_now == false then
+                    rollback_placed()
+                    return "fail", "cook_put_failed: 食材放入后未能开煮，已退回背包"
+                end
+            end
+        end
+        j.data.added = #placed_units
         j.data.action = "put"
         j.step = "acting"
         return "run"
@@ -688,12 +781,13 @@ JOBS.lookup = function(j, p)
     local builder = p.components ~= nil and p.components.builder or nil
 
     -- ① 当作配方查：材料 + 现在够不够 + 能不能造
-    local recipe = recipe_of(q)
+    local recipe, recipe_key = recipe_of(q)
     if recipe ~= nil then
         local cost, missing = recipe_cost_text(recipe, counts)
-        lines[#lines + 1] = string.format("配方 %s：%s", q, cost ~= "" and cost or "（无材料）")
+        local key_hint = (recipe_key ~= nil and recipe_key ~= q) and string.format("（%s）", recipe_key) or ""
+        lines[#lines + 1] = string.format("配方 %s%s：%s", q, key_hint, cost ~= "" and cost or "（无材料）")
         if builder ~= nil then
-            local can = U.try(function() return builder:CanBuild(q) end) == true
+            local can = U.try(function() return builder:CanBuild(recipe_key or q) end) == true
             if can then
                 lines[#lines + 1] = "  现在就能做"
             else
