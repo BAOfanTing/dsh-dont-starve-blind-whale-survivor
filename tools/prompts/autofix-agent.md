@@ -18,7 +18,7 @@
    不得改动 `DontStarveWhaleSurvivor/scripts/whale/guard.lua`、`lib/control.js`、`lib/control/stop-coordinator.js`
    的核心放行/停步逻辑来「凑绿」。
 3. **只修 Top 1~2 个根因**，小步快跑：一轮不要同时动十几个文件。
-4. **全部测试必须通过**：改完后运行 `npm run lint && npm run check:docs && npm test`，要求全绿，且测试总数不减。
+4. **全部测试必须通过**：改完后运行 `npm run lint && npm run check:docs && npm run check:hygiene && npm test`，要求全绿，且测试总数不减。
 
 ## 工作流程
 1. 读 `$BWS_ISSUE_REPORT`，在回复里用一句话概括 `faults[0]` 的根因假设。

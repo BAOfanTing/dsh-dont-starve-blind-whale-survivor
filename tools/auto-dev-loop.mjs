@@ -5,7 +5,7 @@
 //            → 健康分评分/回滚 → 护栏审计 → (可选)调用 Coding Agent → 下一轮
 //
 // 安全默认（重要）：
-//   · 默认是「dry」模式：只跑静态门禁（lint/check:docs/test）+ 对**现有** latestLogs 做 Oracle 分析，
+//   · 默认是「dry」模式：只跑静态门禁（lint/check:docs/check:hygiene/test）+ 对**现有** latestLogs 做 Oracle 分析，
 //     不重启游戏、不 git commit/rollback、不调 Coding Agent。
 //   · 真正动游戏 / 改 git / 叫 Agent，必须显式 --live / --allow-git / --agent-cmd。
 //   · git 回滚只在 --allow-git 时发生，且只在「分数下降/护栏失守」时执行 —— 绝不无声毁数据。
@@ -103,9 +103,11 @@ function runStaticGate() {
   if (!lint.ok) return { ok: false, stage: 'lint', tail: lint.tail }
   const docs = runCmd('npm', ['run', 'check:docs'])
   if (!docs.ok) return { ok: false, stage: 'check:docs', tail: docs.tail }
+  const hygiene = runCmd('npm', ['run', 'check:hygiene'])
+  if (!hygiene.ok) return { ok: false, stage: 'check:hygiene', tail: hygiene.tail }
   const test = runCmd('npm', ['test'])
   if (!test.ok) return { ok: false, stage: 'test', tail: test.tail }
-  console.log('   ✅ lint / check:docs / test 全绿')
+  console.log('   ✅ lint / check:docs / check:hygiene / test 全绿')
   return { ok: true }
 }
 

@@ -7,9 +7,10 @@
 ## 1. 静态门禁与自动化测试
 
 ```bash
-npm run lint         # Node 语法 + Lua 语法（luaparse）+ 工具表面 / 契约一致性检查
-npm run check:docs   # 校验 README.md 中的动作/本地工具计数与全部工具名是否与代码一致
-npm test             # 全套单元测试与集成测试（node --test tests/**/*.test.mjs）
+npm run lint           # Node 语法 + Lua 语法（luaparse）+ 工具表面 / 契约一致性检查
+npm run check:docs     # 校验 README.md 中的动作/本地工具计数与全部工具名是否与代码一致
+npm run check:hygiene  # 校验活文件无阶段债残留、文档无断链、锁文件唯一、测试命名规范
+npm test               # 全套单元测试与集成测试（node --test tests/**/*.test.mjs）
 ```
 
 Windows PowerShell 下也可用 `./test.ps1` 运行完整测试集；按模块域单独运行可直接指定子目录，例如：

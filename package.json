@@ -28,6 +28,7 @@
     "lint": "node tools/check-syntax.mjs",
     "check:docs": "node tools/check-tools-doc.mjs",
     "check:docs:fix": "node tools/check-tools-doc.mjs --write",
+    "check:hygiene": "node tools/check-hygiene.mjs",
     "setup:hooks": "git config core.hooksPath .githooks",
     "commitlint": "commitlint",
     "autodev": "node tools/auto-dev-loop.mjs",

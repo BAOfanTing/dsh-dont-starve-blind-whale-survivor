@@ -11,7 +11,7 @@
 ## 1. 全链路
 
 ```
-[1 静态与单测快检]  npm run lint → check:docs → test          （~10~40s，0 token）
+[1 静态与单测快检]  npm run lint → check:docs → check:hygiene → test （~10~40s，0 token）
         │失败→ 直接进 [5] 修，省掉重启游戏
         ▼通过
 [2 环境重置与热加载] install-mod → 还原黄金存档 → 重启/重置 → unpause   （仅 --live）

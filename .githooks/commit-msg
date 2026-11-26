@@ -6,10 +6,10 @@ if [ -d "node_modules/@commitlint/cli" ]; then
   npx --no-install commitlint --edit "$MSG_FILE"
   if [ $? -ne 0 ]; then
     echo ""
-    echo "✖ 提交信息不符合规范。格式：type(scope): subject（scope 必填）"
-    echo "  例：fix(runtime): 修复…… / feat(reflex): …… / docs(rules): ……"
+    echo "✖ 提交信息不符合规范。格式：type(scope): subject 或 type: subject（scope 可选）"
+    echo "  例：fix(control): 修复…… / feat(lua): …… / docs(docs): ……"
     echo "  type ∈ feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
-    echo "  scope 例：runtime/dispatcher/bridge/skills/reflex/planner/tools/modes …"
+    echo "  可用 scope：bridge / control / planner / skills / lua / dsh / autodev / docs / ci / test / chore"
     exit 1
   fi
 else
