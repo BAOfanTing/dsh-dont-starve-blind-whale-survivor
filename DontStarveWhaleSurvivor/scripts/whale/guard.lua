@@ -1,4 +1,4 @@
--- M2.0：动作安全底座（Lua 侧最终授权者）
+-- 动作安全底座（Lua 侧最终授权者）
 --
 -- 为什么要有它：Node 侧再严也只是"建议"——真正碰游戏 API 的是这里。
 -- 所有从文件桥进来的动作，必须先过这一层，才允许交给 Whale.actions。
@@ -22,7 +22,7 @@ local G = {}
 
 G.LEASE_SCHEMA = "bws.control-lease/1"
 
---- M2.0.2：Lua 只读权威租约文件（Node LeaseManager 是唯一写入者）。
+--- Lua 只读权威租约文件（Node LeaseManager 是唯一写入者）。
 --- 两个文件名都试：io 通道（游戏工作目录）和持久化通道名；都带/不带 KLEI 头都能解析。
 local function io_read(name)
     if io == nil or io.open == nil then return nil end
@@ -116,24 +116,24 @@ function G.clock_ms()
     return now_ms()
 end
 
--- ─────────────────────────── 白名单（M2.0 只开 R1 的移动/停止）───────────────────────────
+-- ─────────────────────────── 白名单 ───────────────────────────
 
 --- 每个动作：风险等级 + 参数规则 + 需要的组件
 --- 规则里 key 就是允许出现的参数名（未知字段一律拒绝）
 -- 白名单数据在 guard_specs.lua（先于 guard 加载）；这里只引用，保持 G.ACTIONS 名字不变。
 G.ACTIONS = Whale.guard_action_specs
 
---- 拾取白名单：**唯一来源**在 Whale.pickuprules（M2.2 起观察侧与执行侧共用）。
+--- 拾取白名单：**唯一来源**在 Whale.pickuprules（观察侧与执行侧共用）。
 --- 这里只是别名，方便诊断；pickuprules 缺失时是空表 —— 也就是什么都不放行（失败要安全）。
 G.PICKUP_PREFABS = (Whale ~= nil and Whale.pickuprules ~= nil) and Whale.pickuprules.PREFABS or {}
 
---- M2.1 保守拾取距离（格）。DST 服务端 ACTIONS.PICKUP.fn 本身不校验距离，
+--- 保守拾取距离（格）。DST 服务端 ACTIONS.PICKUP.fn 本身不校验距离，
 --- 所以必须由我们限制，避免模型隔空捡 16 格外的物品。
 G.PICKUP_MAX_TILES = 2.5
 
 --- attack / kill 的距离上限（格）。
 ---
---- ★ 真机 bug（session 8fab0944）：这里原来是硬编码的 6 格，而附近扫描半径是 16 格。
+--- 必须与 nearby 扫描半径（16 格）协同，避免可看到但超出攻击上限时误拒或无响应。
 ---   蜘蛛是会移动的：模型读到"hem 距 1.8 格"时下达 kill，30 秒后指令到达，
 ---   它已经游荡到 8 格外 —— 直接被拒成 out_of_range，模型只能反复 move_to 追。
 ---   ACTIONS.ATTACK 的 BufferedAction 本来就带寻路（SGwilson 的 attack 状态会先走过去），
@@ -268,8 +268,7 @@ end
 
 -- ─────────────────────────── 租约 / generation fencing ───────────────────────────
 
---- M2.0.2：Lua **不再**自行决定 generation。这里只保留诊断信息，绝不用于放行。
---- 权威 generation 只在 Node LeaseManager 的权威租约文件里。
+--- Lua 不自行决定 generation，仅保留诊断信息；权威 generation 只在 Node LeaseManager 的租约文件里。
 local lease_state = { generation = 0, owner = nil, actor_id = nil, updated = 0 }
 
 function G.lease_state()
@@ -280,7 +279,7 @@ function G.reset()
     lease_state = { generation = 0, owner = nil, actor_id = nil, updated = 0 }
 end
 
--- ─────────────────────────── 目标引用（TARGET-REFRESH）───────────────────────────
+-- ─────────────────────────── 目标引用与句柄解析 ───────────────────────────
 --
 -- ★ 这三个 helper 必须定义在 G.validate **之前**：G.validate 里会调用它们
 --   （Lua 的 local 只在声明之后可见，放到文件末尾会变成 nil 全局 —— 真机/测试都会崩）。
@@ -389,11 +388,11 @@ end
 function G.validate(cmd)
     if type(cmd) ~= "table" then return false, "bad_command", nil end
 
-    -- ★ M2.0.2：权威租约是唯一可信来源；读不到/损坏/不完整 → 一律 fail-closed
+    -- 权威租约是唯一可信来源；读不到/损坏/不完整 → 一律 fail-closed
     local authority, why_auth = G.read_authority()
     if authority == nil then return false, why_auth or "authority_unavailable", nil end
     if authority.status == "revoking" then
-        -- 观察换手：先真正中止当前游戏动作（R8.0 D9：之前只写 ack 不 Abort，换手时旧 job 继续跑），再写确认。
+        -- 观察换手：先真正中止当前游戏动作（Abort），再写撤销确认（ACK）。
         pcall(function()
             if Whale ~= nil and Whale.actions ~= nil and Whale.actions.Abort ~= nil then
                 Whale.actions.Abort("lease_handover")
@@ -455,7 +454,7 @@ function G.validate(cmd)
         return false, "actor_mismatch", nil
     end
 
-    -- ★ M2.0.2：所有身份字段都必须与**权威文件**精确相等；不信任命令自己声明的身份
+    -- 所有身份字段都必须与**权威文件**精确相等；不信任命令自己声明的身份
     if tostring(cmd.authority_epoch or "") ~= authority.authority_epoch then
         return false, "authority_epoch_mismatch", nil
     end
@@ -486,7 +485,7 @@ function G.validate(cmd)
         if ok_get then actor = got end
     end
 
-    -- ★ M2.1：pickup 必须把 #N 解析成**真实实体**（禁止 prefab 搜索），并做前置校验
+    -- pickup 必须把 #N / target_handle 解析成**真实实体**（禁止按 prefab 隐式搜索），并做前置校验
     local target = nil
     if action == "pickup" then
         -- 一个 Actor 同时只允许一个动作（pickup 不做静默替换）
@@ -495,9 +494,8 @@ function G.validate(cmd)
         local ent, why_t = resolve_action_target(cmd, actor)
         if ent == nil then return false, why_t or "unknown_ref", nil end
 
-        -- ★ M2.2：候选判定与观察侧（nearby 的 pickupables 桶）**共用同一份规则**，
-        --   避免"Observer 说能捡、执行器说不行"。这里只判候选资格；
-        --   执行期条件（距离 / 背包容量 / 角色状态 / 租约）仍然在下面各自判。
+        -- 候选判定与观察侧（nearby 的 pickupables 桶）共用同一份规则；
+        -- 执行期条件（距离 / 背包容量 / 角色状态 / 租约）在下面独立校验。
         local rules = Whale ~= nil and Whale.pickuprules or nil
         if rules == nil then return false, "pickup_rules_missing", nil end
         local ok_cand, why_cand = rules.IsCandidate(ent, actor)
@@ -523,8 +521,7 @@ function G.validate(cmd)
         target = ent
     end
 
-    -- ★ M2.3：harvest 也要把 #N 解析成真实实体，并且**在授权的这一刻重新确认成熟度与距离**
-    --   （观察结果可能已经过期：别人先采了、或者快照之后状态变了）
+    -- harvest 把 #N / target_handle 解析成真实实体，并在授权时刻复核成熟度与距离
     if action == "harvest" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
 
@@ -549,7 +546,7 @@ function G.validate(cmd)
         target = ent
     end
 
-    -- ═══════════════ TARGET-REFRESH：五个实时目标选择动作 ═══════════════
+    -- ═══════════════ 五个实时目标选择动作（不依赖 #N / snapshot_id）═══════════════
     -- 目标在**授权这一刻**从当前世界状态重新搜索（完全不依赖 #N / snapshot_id），
     -- 通过后仍走原有执行链：ctx.target → JOBS.* → BufferedAction → push()。
     -- 下面逐条复核候选资格 / 成熟度 / 距离 / 背包容量 / actor_busy —— 一条都没省。
@@ -600,7 +597,7 @@ function G.validate(cmd)
         target = near_ent
     end
 
-    -- ═══════════════ SURVIVAL-01 ═══════════════
+    -- ═══════════════ 基础生存动作（gather / eat / craft / equip）═══════════════
     if action == "gather" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
 
@@ -640,8 +637,7 @@ function G.validate(cmd)
         if food ~= nil and food ~= "" then
             local ok_f, why_f = er.IsAllowedPrefab(tostring(food))
             if not ok_f then
-                -- ★ TARGET-REFRESH：说清"这个名字为什么不行 + 你是不是想说 X"，
-                --   否则模型只看到 food_not_allowed，只能反复换名字猜（真机猜了 6 次）。
+                -- 说清不可吃原因与纠偏建议（SuggestPrefab）
                 local suggest = er.SuggestPrefab ~= nil and er.SuggestPrefab(tostring(food)) or nil
                 local lead = string.format("「%s」不在可吃白名单里。", tostring(food))
                 if suggest ~= nil then
@@ -705,10 +701,7 @@ function G.validate(cmd)
 
         -- ② 再判科技：**统一走 `craftrules.CanCraftNow`**（内部用原版 `builder:CanBuild`）。
         --
-        -- ★ 真机 bug（2026-11-17）：这个判定原来在 guard 和 actions/crafting.lua **各写一遍**，
-        --   而且两边都用 `builder:KnowsRecipe` —— 它**不算**"站在科学机器旁边"的临时科技。
-        --   结果机器造好了、人站在 0.7 格内，`craft rope` 仍报 recipe_locked，
-        --   而同一角色 `lookup rope`（走 CanBuild）却说"现在就能做"。
+        -- 统一调用 craftrules.CanCraftNow（与 actions/crafting.lua 同源，含临时科技加成）。
         --   修 guard 之后执行层又拦了一次（同一 bug 的第二处），所以现在**只留一处判定**。
         local knows = cr.CanCraftNow(actor, recipe)
         if knows == false then
@@ -736,7 +729,7 @@ function G.validate(cmd)
         if qr.FindInInventory(inv, item) == nil then return false, "not_in_inventory", nil end
     end
 
-    -- ═══════════ SURVIVAL-06：build 的建筑白名单 ═══════════
+    -- ═══════════ build 建筑白名单 ═══════════
     if action == "build" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
         local BUILD_OK = {
@@ -747,7 +740,7 @@ function G.validate(cmd)
             cookpot = true,
             sciencemachine = true,
             researchlab = true,
-            -- TENT（2026-11-17）：炼金引擎 + 帐篷
+            -- 炼金引擎与帐篷
             alchemyengine = true,
             researchlab2 = true,
             tent = true,
@@ -758,7 +751,7 @@ function G.validate(cmd)
         end
     end
 
-    -- ═══════════ SURVIVAL-05：container_* / give / cook 都要 #N 引用 ═══════════
+    -- ═══════════ 容器 / 给予 / 烹饪（均需目标引用）═══════════
     if action == "container_take" or action == "container_put" or action == "give" or action == "cook" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
         local ent, why_t = resolve_action_target(cmd, actor)
@@ -780,7 +773,7 @@ function G.validate(cmd)
         target = ent
     end
 
-    -- ═══════════ SURVIVAL-04：fuel / use / inspect 都要 #N 引用 ═══════════
+    -- ═══════════ 添柴 / 交互 / 查看（均需目标引用）═══════════
     if action == "fuel" or action == "use" or action == "inspect" then
         if action ~= "inspect" and Whale.job ~= nil then return false, "actor_busy", nil end
         local ent, why_t = resolve_action_target(cmd, actor)
@@ -836,7 +829,7 @@ function G.validate(cmd)
         target = ent
     end
 
-    -- ═══════════ SURVIVAL-03：chop / mine / dig / hammer / attack / kill ═══════════
+    -- ═══════════ 作业与战斗（chop / mine / dig / hammer / attack / kill）═══════════
     if action == "chop" or action == "mine" or action == "dig" or action == "hammer" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
         local ent, why_t = resolve_action_target(cmd, actor)
@@ -845,10 +838,7 @@ function G.validate(cmd)
         if w == nil then
             return false, "target_not_workable", nil
         end
-        -- ★ TARGET-REFRESH：动作类型必须和目标对得上。
-        --   原来只判"有没有 workable" —— 走 #N 时因为引用只能来自 nearby 的资源桶，
-        --   隐含上是对的；但句柄路径下模型可以指到任意 workable（比如拿砍树的动作去指石头）。
-        --   现在两边都显式判一次：CHOP 只能砍树、MINE 只能挖矿……对不上就拒。
+        -- 动作类型必须与目标 workable.action 一致（尤其针对稳定句柄路径）。
         local WANT_WORK = { chop = "CHOP", mine = "MINE", dig = "DIG", hammer = "HAMMER" }
         local want_work = WANT_WORK[action]
         local ok_a, act = pcall(function() return w.action end)
@@ -857,8 +847,7 @@ function G.validate(cmd)
         end
         -- 距离：原生 CHOP/MINE 要贴到 ~1 格才挥得动。这里放到 1.6 格
         --（引擎会自己微调最后一点点），超过就直接拒 —— 和 actions/gathering.lua 的
-        -- `work_by_ref` 用**同一个阈值**，避免"guard 放行了、Lua 又拒"的两套标准。
-        -- 真机踩到：树在 2 格外，guard 放行 → Lua push 之后引擎要走过去 → 被误报成"推不动"。
+        -- 与 work_by_ref 保持一致的距离上限（2.5 格）
         local d = U.dist(actor, ent)
         if d ~= nil and d > 2.5 * U.TILE then return false, "out_of_range", nil end
         target = ent
@@ -871,11 +860,7 @@ function G.validate(cmd)
         if ent.components == nil or ent.components.health == nil then
             return false, "target_not_attackable", nil
         end
-        -- ★ 距离上限按**附近扫描半径**给，不再用 6 格。
-        --   真机（session 8fab0944）：模型读快照时蜘蛛 hem 在 1.8 格，30 秒后 kill 到达时它已游荡到 8 格外，
-        --   被 6 格窗口直接拒成 out_of_range —— 可 ACTIONS.ATTACK 的 BufferedAction 本来就会寻路过去。
-        --   现在只拦"根本不在这片区域"的目标（超过附近扫描半径的 2 倍 = 32 格），
-        --   真正的可达性交给引擎的寻路。
+        -- 距离上限放宽至 32 格（附近扫描半径的 2 倍），近程可达性交由引擎寻路处理。
         local d = U.dist(actor, ent)
         if d ~= nil and d > G.ATTACK_MAX_TILES * U.TILE then return false, "out_of_range", nil end
         target = ent
@@ -899,9 +884,9 @@ function G.validate(cmd)
         if flower == nil then return false, "flower_not_in_inventory", nil end
     end
 
-    -- ═══════════ R8.5：伴生关键物品保护 ═══════════
-    -- 阿比盖尔之花是温蒂唯一的召唤/召回凭据（abigail_flower.lua 带 summoningitem + MakeSmallBurnable）。
-    -- 任务书明确要求：禁止 AI 因为背包空间或整理材料擅自丢弃它，也不得当作普通燃料烧掉。
+    -- ═══════════ 伴生关键物品保护 ═══════════
+    -- 阿比盖尔之花是温蒂唯一的召唤/召回凭据（abigail_flower.lua 带 summoningitem + MakeSmallBurnable），
+    -- 严禁 AI 擅自丢弃或当作燃料烧掉。
     if action == "drop" or action == "fuel" or action == "add_fuel" then
         local want = tostring(cmd.args ~= nil and cmd.args.item or "")
         if want == "abigail_flower" then
@@ -909,7 +894,7 @@ function G.validate(cmd)
         end
     end
 
-    -- ═══════════ SURVIVAL-02 ═══════════
+    -- ═══════════ 范围采集 ═══════════
     if action == "gather_area" then
         if Whale.job ~= nil then return false, "actor_busy", nil end
         local gr = Whale ~= nil and Whale.gatherrules or nil
@@ -923,11 +908,7 @@ function G.validate(cmd)
             local ok_h = hr ~= nil and hr.PREFABS[w] ~= nil
             if not ok_g and not ok_h then return false, "prefab_not_allowed", nil end
         end
-        -- ★ 这里原来有一个"范围内没有成熟目标就拒绝"的预检（no_targets_in_range）。
-        --   真机踩到（Cluster_1）：附近浆果丛都被采空、还没长回来，于是每次 gather_area 都被这句拒掉，
-        --   而回执只有一句 no_targets_in_range —— 模型不知道该干嘛，只能反复换小半径重试，
-        --   表现成"采集不了浆果"。
-        --   去掉它的理由：这**不是安全校验**（白名单 / #N 引用 / 租约 / 距离一条没动），
+        -- 仅做白名单与租约等安全校验，允许动作运行并在无目标时返回可操作提示。
         --   只是"省一次注定失败的调用"的便利判断；而让任务真的跑起来，
         --   它会给出可操作的原因（附近有什么、最近能采的多远、radius 该调多大）。
         --   而且"现在没成熟"不等于"跑起来也没收获"—— 走过去的过程中可能就长好了。
@@ -947,7 +928,7 @@ function G.validate(cmd)
     -- 通过：记世代 + 记 id（注意：记 id 在真正接受时才做，见 accept）
     return true, nil, {
         action = action, spec = spec, actor = actor, status = status, target = target,
-        -- SURVIVAL-01：这四个动作走"白名单 + 服务端解析"的新路径
+        -- 背包类动作由 guard 从真实背包解析，模型只传白名单名字
         survival_eat = (action == "eat") or nil,
         survival_craft = (action == "craft") or nil,
         survival_equip = (action == "equip") or nil,

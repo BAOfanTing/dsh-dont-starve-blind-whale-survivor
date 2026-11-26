@@ -1,4 +1,4 @@
--- 角色 Profile 注册与解析（R8.2）
+-- 角色 Profile 注册与解析
 -- 依据当前玩家真实 prefab 自动识别；未识别用 base；角色切换/玩家实体变化时按 prefab 即时解析，阈值互不污染。
 local GLOBAL = GLOBAL
 local type = type

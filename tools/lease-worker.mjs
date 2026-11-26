@@ -1,4 +1,4 @@
-// M2.0.2 审查用：在**独立 Node 进程**里跑一次 LeaseManager.acquire（由 m2_0_1_lease_security.test.mjs 启动）
+// 独立 Node 进程工作脚本：执行一次 LeaseManager.acquire（供 tests/control/control-lease.test.mjs 多进程并发测试调用）
 //
 // 用法：node tools/m2_0_1-lease-worker.mjs <leaseFile> <owner> <ownerInstanceId> <startAt> [force]
 // 输出：一行 JSON（acquire 的结果 + 本进程看到的最终租约文件）

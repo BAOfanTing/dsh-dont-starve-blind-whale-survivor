@@ -1,6 +1,6 @@
 -- 把游戏状态翻译成「给 AI 看的结构化数据 + 中文文本」
 --
--- 原则（M1.1）：
+-- 原则：
 --   1. 只有一份数据：先建 data（结构化），文本由 O.Render(data) 从 data 生成。
 --      绝不单独拼一段"可能和 JSON 不一致"的文字。
 --   2. 所有字段都来自真实游戏 API；取不到就记进 data.observer.unavailable_fields，
@@ -110,8 +110,7 @@ local function inventory_block(p, unavailable)
         if block ~= nil then used[#used + 1] = block end
     end
 
-    -- P0-5：必须把背在身上的背包（Overflow Container）里的物品也统计进来，
-    -- 否则背包格物品在 get_state 隐身、Node verify 看不到新增→误判 unverified、is_full 误报。
+    -- 统计随身背包（Overflow Container）里的物品，避免容器格物品漏统计导致误判。
     local overflow = nil
     if inv.GetOverflowContainer ~= nil then pcall(function() overflow = inv:GetOverflowContainer() end) end
     if overflow ~= nil then
@@ -263,7 +262,7 @@ local function world_block(p, unavailable)
     return block
 end
 
--- ─────────────────────────── Nearby（M1.4：结构化，实现搬到 nearby.lua）───────────────────────────
+-- ─────────────────────────── Nearby（结构化扫描由 nearby.lua 实现）───────────────────────────
 
 --- 附近实体这里只做"取数据"：扫描/分类/上限/引用/delta 全在 Whale.nearby 里。
 --- 这里只负责把配置和身份传进去，拿回一份可直接序列化的结构。
@@ -360,7 +359,7 @@ local function warnings(p, player, world)
         if temp.value > 65 then tips[#tips + 1] = "太热了（" .. num(temp.value) .. "°），会中暑" end
     end
 
-    -- 反射层自己做过的事（M1.1 接上；以前 R.Recent() 写了但没人读）
+    -- 反射层自己做过的事
     local reflex = Whale ~= nil and Whale.reflex or nil
     if reflex ~= nil and reflex.Enabled ~= nil then
         -- 关键：模组默认开 ≠ 存档里真的开。旧存档的 modoverrides.lua 可能把它设成 false，
@@ -473,8 +472,7 @@ function O.Render(data)
     local world = data.world or {}
 
     -- 头：快照号 + 世界 + 状态（状态不是 ok 时第一行就说清楚）
-    -- M2.2.2：这里的 snapshot_id 是**状态快照序列号**（s123），不是 nearby 的扫描 id（r…-n123）。
-    -- 两者含义不同，模型调 pickup/harvest 时要用的是**后者**，所以标签必须写清楚，不能混称"快照"。
+    -- 这里的 snapshot_id 是状态快照序列号（s123），不是 nearby 的扫描 id（r…-n123），两者标签必须区分清楚。
     local head = "# 状态快照序列号 " .. tostring(obs.snapshot_id or "?")
     local world_bits = {}
     if world.day ~= nil then world_bits[#world_bits + 1] = "第" .. num(world.day) .. "天" end
@@ -485,7 +483,7 @@ function O.Render(data)
     head = head .. " · 状态 " .. tostring(obs.status or "?")
     lines[#lines + 1] = head
 
-    -- TARGET-REFRESH：世界标识（长期笔记按它分开存，换世界不会把旧基地坐标带过来）
+    -- 世界标识（长期笔记按它隔离存储，防止跨世界混用坐标）
     local ident = data.identity or {}
     if ident.world_key ~= nil and ident.world_key ~= "unknown" then
         lines[#lines + 1] = "世界标识：" .. tostring(ident.world_key)
@@ -512,7 +510,7 @@ function O.Render(data)
     end
     lines[#lines + 1] = "你：" .. table.concat(pieces, "  ")
 
-    -- R8.2：角色 / 阿比盖尔 / 战斗策略（来自真实状态；未知就明确 unknown）
+    -- 角色 / 伴生 / 战斗策略（来自真实状态；未知就明确 unknown）
     if data.character ~= nil then
         local c = data.character
         lines[#lines + 1] = "角色：" .. tostring(c.display_name or c.id or "?") .. "（profile " .. tostring(c.id or "?") .. "，prefab " .. tostring(c.prefab or "?") .. "）"
@@ -583,8 +581,7 @@ function O.Render(data)
     local nearby = data.nearby
     if nearby ~= nil then
         local head = "附近（" .. tostring(nearby.radius) .. " 格内"
-        -- M2.2.2：nearby 的扫描 id 必须出现在文本里 —— 模型调 pickup/harvest 要填的就是它。
-        -- 只在该快照可用时打印；error/缺失时绝不回显历史 id（见下面的分支）。
+        -- nearby 的扫描 id 必须出现在文本里（供 pickup/harvest 填 snapshot_id）；error/缺失时绝不回显历史 id。
         local nearby_sid = nil
         if nearby.status ~= "error" and nearby.snapshot_id ~= nil and nearby.snapshot_id ~= "" then
             nearby_sid = tostring(nearby.snapshot_id)
@@ -594,9 +591,7 @@ function O.Render(data)
         if scan.reused then
             head = head .. "，沿用 " .. tostring(math.floor((scan.age_ms or 0) / 100) / 10) .. " 秒前的扫描"
         end
-        -- OBSERVATION-01：告诉模型这一帧还剩多久有效。
-        -- 真机踩到：快照 2 秒一刷、模型思考 3~5 秒，于是"刚 get_state 拿到的 id"下一次调用就 stale_snapshot。
-        -- 与其让模型盲目重试，不如把有效期写出来，让它知道"要赶紧用，或者干脆先别取 id"。
+        -- 提示当前帧剩余有效时间，提示模型及时使用或选用不依赖 snapshot_id 的动作。
         if scan.scan_seconds ~= nil and scan.age_ms ~= nil then
             local left = tonumber(scan.scan_seconds) - tonumber(scan.age_ms) / 1000
             if left ~= nil then
@@ -619,7 +614,7 @@ function O.Render(data)
             for _, def in ipairs(defs) do
                 local bucket = nearby.buckets ~= nil and nearby.buckets[def.key] or nil
                 if bucket ~= nil and #bucket > 0 then
-                    -- M2.2：桶满了就明说，别让模型以为"可拾取物一共只有这些"
+                    -- 桶满时给出截断提示
                     local bucket_full = nearby.max_per_bucket ~= nil and #bucket >= nearby.max_per_bucket
                     local parts = {}
                     for _, item in ipairs(bucket) do
@@ -635,7 +630,7 @@ function O.Render(data)
                         if item.is_burning == true then text = text .. " 着火中" end
                         if item.is_burnt == true then text = text .. " 已烧焦" end
                         if item.harvest_ready == false then
-                            -- P0-7：优先看真实成熟度；已采空/未成熟的植株绝不能显示成"可采/可收"
+                            -- 优先看真实成熟度；已采空/未成熟的植株绝不显示成可采
                             text = text .. " 未成熟（现在不能采）"
                         elseif item.is_harvestable == true then
                             if item.use_action == "gather" then
@@ -644,8 +639,7 @@ function O.Render(data)
                                 text = text .. " 可收(harvest)"
                             end
                         end
-                        -- TARGET-REFRESH：稳定句柄。它跨扫描有效（#N 只在这一帧有效），
-                        -- 目标没了就作废；模型可以直接把它填进 target_handle。
+                        -- 稳定句柄（跨扫描有效，目标消失时作废，可直接填入 target_handle）
                         if item.handle ~= nil then text = text .. " 句柄" .. tostring(item.handle) end
                         if item.fuel_percent ~= nil then text = text .. " 燃料 " .. tostring(item.fuel_percent) .. "%" end
                         if item.stewer ~= nil then
@@ -664,11 +658,11 @@ function O.Render(data)
                     lines[#lines + 1] = "  " .. def.label .. "：" .. table.concat(parts, "；") .. suffix
                 end
             end
-            -- M2.2.2：把"这些 #N 属于哪一份 nearby 快照"写在引用旁边，避免模型拿状态序列号去填
+            -- 把 #N 归属的 Nearby 快照 ID 写在引用旁边，避免与状态快照序列号混淆
             if nearby_sid ~= nil then
                 lines[#lines + 1] = "  ↑ 以上 #N 引用属于 Nearby 快照 ID：" .. nearby_sid
                     .. "；调 pickup/harvest 时 snapshot_id 必须填这个（不要填上面的状态快照序列号）"
-                -- TARGET-REFRESH：给出**不会过期**的两条替代路，省掉模型"猜编号"的整类错误
+                -- 给出不过期的替代路径（类别选目标 / target_handle）
                 lines[#lines + 1] = "  ↑ 不想管快照号时：只说类别（pickup_nearest / pickup_food / "
                     .. "harvest_nearest / chop_nearest / mine_nearest + target_kind），服务端会实时找目标；"
                     .. "要指定上面某一个具体目标时，用它的 句柄h… （跨帧有效）或 #N + Nearby 快照 ID"
@@ -741,9 +735,7 @@ end
 
 local sample_cache = { at = nil, actor_guid = nil, data = nil }
 
---- TARGET-REFRESH：长期记忆必须绑定"哪个世界（存档 + 分片）"。
---- 真机证据：换了存档之后笔记里还留着旧基地 (21,-81)，而角色其实在 (-21,-5)。
---- 优先用 cluster_id（真正的存档标识，跨读档稳定）；读不到才退回 session_id
+--- 长期记忆世界标识（存档 + 分片）：优先使用 cluster_id（跨读档稳定），读不到才退回 session_id。
 --- （每次读档都会变 —— 会牺牲跨读档的记忆连续性，但**绝不会把两个世界的坐标混在一起**，
 --- 失败要安全）。world_key_source 如实标注用的是哪一个，不编造。
 local function world_key_of(identity)
@@ -825,7 +817,7 @@ function O.BuildData(actor, opts)
             cluster_id = identity.cluster_id,
             cluster_id_source = identity.cluster_id_source,
             shard_id = identity.shard_id,
-            -- TARGET-REFRESH：长期笔记按这个键分开存，换世界不会串坐标
+            -- 长期笔记按世界键隔离存储
             world_key = wk,
             world_key_source = wk_source,
         },
@@ -843,7 +835,7 @@ function O.BuildData(actor, opts)
         data.player = player_block(actor, info, unavailable)
         data.world = world_block(actor, unavailable)
         data.nearby = nearby_block(actor, info, now, unavailable, data.identity, opts.force)
-        -- R8.2：角色 Profile + 阿比盖尔伴生 + 战斗策略（来自真实组件；读不到就保持 null/unknown，不伪造）
+        -- 角色 Profile + 伴生状态 + 战斗策略（来自真实组件；读不到保持 null/unknown，不伪造）
         if Whale ~= nil and Whale.character ~= nil then
             local okc, prof = pcall(function() return Whale.character.Resolve(actor) end)
             if okc and prof ~= nil then
@@ -858,8 +850,7 @@ function O.BuildData(actor, opts)
                         local okay, tgt = pcall(function() return bt.GetTarget() end)
                         if okay and tgt ~= nil then data.combat.active_target = tostring(tgt.prefab or "target") end
                     end
-                    -- R8.5：防御交接状态（summoning / engaged）—— 让日志与上层能区分
-                    -- "正在受控防御" 与 "只是附近有怪"，不要把两者混为一谈。
+                    -- 防御交接状态（summoning / engaged），区分受控防御与周围威胁。
                     if bt ~= nil and bt.DefenseStatus ~= nil then
                         local okd, ds = pcall(function() return bt.DefenseStatus() end)
                         if okd and type(ds) == "table" then

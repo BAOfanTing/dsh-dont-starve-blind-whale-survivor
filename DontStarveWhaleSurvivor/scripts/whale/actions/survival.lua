@@ -69,11 +69,7 @@ local function unequip_by_slot(j, p, slot_name)
         end
         j.data.prefab = tostring(before.prefab)
         j.data.slot = slot
-        -- ★ 真机 bug（0.35.0）：DST 的 Inventory:Unequip(slot) 只把物品从 equipslots 摘掉
-        --   并 **return item**，不会自动放回 itemslots。原版 player_common.lua 也是
-        --   `local item = inv:Unequip(...)` 然后自己 GiveItem / 存起来。
-        --   我们以前直接丢掉返回值 → 火把被摘下后没进背包，DST 把它丢到地上/销毁。
-        --   于是"白天把火把收起来省燃料"变成"火把凭空消失"，夜里 portable=false 直接黑死。
+        -- DST 的 Inventory:Unequip(slot) 只从 equipslots 摘下并返回 item，必须手动 GiveItem 放回背包。
         local ok, item = pcall(function() return inv:Unequip(slot) end)
         if not ok then return "fail", "unequip_failed: " .. tostring(item) end
         if item ~= nil and item:IsValid() then
@@ -200,7 +196,7 @@ JOBS.eat = function(j, p)
         return "run"
     end
 
-    -- ── 以下为 SURVIVAL-01 之前的旧路径（reflex 用），语义保持不变 ──
+    -- ── reflex 内部调用旧路径（保留兼容语义）──
     local item = nil
     if j.args.item ~= nil and j.args.item ~= "" then
         item = U.find_item(p, j.args.item)

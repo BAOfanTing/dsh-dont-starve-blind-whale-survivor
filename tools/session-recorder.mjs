@@ -1,4 +1,4 @@
-// 旁路会话记录器 CLI（SURVIVAL-02.1）。
+// 旁路会话记录器 CLI。
 // 核心实现已搬到 lib/session-log.js —— 插件发布包的 files 只含 lib/，
 // tools/ 不会被打包，插件必须从 lib 里 import。这里只保留命令行入口，
 // 并 re-export 给单测用（tests/bridge/session-recorder.test.mjs 从本文件导入）。

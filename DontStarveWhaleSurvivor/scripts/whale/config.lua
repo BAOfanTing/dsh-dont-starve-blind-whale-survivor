@@ -1,7 +1,6 @@
 -- 模组配置的唯一出口（把 modinfo 里那几项真正绑到行为上）
 --
--- 以前 OBSERVER_INTERVAL / OBSERVER_SCAN_RADIUS / OBSERVER_SCAN_SECONDS 只有归档掉的
--- A 栈观察器在读，界面上看得见、改了一点用没有。M1.1 把这三项接到活的 B 栈观察器上：
+-- modinfo 配置夹取与导出：把配置项限制在安全区间，供观察器与主循环统一读取：
 --
 --   INTERVAL            → state_interval   文件里状态多久重写一次（秒）
 --   OBSERVER_INTERVAL   → observe_interval 快照多久重算一次（秒）；命中缓存就不重复生成
@@ -20,9 +19,7 @@ C.DEFAULTS = {
     state_interval = 1,
     observe_interval = 2,
     scan_radius = 32,
-    -- OBSERVATION-01：默认从 4 降到 1。
-    -- 实测扫描只要 1ms；而 4 秒缓存意味着模型最坏拿到"已经用掉 2 秒"的帧，
-    -- 它思考要 3~5 秒 → 动作到达时必然 stale_snapshot（真机 8 次失败里 6 次是这个）。
+    -- 默认 1 秒刷新缓存：扫描仅耗时 ~1ms，短缓存窗可降低长思考后的 stale_snapshot 概率。
     scan_seconds = 1,
     nearby_max_total = 60,
     nearby_max_per_bucket = 12,

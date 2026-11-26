@@ -28,15 +28,12 @@ local WORK_NAMES = {
 }
 A.WORK_NAMES = WORK_NAMES
 
---- R8.5：防御通道的 cmd_id。
---- 为什么需要独立 id：防御由 Reflex 发起、但**不是** P0 逃命；它必须能和 Reflex flee
---- 做"受控交接"，又不能占用模型指令的结果槽（见 bridge.Report）。用 "defense" 单独标识，
---- 抢占矩阵里单独放行，结果写本地文件而不是 whale_result.json。
+--- 防御通道的 cmd_id。
+--- 防御由 Reflex 发起但不等同于逃跑：通过独立 "defense" 标识参与抢占矩阵与受控交接，
+--- 并将结果写本地状态而不占用模型指令结果槽。
 A.DEFENSE_ID = "defense"
 
---- R8.5：Reflex 动作的"意图键"（flee/heal/light/eat/fuel/...）。
---- try_action 会在启动后写 job.reflex_key；这里做一层兜底推断，避免旧 job 没有该字段时
---- 把 heal/light 误判成 flee（那会放开不该放开的接管）。
+--- Reflex 动作的意图键（flee/heal/light/eat/fuel/...）；旧 job 缺字段时按 name 兜底推断。
 local function reflex_intent(j)
     if j == nil then return nil end
     if j.reflex_key ~= nil then return j.reflex_key end
@@ -63,7 +60,7 @@ local function health_percent_of(p)
     return nil
 end
 
---- R8.5 抢占矩阵（唯一判定处，禁止各处散落"改 cmd_id 绕过"）。
+--- 抢占矩阵（唯一判定处，禁止各处散落改 cmd_id 绕过）。
 ---
 --- 期望行为：
 ---   Reflex flee  → Wendy defense handoff : 允许受控交接（仅逃跑时；黑暗中/濒死时不交）
@@ -264,11 +261,7 @@ A.best_weapon = best_weapon
 
 --- 模拟"按住动作键"（官方连砍机制：引擎在状态机里自己重推同一个动作）。
 ---
---- ★ 真机 bug（2026-11-17，用户："砍树/砸矿都是走到附近，然后停几秒再开始"）：
----   这里原来写的是**布尔** `true`，但 `playercontroller.remote_controls` 的值是
----   **倒计时数字**，引擎自己只用 `0`（按住）和 `nil`（松开）：
----       playercontroller.lua:872  if self.remote_controls[CTRL] == nil then ... = 0 end
----       playercontroller.lua:897  self.remote_controls[CTRL] = not isreleased and 0 or nil
+--- playercontroller.remote_controls[CONTROL_ACTION] 为数字 0（按住）或 nil（松开），见 playercontroller.lua:872,897。
 ---   而 `PlayerController:CooldownRemoteController(dt)` 会对每个值做算术：
 ---       playercontroller.lua:537  self.remote_controls[k] = math.max(v - dt, 0)
 ---   它在 playercontroller.lua:3097 被调用时**只要角色空闲或移动中就会传真实 dt** ——
@@ -448,7 +441,7 @@ local RECIPE_ALIASES = {
     treasurechest = "treasurechest",
     sciencemachine = "researchlab",
     researchlab = "researchlab",
-    -- TENT（2026-11-17）：炼金引擎（原生名 researchlab2）+ 帐篷
+    -- 炼金引擎（原生名 researchlab2）与帐篷
     alchemyengine = "researchlab2",
     researchlab2 = "researchlab2",
     tent = "tent",
@@ -577,7 +570,7 @@ local INSTANT_NON_INTRUSIVE = {
 }
 
 function A.Start(name, args, cmd_id, ctx)
-    -- R8.1：租约换手冻结期间，禁止任何 reflex 通道启动新动作（防止其它路径绕过冻结）
+    -- 租约换手冻结期间，禁止任何 reflex 通道启动新动作（防止其它路径绕过冻结）
     if cmd_id == "reflex" and Whale ~= nil and Whale.bridge ~= nil
         and Whale.bridge.LocalActionsFrozen ~= nil and Whale.bridge.LocalActionsFrozen() then
         return false, "local_action_frozen"
@@ -615,10 +608,7 @@ function A.Start(name, args, cmd_id, ctx)
         return true, nil
     end
     if job ~= nil then
-        -- ★ R8.5：抢占矩阵（唯一判定处）。以前这里是"reflex 一律不许被打断"，
-        --   导致 Reflex flee 正在跑时，伴生防御永远接不上（真机：青蛙追击 →
-        --   flee 反复启动 → advance_task 一直被 reflex_active 阻断）。
-        --   现在只对"防御交接"按明确矩阵放行，其余保护一条没放宽。
+        -- 抢占矩阵（唯一判定处）：仅按 may_preempt 规则允许防御交接等高优通道抢占。
         local ok_pre, why_pre = may_preempt(job, cmd_id, args, name)
         if not ok_pre then
             return false, why_pre or "job_running"
@@ -687,9 +677,7 @@ function A.Tick()
     if ok and status == "run" and j.t0 ~= nil then
         if (U.now() - j.t0) > budget then
             status = "fail"
-            -- ★ R8.5 真机发现：战斗 job 被预算判失败时，battle 的会话不会被 StepJob 收尾，
-            --   于是 B.InCombat()/active_target 会永久悬挂（日志里 REFLEX_SUPPRESSED 一直刷、没有 FINISH）。
-            --   这里显式让 battle 自己收尾（Abort 内部会 Cleanup + 打 DEFENSE_ABORT 日志）。
+            -- 战斗 job 超时或预算结束时显式调用 battle.Abort() 收尾会话，避免 B.InCombat() 悬挂。
             if j.name == "fight_spider" and Whale ~= nil and Whale.battle ~= nil
                 and Whale.battle.Abort ~= nil then
                 pcall(function() Whale.battle.Abort("budget_exceeded") end)

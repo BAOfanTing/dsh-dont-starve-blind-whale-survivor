@@ -80,9 +80,8 @@ local STRATEGIES = {
         can_kite = true,
         supported = true,
     },
-    -- ★ R8.5：青蛙（依据 .runtime/dst-scripts）：
-    --   prefabs/frog.lua：FROG_HEALTH=100、FROG_DAMAGE=10、FROG_ATTACK_PERIOD=1、runspeed=8；
-    --     tags: hostile / animal / prey / smallcreature / frog；onhitother → thief:StealItem(目标)
+    -- 青蛙（依据 prefabs/frog.lua：FROG_HEALTH=100、FROG_DAMAGE=10、FROG_ATTACK_PERIOD=1、runspeed=8）
+    --   onhitother 会触发 thief:StealItem(目标)
     --     —— **命中会击落玩家背包里的一件物品**（这就是"阿比盖尔之花被击落"的原版机制）；
     --     OnAttacked → ShareTarget(30, 同tag "frog") —— 打一只会引来周围青蛙协同敌对。
     --   brains/frogbrain.lua：ChaseAndAttack(MAX_CHASE_TIME=8) → 追击不放弃，不能靠直线跑甩掉。
@@ -177,7 +176,7 @@ local function blog(tag, fields)
 end
 B.Log = blog
 
--- P1-6：走路 RPC 节流——APPROACH/LURE/RETREAT/LOOT 每 0.2s tick 都无条件 walk_to 会反复触发 GoToPoint/walkto RPC。
+-- 走路 RPC 节流：避免 0.2s tick 无条件重复触发 GoToPoint/walkto RPC。
 local WALK_THROTTLE_S = 0.5
 local function walk_throttled(p, tx, tz)
     local now = U.now()
@@ -293,20 +292,16 @@ function B.GetTarget()
     return session ~= nil and session.target or nil
 end
 
--- ★ R8.5 真机 bug：防御会话必须在**这里**前置声明。
---   之前 `local defense` 写在文件更靠下（战斗状态机附近），而 B.Cleanup() 定义在它之前，
---   Lua 的作用域规则让 Cleanup 里引用到的是**全局** defense（永远是 nil），
---   于是真机上会话结束后 `DefenseStatus()` 仍返回 "engaged"、Reflex 一直以为在防御而不敢逃跑。
+-- 防御会话必须在 B.Cleanup() 之前声明，避免 Lua 作用域将 Cleanup 内的 defense 解析为 nil 全局。
 local defense = nil
--- 停手中止后的冷却时间点（R8.5：防止"开战→停手→立刻再开战"的 8 秒死循环）
+-- 停手中止后的冷却时间点（防止开战→停手→再开战死循环）
 local defense_retry_at = 0
 
 function B.Cleanup()
     if session ~= nil then
         session = nil
     end
-    -- R8.5：战斗会话结束 = 这次防御已收尾；防御交接状态一并清掉，
-    -- 让 reflex 下一次调度重新评估"要不要重新召唤/再来一场防御"。
+    -- 战斗会话结束时清理防御交接状态（summoning 阶段除外），让 reflex 下次重新评估。
     if defense ~= nil and defense.phase ~= "summoning" then
         defense = nil
     end
@@ -327,7 +322,7 @@ function B.Abort(reason)
     return false
 end
 
--- ─────────────── 角色 / 伴生 / 防御会话（R8.5）───────────────
+-- ─────────────── 角色 / 伴生 / 防御会话 ───────────────
 --
 -- 红线：防御**不是**第二条战斗执行器。它只通过既有 A.Start 启动既有 JOBS
 --      （summon_companion / fight_spider），由 A.Tick 推进；这里只保存"交接状态"，
@@ -340,15 +335,11 @@ local SUMMON_TIMEOUT_S = 8           -- 召唤交接最长容忍时间（超过�
 local SUMMON_RETRY_COOLDOWN_S = 20   -- 召唤失败后的退避，禁止无限重试
 local GROUP_MAX_WITH_COMPANION = 3   -- 伴生健康时可同时纠缠的敌人数上限
 local COMPANION_MIN_HEALTH = 0.40    -- 阿比盖尔低于此比例不再算"能扛"
--- ★ R8.5.6：温蒂"拿长矛也打"。avoid_melee 不再等于"永远不还手"：
---   有像样近战武器（长矛 34 / 斧头 27.5，阈值 25）且血量够时，温蒂贴到武器射程内和阿比盖尔一起输出；
---   没武器 / 血量 < 60% / 夜里手举火把时，仍然只站位不近战（火把不能当武器）。
+-- 温蒂近战协同门槛：有像样近战武器（阈值 25）且血量 >= 60% 时协同输出；否则保持避战站位。
 local MIN_MELEE_WEAPON_DAMAGE = 25
 local WENDY_MELEE_MIN_HP = 0.60
 local WENDY_MELEE_RANGE_TILES = 1.9   -- 贴到武器射程内才出手
--- ★ R8.5 真机发现（第 1 天青蛙战）：战斗 job 被 A.Tick 的预算判失败时，battle 会话不会收尾，
---   于是 B.InCombat()/active_target 永久悬挂、REFLEX_SUPPRESSED 每秒刷却没有 FINISH。
---   除了 core.A.Tick 里显式 Abort 之外，battle 自己也必须有硬上限，避免任何调用方忘了收尾。
+-- 单场战斗硬上限，防止调用方未及时收尾导致会话永久悬挂。
 local MAX_SESSION_S = 45             -- 单场战斗硬上限（秒）
 local STALL_ABORT_S = 8              -- 伴生主战时连续无伤害多久判"停手"（阿比盖尔跑出防御范围）
 local STALL_RETRY_S = 6              -- 停手中止后的冷却：这段时间不要马上又开一场（让 Reflex 先脱离）
@@ -497,10 +488,7 @@ function B.ShouldSuppressReflex(p, attacker)
     end
 
     -- 硬规则2：群体围攻。
-    -- ★ R8.5：旧规则是"num_attackers>1 直接紧急覆盖"，导致"三只青蛙在附近"
-    --   永远进不了防御（真机：flee 反复启动、advance_task 一直被阻断）。
-    --   现在：只有当敌人**真的把温蒂当目标**时才计数；伴生健康且可协助时允许受控群战，
-    --   硬上限 3 只、且阿比盖尔/温蒂血量任何一项跌破安全线都立刻回退保命。
+    -- 仅统计真正以玩家为目标的攻击者；伴生健康且可协助时允许受控群战（上限 3 只），血量跌破安全线立刻回退保命。
     local num_attackers = count_attackers_targeting(p, 8)
     if num_attackers > 1 then
         local allow, why = can_tolerate_group(p, num_attackers)
@@ -790,8 +778,7 @@ function B.StepJob(j, p)
     if j.step == "start" or session == nil then
         local is_defense = (j.cmd_id == "defense" or (j.ctx and j.ctx.is_defense) or false)
 
-        -- R8.2：角色战斗策略。温蒂（requires_companion_for_hunt）必须阿比盖尔可协助才主动狩猎；
-        -- 但如果是被动防御（is_defense），不可拒战等死。
+        -- 角色战斗策略：需要伴生协助才主动狩猎的角色，被动防御时不拒战。
         local _prof = (Whale ~= nil and Whale.character ~= nil and Whale.character.Resolve ~= nil) and Whale.character.Resolve(p) or nil
         local _pol = nil
         if _prof ~= nil and _prof.GetCombatPolicy ~= nil then
@@ -855,8 +842,7 @@ function B.StepJob(j, p)
             loot_index = 1,
             reflex_suppressed_count = 0,
             reflex_intervened = nil,
-            -- ★ R8.5：温蒂 avoid_melee 必须真正落地。avoid_melee 来自 Profile/CombatPolicy，
-            --   但只有"阿比盖尔真的可协助"时才切到伴生主战（否则仍然是原来的风筝打法）。
+            -- avoid_melee 来自 Profile/CombatPolicy，伴生可协助时切换至伴生主战。
             avoid_melee = (_pol ~= nil and _pol.avoid_melee == true),
             companion_led = false,
             companion = nil,
@@ -887,14 +873,13 @@ function B.StepJob(j, p)
     session.weapon = current_weapon_name(p)
     session.armor = current_armor_name(p)
 
-    -- ★ R8.5：每 tick 重新读伴生状态（阿比盖尔可能刚被召唤 / 刚死 / 刚走远）。
-    --   日志限频：只在"关键状态变化"或每 5 秒打一次，绝不每帧刷屏。
+    -- 每 tick 重新读取伴生状态，按关键状态变化或每 5 秒限频打日志。
     local _comp_now = companion_of(p)
     if _comp_now ~= nil then
         session.companion = _comp_now
         local _assist = (_comp_now.alive == true and _comp_now.can_assist == true)
         session.companion_led = (_assist and session.avoid_melee == true)
-        -- ★ R8.5.6：温蒂有武器（长矛/斧头）+ 血量够 → 允许和阿比盖尔一起输出
+        -- 持有近战武器且血量充足时允许温蒂协同近战输出
         session.melee_weapon_damage = equipped_weapon_damage(p)
         session.wendy_melee = session.companion_led
             and (session.melee_weapon_damage ~= nil and session.melee_weapon_damage >= MIN_MELEE_WEAPON_DAMAGE)
@@ -932,7 +917,7 @@ function B.StepJob(j, p)
         return "fail", "low_health: 自身血量过低（<25%），中止战斗并脱离"
     end
 
-    -- 2. 多怪围攻守卫（R8.5：伴生健康时可受控群战，上限 3 只；否则立刻紧急中止）
+    -- 2. 多怪围攻守卫（伴生健康时可受控群战，上限 3 只；否则立刻紧急中止）
     local threat_count = count_attackers_targeting(p, 8)
     if threat_count > 1 then
         local allow, why = can_tolerate_group(p, threat_count)
@@ -962,11 +947,7 @@ function B.StepJob(j, p)
         end
     end
 
-    -- 4. 硬上限 / 伴生停手守卫（R8.5 真机发现：会话不能永久悬挂）
-    --    · 单场战斗超过 MAX_SESSION_S：无论谁忘了收尾，都必须自己结束；
-    --    · 伴生主战时连续 STALL_ABORT_S 没有造成任何伤害：说明阿比盖尔跑出了原版防御范围
-    --      （真机：她跟随距离能到 6.5 世界单位 > ABIGAIL_DEFENSIVE_MAX_FOLLOW=5，于是停手），
-    --      继续挂着只会让 Reflex 一直被抑制，必须回退让 Reflex 重新评估。
+    -- 4. 硬上限 / 伴生停手守卫：防止单场战斗超时或伴生停手后永久悬挂抑制 Reflex。
     if session.started_at ~= nil and (now - session.started_at) > MAX_SESSION_S then
         transition(STATES.EMERGENCY, "battle_timeout")
         blog("DEFENSE_ABORT", {
@@ -1127,9 +1108,7 @@ function B.StepJob(j, p)
             return "run"
         end
 
-        -- ★ R8.5：伴生主战（温蒂 avoid_melee 的真正落地）。
-        --   阿比盖尔可协助时：温蒂**绝不**调用自己的 ACTIONS.ATTACK；
-        --   她只负责保持在"阿比盖尔防御范围"内，由阿比盖尔输出。
+        -- 伴生主战（温蒂避免盲目近战，由阿比盖尔主力输出）。
         if session.companion_led then
             local comp = session.companion
             if comp == nil or comp.alive ~= true or comp.can_assist ~= true then
@@ -1176,9 +1155,7 @@ function B.StepJob(j, p)
             end
             session.last_seen_hp = session.target_current_hp
 
-            -- ★ R8.5.6：温蒂"拿长矛也打"。
-            --   有像样武器（长矛/斧头）且血量 ≥60%：贴到武器射程内，和阿比盖尔一起输出（复用下面的通用出手逻辑）；
-            --   没武器 / 血量低 / 夜里手举火把：保持原来的"只站位不近战"。
+            -- 有像样近战武器且血量充足时协同近战，否则保持安全距离由阿比盖尔输出。
             if session.wendy_melee == true then
                 if tiles == nil or tiles > WENDY_MELEE_RANGE_TILES then
                     local ox, _, oz = U.pos(target)
@@ -1389,7 +1366,7 @@ function B.StepJob(j, p)
             blog("LOOT", { found = #session.loot_queue })
         end
 
-        -- P1-6：先结算上一次拾取是否真的完成（被中断/背包满不能直接跳过漏捡）
+        -- 先结算上一次拾取是否真的完成（被中断/背包满不能直接跳过漏捡）
         if session.loot_pending ~= nil then
             local lp = session.loot_pending
             local still = (lp.item ~= nil and lp.item:IsValid())
@@ -1430,7 +1407,7 @@ function B.StepJob(j, p)
             else
                 local ba = BufferedAction(p, item, ACTIONS.PICKUP, nil)
                 A.push(p, ba)
-                -- P1-6：不立即 ++，记 pending，下一 tick 核对是否真的被捡走
+                -- 不立即 ++，记 pending，下一 tick 核对是否真的被捡走
                 session.loot_pending = { idx = idx, item = item, at = now }
             end
         end

@@ -38,7 +38,7 @@ local PERMANENT_LIGHTS = {
 }
 
 -- ── 阈值 ──────────────────────────────────────────────────────────────────
--- ── R8.1 集中配置：本地生存大脑的阈值/频率唯一硬编码处（改这里，不散落） ──
+-- ── 本地生存大脑的阈值/频率集中配置 ──
 local CFG = {
     every = 5,                 -- Reflex 每 N 个 0.2s tick 跑一次（≈1s）
     fuel_night_min = 0.35,     -- 夜间火源燃料比例低于此值 → P1 添柴
@@ -99,7 +99,7 @@ local COOLDOWN = {
     craft_light = 4,
     stow_light = 5,     -- 白天收纳火把防抖
     temperature = 10,
-    -- R8.5：伴生维护（主动召唤 / 掉落花朵回收）
+    -- 伴生维护（主动召唤 / 掉落花朵回收）
     companion_summon = 20,
     companion_flower = 5,
 }
@@ -426,9 +426,7 @@ local function light_report(p)
     local twigs_ok = (counts["twigs"] or 0) >= (2 * RESERVE_TORCHES)
     local reserve_ok = grass_ok and twigs_ok
 
-    -- P0-2：以引擎权威光照(native_light=p:IsInLight)为准；附近有火但引擎判定不在光里，不算"有光"。
-    -- P0-2/NR-25：has_usable 完全以引擎权威光照(native_light=p:IsInLight)为准；
-    -- 手持火把但引擎判定没被照亮时也必须算“无光”（否则夜里举着照不到的火把还以为安全）。
+    -- 完全以引擎权威光照 (native_light = p:IsInLight) 为准；手持火把但引擎判定不在光里仍算无光。
     local has_usable = native_light == true
     return {
         phase = phase,
@@ -602,7 +600,7 @@ local function evaluate_flee_target(p, foe, threats)
     local base_angle = nil
     if native ~= nil and native.FleeAngle ~= nil then
         local a = native.FleeAngle(p, foe, 9)
-        -- P0-1：FleeAngle 返回的是【角度(0~360)】，必须转成弧度再参与 cos/sin
+        -- FleeAngle 返回的是角度 (0~360)，需转换为弧度再参与 cos/sin
         if type(a) == "number" then base_angle = a * (GLOBAL.DEGREES or (math.pi / 180)) end
     end
     if base_angle == nil then
@@ -953,7 +951,7 @@ local function job_priority(job)
     if job == nil then return P3 end
     if job.reflex_priority ~= nil then return job.reflex_priority end
     if job.cmd_id == REFLEX_ID then return P1 end
-    -- R8.5：防御/召唤交接也是"保命级"任务，不允许被 P2 日常维护抢走
+    -- 防御/召唤交接也是保命级任务，不允许被 P2 日常维护抢走
     if job.cmd_id == "defense" then return P1 end
     return P2
 end
@@ -1154,7 +1152,7 @@ local function confirm_pending(p)
         diag("sanity_result", { "result=" .. (ok and "succeeded" or "unconfirmed") })
         mark_fail("sanity_pick", ok and 1 or 8)   -- 成功短冷却；未确认长冷却，避免重复
     elseif pending.kind == "companion_summon" then
-        -- R8.5：召唤结果必须用真实 ghostlybond 状态核对，不看"自称成功"
+        -- 召唤结果必须用真实 ghostlybond 状态核对，不看动作自称成功
         local comp = companion_state(p)
         local ok = comp ~= nil and comp.present == true and comp.alive == true
         diag("companion_summon_result", {
@@ -1200,13 +1198,11 @@ local function is_critical_hunger(p, hunger)
     return true
 end
 
--- ─────────── R8.5：伴生维护（主动召唤 / 掉落花朵回收）───────────
+-- ─────────── 伴生维护（主动召唤 / 掉落花朵回收）───────────
 --
--- 背景（真机）：温蒂背包里有阿比盖尔之花，但**一直没召唤**；青蛙追击时 flowers
--- 被原版 frog:onhitother → thief:StealItem 击落到地上 (25,-58)，角色从此长时间没有伴生。
--- 这里做两件事（都只在"完全空闲且确实安全"时执行，P2）：
---   1) 花朵掉在地上 → 用既有 pickup 动作捡回来（FLOWER_DROPPED / FLOWER_RECOVERED）；
---   2) 有花、没召唤、周围没敌人 → 提前召唤（不等被咬）。
+-- 仅在完全空闲且安全时执行（P2）：
+--   1) 阿比盖尔之花掉在地上 → 用既有 pickup 动作捡回；
+--   2) 有花、未召唤且周围安全 → 提前召唤伴生。
 
 local COMPANION_FLOWER_RADIUS = 16
 local COMPANION_LOG_GAP = 20
@@ -1429,11 +1425,7 @@ local function run(p)
     local hp_safe = hp ~= nil and hp >= 0.50
 
     if attacker ~= nil and combat_targeting(attacker, p) then
-        -- ★ R8.5：受控防御接线。
-        --   旧实现只对野狗(hound/icehound/firehound)调 B.StartDefense，普通蜘蛛/蜘蛛战士/青蛙
-        --   一律走 flee —— 真机上就是"青蛙靠近 → flee 反复启动 → 生命 150→130 → advance_task
-        --   一直被 reflex_active 阻断"。现在：任何"战术表里有策略"的敌人，都先尝试受控防御；
-        --   StartDefense 内部再判残血 / 是否有伴生 / 是否正在召唤 / 优先级，绝不硬接。
+        -- 受控防御接线：战术表支持且满足安全阈值时先尝试 B.StartDefense，再按情况回退 flee。
         local strategy_supported = false
         if B ~= nil and B.STRATEGIES ~= nil then
             local strat = B.STRATEGIES[attacker.prefab]
@@ -1543,14 +1535,14 @@ local function run(p)
         if reflex_stow_light(p, rep) then return end
     end
 
-    -- ── R8.1：日常生存维护（燃料/进食/理智）。夜间低燃料=P1 可抢占；其余 P2 仅空闲执行。
+    -- ── 日常生存维护（燃料/进食/理智）。夜间低燃料=P1 可抢占；其余 P2 仅空闲执行。
     if phase == "night" then
         if maintain_fuel(p, phase) then return end
     end
     if Whale.job == nil then
         if maintain_fuel(p, phase) then return end
         if maintain_food(p) then return end
-        -- R8.5：伴生维护（捡回掉落的花 / 提前召唤）
+        -- 伴生维护（捡回掉落的花 / 提前召唤）
         if maintain_companion(p) then return end
         if maintain_sanity(p) then return end
     end
@@ -1597,7 +1589,7 @@ function R.Tick()
     end
 
     sync_inflight()
-    -- P0-4：confirm_pending 出错不能把 pending 永久卡住（否则每 tick 都在这儿抛错、保命反射停摆）
+    -- confirm_pending 异常不可卡住 pending，防止后续 tick 持续报错停摆。
     local ok_cp, err_cp = pcall(confirm_pending, p)
     if not ok_cp then
         pending = nil

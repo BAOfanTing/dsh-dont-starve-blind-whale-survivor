@@ -1,10 +1,9 @@
--- 采集白名单（SURVIVAL-01 / gather）：草与树苗
+-- 采集白名单（gather）：草与树苗
 --
--- 依据（本机 scripts.zip 实测，见 docs/STATUS.md §4.5）：
+-- 依据（DST components/pickable）：
 --   · 草丛 grass：components/pickable，SetUp("cutgrass", ...)，原生动作 ACTIONS.PICK
 --   · 树苗 sapling：components/pickable，SetUp("twigs", ...)，原生动作 ACTIONS.PICK
---   · 两者都用 pickable:CanBePicked() 判"现在能不能采"（采空后 canbepicked=false，
---     标签 barren 只是显示用；**不能拿标签当成熟判据**，M2.3 真机踩过这个坑）
+--   · 两者都用 pickable:CanBePicked() 判"现在能不能采"（barren 标签仅用于显示，不能替代 CanBePicked() 判成熟度）
 --
 -- 观察侧（nearby.lua 的 harvestables 分类）与执行侧（guard.lua / actions.lua）**共用这一份**，
 -- 避免"观察说能采、执行说不行"。

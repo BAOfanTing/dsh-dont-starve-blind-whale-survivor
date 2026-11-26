@@ -17,38 +17,34 @@ Whale.guard_action_specs = {
         required_components = { "locomotor" },
         args = {},
     },
-    -- M2.1：按 #N 引用拾取地面普通资源（不准传 prefab、不准传坐标）
+    -- 按 #N 或稳定句柄拾取地面普通资源（不准传 prefab、不准传坐标）
     pickup = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
-    -- M2.3：按 #N 收获**已成熟**的试点对象（本阶段只有普通浆果丛）。
-    -- 底层原生动作是 ACTIONS.PICK（不是 ACTIONS.HARVEST —— 那是 crop/harvestable 那一类）。
+    -- 按 #N 或稳定句柄收获已成熟对象（底层原生动作 ACTIONS.PICK）
     harvest = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
-    -- ═══════════════ TARGET-REFRESH：实时目标选择（不依赖 #N / snapshot_id）═══════════════
-    -- 为什么需要：真机 94 次调用里 23 次 pickup + 3 次 chop + 2 次 harvest 全是 stale_snapshot。
-    -- #N 只在当前扫描帧内有效，而模型一轮思考 30~60 秒 —— 拿到引用时那一帧早换了。
-    -- 这五个动作让模型只说"要哪一类"，由 Lua 在授权那一刻用当前世界状态重新找目标。
-    -- ★ target_kind 是**固定枚举**（Whale.targetrules.KINDS），模型不能传 prefab / GUID / 表达式。
+    -- ═══════════════ 实时目标选择（不依赖 #N / snapshot_id）═══════════════
+    -- 由 Lua 在授权时按当前世界状态重新定位最近目标；target_kind 为固定枚举（Whale.targetrules.KINDS）。
     pickup_nearest = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
@@ -90,14 +86,14 @@ Whale.guard_action_specs = {
             radius = { type = "number", min = 2, max = 40 },
         },
     },
-    -- ═══════════════ SURVIVAL-01：四个基础生存动作 ═══════════════
+    -- ═══════════════ 基础生存动作 ═══════════════
     -- gather：按 #N 采集草丛/树苗（白名单在 Whale.gatherrules）
     gather = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -128,10 +124,8 @@ Whale.guard_action_specs = {
             item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
-    -- ═══════════ TENT（2026-11-17）：睡觉 ═══════════
-    -- sleep：在帐篷 / 睡袋里睡一觉（回血回理智，掉饥饿）。
-    -- Lua 侧 JOBS.sleep 早就有实现（找附近的 sleepingbag 实体或背包里的睡袋 → 推 SLEEPIN），
-    -- 这里把它开放给模型。不需要 #N 引用：服务端自己在 radius 内找最近的帐篷。
+    -- ═══════════ 睡眠 ═══════════
+    -- sleep：在帐篷 / 睡袋里睡一觉（回血回理智，掉饥饿），在 radius 内找最近 sleepingbag。
     sleep = {
         risk = "R2",
         required_components = { "locomotor", "health", "hunger", "inventory" },
@@ -139,7 +133,7 @@ Whale.guard_action_specs = {
             radius = { type = "number", min = 2, max = 40 },
         },
     },
-    -- ═══════════ SURVIVAL-02 ═══════════
+    -- ═══════════ 范围采集与探路 ═══════════
     -- gather_area：范围采集（白名单由 gatherrules/harvestrules 决定，模型只能给"只采哪种"+范围+上限）
     gather_area = {
         risk = "R2",
@@ -161,14 +155,14 @@ Whale.guard_action_specs = {
             look = { type = "number", min = 8, max = 40 },
         },
     },
-    -- ═══════════ SURVIVAL-03：批量开放的常用动作 ═══════════
+    -- ═══════════ 作业、战斗与常见生存动作 ═══════════
     -- chop / mine / dig / hammer：对目标用 workable 动作（都要 #N 引用）
     chop = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -179,8 +173,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -191,8 +185,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -203,8 +197,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "health", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -216,8 +210,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -229,8 +223,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -241,8 +235,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "health" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -269,7 +263,7 @@ Whale.guard_action_specs = {
             item = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
         },
     },
-    -- ═══════════ SURVIVAL-04：第二批 ═══════════
+    -- ═══════════ 装备、发言与交互 ═══════════
     unequip = {
         risk = "R1",
         required_components = { "inventory" },
@@ -288,8 +282,8 @@ Whale.guard_action_specs = {
         risk = "R1",
         required_components = { "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -301,8 +295,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -314,21 +308,21 @@ Whale.guard_action_specs = {
         risk = "R1",
         required_components = {},
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
             target_handle = { type = "string", pattern = "^h[0-9a-z]+$", max_len = 10 },
         },
     },
-    -- ═══════════ SURVIVAL-05：容器 / 给予 / 烹饪 ═══════════
+    -- ═══════════ 容器 / 给予 / 烹饪 ═══════════
     container_take = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -341,8 +335,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -354,8 +348,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -367,8 +361,8 @@ Whale.guard_action_specs = {
         risk = "R2",
         required_components = { "locomotor", "inventory" },
         args = {
-            -- TARGET-REFRESH：两种引用方式二选一。
-            --   target_ref + snapshot_id = 当前帧的 #N（语义完全不变）
+            -- 两种引用方式二选一：
+            --   target_ref + snapshot_id = 当前帧的 #N
             --   target_handle           = 稳定句柄（跨扫描有效，不暴露 GUID，过期即拒）
             target_ref = { type = "string", pattern = "^#[1-9]%d*$", max_len = 8, required = true },
             snapshot_id = { type = "string", max_len = 64, required = true },
@@ -376,7 +370,7 @@ Whale.guard_action_specs = {
             items = { type = "string", max_len = 120 },
         },
     },
-    -- ═══════════ SURVIVAL-06：建造 / 查询 ═══════════
+    -- ═══════════ 建造 / 查询 ═══════════
     build = {
         risk = "R2",
         required_components = { "locomotor", "builder" },
@@ -403,7 +397,7 @@ Whale.guard_action_specs = {
         risk = "R1",
         required_components = {},
         args = {
-            -- TARGET-REFRESH：允许数字 —— 石头真名是 rock1 / rock2（只放 [a-z_] 会挡掉它们）
+            -- 允许数字（如 rock1 / rock2）
             prefab = { type = "string", pattern = "^[a-z0-9_]+$", max_len = 32, required = true },
             radius = { type = "number", min = 4, max = 40 },
         },

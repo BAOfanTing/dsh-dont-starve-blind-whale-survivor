@@ -1,4 +1,4 @@
--- M2.2：拾取候选判定的**唯一来源**。
+-- 拾取候选判定的**唯一来源**（观察侧 nearby 与执行侧 guard 共用）。
 --
 -- 为什么要有这个文件：
 --   观察侧（nearby 的 pickupables 桶）和执行侧（guard 的 pickup 校验）如果各写一套
@@ -38,10 +38,8 @@ P.PREFABS = {
     twigs = true,
     cutgrass = true,
     flint = true,
-    -- ★ TARGET-REFRESH：**砍树/挖矿的产物**。
-    --   真机踩到（用户原话："你能把树砍了啊，就是没捡木头"）：
-    --   树砍倒了、木头就掉在 0.3 格外，但 `log` 不在拾取白名单 →
-    --   pickup / pickup_nearest(log) 全都被拒，模型只能干看着。
+    -- 砍树/挖矿的掉落物（与 target_kind 对齐）
+    log = true,
     --   这些都是原生 AddComponent("inventoryitem") 的普通地面物品，捡起来完全安全。
     log = true,
     rocks = true,
@@ -52,9 +50,7 @@ P.PREFABS = {
     pinecone = true,
     acorn = true,
     petals = true,
-    -- ★ R8.5：阿比盖尔之花（关键角色物品）。
-    --   真机：青蛙命中会走原版 frog:onhitother → thief:StealItem(玩家)，把背包里的花
-    --   **击落到地上**（日志里花出现在地面 (25,-58)，然后角色长时间没有伴生）。
+    -- 阿比盖尔之花（关键角色物品，青蛙击落后可通过既有 pickup 通道回收）。
     --   花是普通地面物品（inventoryitem + canbepickedup），必须允许用既有 pickup 捡回来；
     --   同时 guard 会禁止 AI 主动丢弃/当燃料烧掉它（见 guard.lua）。
     abigail_flower = true,

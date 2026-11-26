@@ -55,7 +55,7 @@ end
 
 --- gather {resource="grass", count=6, radius=25}
 --- 反复"走到最近的 → 采"，直到背包里那种产物到够数 / 附近没得采 / 超时。
--- SURVIVAL-01：原名 "gather" 与新增的原子动作重名，宏改名（它本来就不对模型暴露）
+-- 宏名为 gather_macro（不与原子动作 gather 重名，不对模型直接暴露）
 A.register("gather_macro", function(j, p)
     if j.step == "start" then
         j.data.resource = j.args.resource or j.args.what

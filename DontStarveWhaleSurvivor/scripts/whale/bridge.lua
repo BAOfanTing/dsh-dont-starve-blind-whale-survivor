@@ -22,7 +22,7 @@ local last_cmd_id = nil
 
 local TICK = 0.2      -- 动作推进
 local READ_CMD = 0.3  -- 读指令（保留：io 通道优先，读不到再走持久化字符串）
---- 状态写盘间隔：M1.1 起由 modinfo 的 INTERVAL 决定（config.lua 兜底 1 秒），
+--- 状态写盘间隔：由 modinfo 的 INTERVAL 决定（config.lua 兜底 1 秒），
 --- 运行中还能被 whale_settings.json 的 interval 覆盖（插件侧热改）。
 local WRITE_STATE = 1
 do
@@ -125,7 +125,7 @@ local function build_state()
     end
 
     seq = seq + 1
-    -- M1.1：观察器只从 Actor Provider 拿实体；文本与结构化数据同源（data → text）
+    -- 观察器只从 Actor Provider 拿实体；文本与结构化数据同源（data → text）
     local text, data
     local ok_build, err = pcall(function()
         text, data = Whale.observe.BuildSample(actor, { seq = seq, now = now })
@@ -161,7 +161,7 @@ local function build_state()
         seq = seq,
         t = os.time(),
         mod = Whale.version,
-        -- R8.5：源码构建标识（只改 version 数字无法区分"游戏实际加载的是哪份源码"）
+        -- 源码构建标识（区分实际加载的源码与版本号）
         build = Whale.build or Whale.version,
         ready = data.ready == true,
         text = text,
@@ -194,7 +194,7 @@ function B.Report(ok, text, cmd_id, reason)
     local id = cmd_id or last_cmd_id
     -- R8.x：本地反射(reflex)/本地防御(defense)回执走独立文件，**绝不占用模型指令的结果槽**。
     -- 否则反射动作完成会覆盖 pending_result，把模型的 result 挤掉 → Node 等不到匹配 command_id → 罚站到超时判 unknown。
-    -- R8.5：防御（Wendy companion defense / summon handoff）同样不是模型指令，必须走本地结果文件。
+    -- 防御动作同样不是模型指令，必须走本地结果文件。
     if tostring(id) == "reflex" or tostring(id) == "defense" then
         local fname = (tostring(id) == "defense") and "whale_defense_result.json" or "whale_reflex_result.json"
         local ioname = (tostring(id) == "defense") and "whale_io_defense_result.json" or "whale_io_reflex_result.json"
@@ -224,7 +224,7 @@ function B.Report(ok, text, cmd_id, reason)
     log("结果 " .. tostring(id) .. " " .. tostring(ok) .. "：" .. tostring(text))
 end
 
--- ─────────────────── M2.0.2：换手确认 ───────────────────
+-- ─────────────────── 换手确认 ───────────────────
 --- Node LeaseManager 是权威租约的唯一写入者；Lua 只写这份"撤销确认"。
 --- 看到 revoking 时：先用已有的 A.Abort 安全停掉旧动作，再写确认。
 local last_ack_key = nil
@@ -260,7 +260,7 @@ function B.WriteLeaseAck(authority)
                       FILES.io_lease_ack or "whale_io_lease_ack.json", text)
 end
 
--- ─────────────── R8.1：本地动作（Reflex）换手冻结 ───────────────
+-- ─────────────── 本地动作（Reflex）换手冻结 ───────────────
 -- revoking 一经观察立即冻结 Reflex 的新动作；只有读到**新鲜、合法的非 revoking 权威**才解冻。
 -- 冻结不改变权威判定本身，只是让 Reflex 在换手窗口内不再启动新动作（先冻结→再停旧动作→再写 ACK）。
 local _local_action_frozen = false
@@ -337,16 +337,13 @@ dispatch_command = function(cmd)
         return
     end
 
-    -- M2.0：Lua 是最终授权者。协议/过期/白名单/租约世代/角色/参数/组件 全在这里校验。
+    -- Lua 是最终授权者：协议/过期/白名单/租约世代/角色/参数/组件全部在此校验。
     local guard = Whale.guard
     if guard == nil or guard.validate == nil then
         B.Report(false, "安全校验层缺失，拒绝执行", id, "guard_missing")
         return
     end
-    -- ★ 真机事故（2026-11-25）：这里原来是裸调用 `guard.validate(cmd)`。
-    --   某次 guard 内部的一行写错（`U.g("EQUIPSLOTS")`，util 没有 g）抛了 Lua 错误，
-    --   异常一路冒到引擎层 → **整个专用服务器进程崩溃**，客户端掉线、存档被迫重进。
-    --   一条命令的校验写错不该有这么大的代价：这里兜住，把错误变成一条普通的拒绝回执。
+    -- 捕获 guard.validate 内部异常并转为普通拒绝回执，避免单条命令异常导致服务器崩溃。
     local ok_call, ok_cmd, reason, detail = pcall(guard.validate, cmd)
     if not ok_call then
         local err = tostring(ok_cmd)
@@ -356,9 +353,7 @@ dispatch_command = function(cmd)
     end
     if not ok_cmd then
         log("拒绝指令 " .. id .. "：" .. tostring(reason))
-        -- TARGET-REFRESH：被拒时把可操作的说明一起回给模型（合法 target_kind 清单、
-        -- 当前真实背包里能吃什么、最近的目标在多远……）。reason 代码一个字没变，
-        -- 所以状态分类、去重、既有测试全都不受影响。
+        -- 被拒时把可操作的说明（合法 target_kind、当前真实背包等）一并回传，同时保留稳定的 reason 错误码。
         local text = "拒绝：" .. tostring(reason)
         if type(detail) == "table" and detail.hint ~= nil then
             text = text .. "｜" .. tostring(detail.hint)
@@ -368,22 +363,21 @@ dispatch_command = function(cmd)
     end
     guard.accept(cmd)
 
-    -- M2.1：guard 已把 #N 解析成真实实体（detail.target），这里只负责传下去
-    -- ★ 与上面 guard.validate 同理：动作层抛错也只能变成一条失败回执，绝不让服务器崩。
+    -- guard 已将目标引用解析为真实实体（detail.target），执行层报错同样转为失败回执不崩服。
     local ok_start, started, err = pcall(Whale.actions.Start,
         action,
         type(cmd.args) == "table" and cmd.args or {},
         id,
         {
             target = detail ~= nil and detail.target or nil,
-            -- SURVIVAL-01：背包类动作由 guard 从**真实背包**解析，模型只给白名单名字
+            -- 背包类动作由 guard 从真实背包解析，模型只传白名单名字
             survival_eat = detail ~= nil and detail.survival_eat or nil,
             survival_craft = detail ~= nil and detail.survival_craft or nil,
             survival_equip = detail ~= nil and detail.survival_equip or nil,
             recipe = detail ~= nil and detail.recipe or nil,
             item = detail ~= nil and detail.item or nil,
             food = detail ~= nil and detail.food or nil,
-            -- SURVIVAL-02：范围采集 / 走出去找
+            -- 范围采集 / 探路参数
             survival_area = (action == "gather_area") or nil,
             survival_seek = (action == "seek") or nil,
             prefab = cmd.args ~= nil and cmd.args.prefab or nil,
@@ -392,25 +386,25 @@ dispatch_command = function(cmd)
             step = cmd.args ~= nil and cmd.args.step or nil,
             max_tiles = cmd.args ~= nil and cmd.args.max_tiles or nil,
             look = cmd.args ~= nil and cmd.args.look or nil,
-            -- SURVIVAL-03
+            -- 作业与等待参数
             times = cmd.args ~= nil and cmd.args.times or nil,
             seconds = cmd.args ~= nil and cmd.args.seconds or nil,
-            -- SURVIVAL-04
+            -- 装备与交互参数
             survival_unequip = (action == "unequip") or nil,
             slot = cmd.args ~= nil and cmd.args.slot or nil,
             text = cmd.args ~= nil and cmd.args.text or nil,
             fuel_item = cmd.args ~= nil and cmd.args.item or nil,
             use_action = cmd.args ~= nil and cmd.args.action or nil,
-            -- SURVIVAL-05
+            -- 容器与烹饪参数
             count = cmd.args ~= nil and cmd.args.count or nil,
             -- 外层给的预算（秒）。顶层字段，不来自 args，模型改不了。
             budget_s = tonumber(cmd.budget_s) or nil,
             cook_items = cmd.args ~= nil and cmd.args.items or nil,
-            -- SURVIVAL-06
+            -- 建造与查询参数
             survival_build = (action == "build") or nil,
-            -- TARGET-REFRESH：实时目标选择的类别（诊断/回执用；目标实体由 guard 解析好放在 target）
+            -- 实时目标选择的类别（诊断/回执用；目标实体由 guard 解析放在 target）
             target_kind = cmd.args ~= nil and cmd.args.target_kind or nil,
-            -- TARGET-REFRESH：稳定句柄路径（有它就没走 snapshot_id）
+            -- 稳定句柄路径（有它就没走 snapshot_id）
             target_handle = cmd.args ~= nil and cmd.args.target_handle or nil,
             build_recipe = cmd.args ~= nil and cmd.args.recipe or nil,
             recipe_filter = cmd.args ~= nil and cmd.args.filter or nil,
@@ -583,7 +577,7 @@ send_http_exchange = function(immediate_state)
                     local a = Whale.guard.parse_authority(data.authority)
                     if a ~= nil then
                         Whale.authority_cache = { data = a, at = os.time() }
-                        -- P1-3：HTTP 更新权威时也要同步冻结/解冻（与 poll_authority 一致），否则换手期 Reflex 不受控
+                        -- HTTP 更新权威时同样同步冻结/解冻，与 poll_authority 保持一致
                         if a.status == "revoking" then
                             B.FreezeLocalActions("lease_revoking")
                             if B.WriteLeaseAck ~= nil then B.WriteLeaseAck(a) end
@@ -620,7 +614,7 @@ end
 
 local last_error_at = 0
 
--- Phase 5 M4：三路互守用（文件桥 server_tick ↔ 观察器 Tick ↔ net tick）
+-- 三路互守用（文件桥 server_tick ↔ 观察器 Tick ↔ net tick）
 local server_tick_task = nil
 local server_last_tick_at = 0
 local server_rebuilds = 0
@@ -651,7 +645,7 @@ end
 local function server_tick()
     tick_count = tick_count + 1
     server_last_tick_at = bridge_now()
-    -- P1-3：http_inflight 看门狗——Node 重启/丢回调时防止 HTTP 通道永久锁死
+    -- http_inflight 看门狗：Node 重启或回调丢失时复位标记，防止 HTTP 通道永久锁死
     step("HTTP看门狗", function()
         if http_inflight and (U.now() - http_inflight_since) > 8 then
             http_inflight = false

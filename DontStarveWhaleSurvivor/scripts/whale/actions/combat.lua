@@ -24,10 +24,8 @@ local equip_if_needed = A.equip_if_needed
 local find_by_name = A.find_by_name
 local nearest_hostile = A.nearest_hostile
 
--- ── 自动换武器时要避开"把光换没了" ──
--- ★ 我自己踩到的坑（2026-11-17，真机）：给 attack_by_ref 补上自动换武器后，
---   夜里手里举着火把去杀蜘蛛 —— 一换长矛就陷入黑暗，保命反射立刻以 dark_no_light 中断任务，
---   回执变成"失败：dark_no_light"。所以：**天黑且手上是能用的光源时，不换武器**（宁可空手打）。
+-- ── 自动换武器时避开把手里可用光源换掉 ──
+-- 天黑且手上是可用光源时保持手持光源（宁可空手或由外部切光），避免换矛立刻陷入黑暗触发 dark_no_light。
 local LIGHT_HAND_PREFABS = { torch = true, lantern = true }
 
 --- 手上是不是"还能用的手持光源"（火把/提灯，且没烧完）。是就返回它，否则 nil。
@@ -67,11 +65,10 @@ end
 
 --- 攻击（attack = 打几下；kill = 打到死或超时）
 ---
---- ★ NATIVE-REUSE：玩家挥砍**不能**用 combat:TryAttack()。
----   `Combat:TryAttack`（components/combat.lua:829）只 PushEvent("doattack")，
----   这个事件在专用服务器上只会触发 SGwilson 的攻击动画，**但不会发 RPC**。
----   客户端看起来是"挥了空刀，怪没掉血、甚至没进入仇恨"。
----   原版客户端攻击（playercontroller.lua:DoAttackButton）走的是 BufferedAction(p, target, ACTIONS.ATTACK, weapon)。
+--- 玩家挥砍不能用 combat:TryAttack()：
+---   Combat:TryAttack（components/combat.lua:829）只 PushEvent("doattack")，
+---   在专用服务器上只会触发攻击动画但不会发 RPC；
+---   原版客户端攻击（playercontroller.lua:DoAttackButton）走 BufferedAction(p, target, ACTIONS.ATTACK, weapon)。
 ---   这里统一走 native.AttackAction，把武器选取、攻击距离、BufferedAction 组装全交给原版。
 ---
 --- ★ 挥砍次数按**引擎记录的真实出手**算（combat.lastdoattacktime，combat.lua:1231），
@@ -95,11 +92,7 @@ local function attack_by_ref(j, p, target, mode)
         j.data.swings = 0
         j.data.want = mode == "kill" and 999 or (tonumber(j.ctx and j.ctx.times) or 1)
         j.data.phase_start = U.now()
-        -- ★ 真机 bug（session 8fab0944）：老的 legacy_attack 会 equip_if_needed(p, best_weapon(p))，
-        --   新的 attack_by_ref 漏了这一步。白天反射把火把收回背包后人是空手，
-        --   于是 attack/kill 直接空手挥拳（温蒂空手 7.5 伤害），打蜘蛛等于送死。
-        --   进战斗前先换出背包里伤害最高的武器（没有武器就空手，不报错）。
-        --   ★ 但天黑、手上举着能用的光源时**不换** —— 换了就黑，会被查理咬死/被反射打断。
+        -- 进战斗前优先装备背包里伤害最高的武器；若天黑且手持可用光源则保留光源不换武器。
         if equip_if_needed ~= nil and best_weapon ~= nil then
             local w = best_weapon(p)
             if w ~= nil and not (in_darkness(p) and hand_useful_light(p) ~= nil) then
@@ -146,10 +139,7 @@ local function attack_by_ref(j, p, target, mode)
         end
         if busy(p) then return "run" end
 
-        -- ★ 真机 bug（session 8fab0944）：指令到达时目标可能已经跑远（蜘蛛会游荡/逃跑）。
-        --   ACTIONS.ATTACK 的 BufferedAction 确实会寻路，但如果目标在 20 格开外，
-        --   SGwilson 会先跑很久，`attack` 的 180 秒预算和模型的耐心都不够。
-        --   这里先自己走过去，进入 2 格再挥砍；走近用 walk_to（和 move_to 同一条移动链路）。
+        -- 目标超过 2 格时先用 walk_to 走近再挥砍，避免长距离寻路阻塞。
         local gap = U.dist(p, target)
         if gap ~= nil and gap > 2 * U.TILE and A.walk_to ~= nil then
             local tx, tz = nil, nil

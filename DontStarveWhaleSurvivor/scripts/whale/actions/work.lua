@@ -46,15 +46,11 @@ local function job_work(j, p, action_id)
         j.data.done_count = 0        -- 干了多少下
         j.data.done_targets = 0      -- 干倒/干空了几个目标
         j.data.radius = tonumber(j.args.radius) or 20
-        -- Phase 5 M5：until_gone = 一直干到当前目标消失（砍倒一棵树要 4~5 下，
-        -- 只砍 1 下树不倒、不掉东西 —— 真机踩到过：chop count=1 返回"干了 1 次"但没拿到木头）
-        -- 语义：count = 要干倒几个目标；until_gone=false 时 count 才表示"干几下"。
+        -- until_gone=true 时持续作业至目标消失；until_gone=false 时 count 表示挥砍次数。
         j.data.until_gone = j.args.until_gone == true
         j.data.max_hits = tonumber(j.args.max_hits) or 30
         j.data.cur_hits = 0          -- 当前目标已经干了几下
-        -- 真机 bug（2026-11-12）：done_targets 在 busy 分支和 done_count 分支**都会累加**，
-        -- 同一棵树被算两次 → chop(count=3) 砍 1~2 棵就报"干倒了 3 个目标"但没真砍够。
-        -- 加 counted 标记，确保每个目标只计一次。
+        -- 使用 counted 标记确保每个目标只计一次，避免 busy 与 done 分支重复计数。
         j.data.counted = false
         j.step = "next"
     end
@@ -71,8 +67,7 @@ local function job_work(j, p, action_id)
             hold_control(p, false)
             return "done", string.format("干了 %d 下就停了（可能工具不对或目标太硬）", j.data.done_count)
         end
-        -- until_gone 模式：优先继续砍同一个目标，避免每次都重新找"最近的"导致来回换树
-        -- （真机踩到：60 秒砍 30 下没砍倒一棵 —— 每下都在换树）
+        -- until_gone 模式：优先继续作业同一个有效目标，避免来回切换目标。
         local target = nil
         if j.data.until_gone and j.data.target ~= nil and j.data.target:IsValid() then
             local w = j.data.target.components ~= nil and j.data.target.components.workable or nil
@@ -124,9 +119,7 @@ local function job_work(j, p, action_id)
         if not j.data.phase_wait then
             if busy(p) then j.data.phase_wait = true end
             if U.now() - j.data.phase_start > 3 and not j.data.phase_wait then
-                -- 3 秒还没动起来：可能是工具不对（比如普通斧头砍不动"臃肿常青树"），
-                -- 或者够不着。真机反馈（2026-11-12）：这种情况直接 FAILED 太脆，
-                -- 应该把这棵树拉黑、换下一棵重试（最多换 3 次）。
+                -- 3 秒还没动起来：可能是工具不对或够不着，拉黑当前目标并换下一个重试（最多 3 次）。
                 local target = j.data.target
                 local w = target ~= nil and target:IsValid() and target.components.workable or nil
                 if w ~= nil and w.workleft ~= nil and w.workleft > 0 then
@@ -166,10 +159,7 @@ local function job_work(j, p, action_id)
                 return "fail", string.format("超时了：干了 %d 下、干倒 %d 个目标（要 %d 个），先看看周围还有没有能干的",
                     j.data.done_count, j.data.done_targets or 0, j.data.count)
             end
-            -- 真机验证（2026-11-12）：hold_control 一开，引擎就在状态机内部自己连砍，
-            -- 效果是"按住空格"——实测 push 1 次就砍倒了 6 棵树（完全连续、无顿挫）。
-            -- 但**必须及时松手**，否则会一路砍下去。这里每次 tick 检查当前目标是否已被砍倒：
-            -- 砍倒的树会变树桩（workable.action 从 CHOP 变成 DIG/MINE）。
+            -- 开启 hold_control 后引擎在状态机内部连砍，需每次 tick 检查目标是否已倒并及时松手。
             if j.data.until_gone and j.data.target ~= nil then
                 local t = j.data.target
                 local w = t:IsValid() and t.components ~= nil and t.components.workable or nil
@@ -185,15 +175,7 @@ local function job_work(j, p, action_id)
                 if done_this then
                     -- 目标倒了：立刻松手，避免继续砍下一棵
                     hold_control(p, false)
-                    -- 真机 bug（2026-11-12 真机验证）：done_this 只看"目标无效/动作变了"，
-                    -- 但如果这一斧根本没挥出去（cur_hits == 0），那是换目标而不是砍倒，
-                    -- 不能计数 —— 否则 chop(count=3) 会报"砍倒 3 个"实际只倒 1 棵。
-                    --
-                    -- 真机 bug 2（2026-11-12 二次真机）：一旦引擎"按住动作键"连砍真的生效
-                    -- （hold_control 打开后引擎自己在状态机里重推），人物**一直是 busy**，
-                    -- 走不到下面 +1 的分支 → cur_hits 永远是 0 → 一棵都被判成"没挥过"→
-                    -- done_targets 永远不涨 → count=1 也会一路砍下去（实测 2 分钟砍了 16 棵）。
-                    -- 所以改用"这个目标我真的推过动作"作为证据。
+                    -- 引擎连砍期间人物保持 busy，因此以 pushed_target 或 cur_hits > 0 作为有效挥砍依据，防止换目标时误计砍倒数。
                     local actually_chopped = j.data.pushed_target == t or (j.data.cur_hits or 0) > 0
                     if actually_chopped and not j.data.counted then
                         j.data.counted = true
@@ -219,8 +201,7 @@ local function job_work(j, p, action_id)
         end
         j.data.done_count = j.data.done_count + 1
         j.data.cur_hits = (j.data.cur_hits or 0) + 1
-        -- 兜底出口：这个循环必须能停（真机踩到：一直在 acting 里连砍，永远不结束，
-        -- 直到 action_executor 120 秒超时）
+        -- 兜底总次数上限，确保异常场景下循环可终止
         if j.data.done_count >= j.data.max_hits then
             hold_control(p, false)
             return "done", string.format("干了 %d 下就停了（目标可能太硬）", j.data.done_count)
@@ -354,9 +335,7 @@ end
 local function work_by_ref(j, p, target, kind)
     local def = WORK_ACTIONS[kind]
     if def == nil then return "fail", "unknown_work_action" end
-    -- ★ TARGET-REFRESH：**loot 必须先处理**。
-    --   挖矿时岩石一碎实体就失效（IsValid()=false），如果先走下面那句"目标没了 → done"，
-    --   就再也进不到捡东西那一步 —— 真机表现就是「挖了 岩石」但石头/燧石全躺在地上没捡。
+    -- loot 必须在实体失效检查之前处理，否则岩石碎裂后 IsValid()==false 会跳过拾取阶段。
     if j.step == "loot" then
         return work_loot_step(j, p, def)
     end
@@ -390,10 +369,7 @@ local function work_by_ref(j, p, target, kind)
 
     if j.step == "start" then
         if target:IsInLimbo() then return "fail", "in_limbo: 目标进入了 limbo" end
-        -- ★ TARGET-REFRESH：先看距离，够不着就别推。
-        --   真机踩到：桦栗树在 2 格外，push 之后引擎要先走过去，结果被当成"推不动/工具不对"。
-        --   原生 CHOP/MINE 要贴到 ~1 格；这里放宽到 1.6 格（引擎会自己微调），
-        --   超过就直接告诉模型"先 move_to 靠近"，省一次注定失败的动作。
+        -- 启动前先校验距离（>2.5 格直接返回 out_of_range 并附带目标坐标）
         do
             local d0 = U.dist(p, target)
             local tiles0 = d0 ~= nil and (d0 / U.TILE) or nil
@@ -440,32 +416,21 @@ local function work_by_ref(j, p, target, kind)
         j.data.wl0 = U.try(function() return target.components.workable.workleft end)
         j.data.log_busy = false
         j.data.log_hit = false
-        -- ★ TARGET-REFRESH：这里原来只 push **一次**就干等 —— 树要 4~5 下才倒、石头要挖好几下，
-        --   于是永远等不到 work_done，最后 120 秒超时。
-        --
-        -- ★★ 真机 bug（2026-11-17，用户："砍树/砸矿都是走到附近，然后停几秒再开始"）：
-        --   "按住动作键"（hold_control）**不能在这里就开**。此刻人还在往目标走，
-        --   一开引擎的"按住"逻辑就会和我们的动作抢，反而拖慢起手。
-        --   改成"手空下来之后再开"（见 acting 段的 not busy(p) 判断）。
+        -- 进入 acting 阶段后再按需开启 hold_control（避免起步寻路期间与推进逻辑冲突）。
         j.step = "acting"
         return "run"
     end
 
     if j.step == "acting" then
         local alive = target:IsValid()
-        -- ★ TARGET-REFRESH：**先判目标有没有倒，再判忙不忙**。
-        --   顺序很关键：`hold_control` 一开，引擎在状态机内部自己连砍，人物**一直是 busy**，
-        --   如果先走 busy 分支就永远回不到这里（job_work 在 2026-11-12 真机踩过同一个坑）。
+        -- 先判目标有没有倒，再判忙不忙（开启 hold_control 后人物持续 busy，不能阻塞完成判定）。
         local done_now = work_done(target, def.action) or not alive
         if done_now then
             -- 目标倒了：立刻松手，别一路砍到下一棵
             hold_control(p, false)
             j.data.hold_on = false
             j.data.done_at = j.data.done_at or U.now()
-            -- ★ TARGET-REFRESH：砍倒 ≠ 木头到手。原生会把 log/松果/石头**掉在脚下**，
-            --   真机踩到：树砍倒了、木头就在 0.3 格外，但回执只说"砍了常青树"，
-            --   模型以为东西已经进包了，于是没去捡（用户看到的就是"砍了但没捡木头"）。
-            --   所以这里进一个 loot 步骤：把脚边这次掉出来的产物捡起来，再一起报账。
+            -- 目标倒地/碎裂后进入 loot 步骤拾取掉落物（如木头、石头、燧石）
             if j.data.loot_until == nil then
                 j.data.loot_until = U.now() + 3.5   -- 只是兜底上限（背包满/够不着时别拖住一轮动作）
                 j.data.looted = {}
@@ -483,10 +448,7 @@ local function work_by_ref(j, p, target, kind)
             hold_control(p, false)
             return "fail", string.format("%s了 %d 下还没倒（超时；工具太弱或够不着）", def.verb, j.data.hits or 0)
         end
-        -- 还没真正动起来：先分清"够不着"和"工具不对"，别一律报"推不动"。
-        -- 真机踩到：桦栗树在 2 格外，引擎要先走过去，3 秒不够 → 被误报成"推不动/工具不对"。
-        -- 注意：这里**不能**用 `hits <= 1` 当条件 —— 兜底重推每 tick 都会加 hits，
-        -- 距离不够时它也会一直重推，hits 早就 > 1 了（真机就是这么绕过诊断的）。
+        -- 尚未动起来时先区分"距离不够"与"工具不对"，不以 hits <= 1 作为判断（重推会递增 hits）。
         if not busy(p) then
             local waited = U.now() - j.data.phase_start
             local d = U.dist(p, target)
@@ -513,26 +475,9 @@ local function work_by_ref(j, p, target, kind)
                     hands ~= nil and U.describe_item(hands) or "空手")
             end
         end
-        -- ★★ 真机 bug（2026-11-17）：这段原来是**无条件**每 0.4 秒重推一次。
-        --   而 `loco:PushAction` 第一件事是 `self:Clear()` —— 于是每次重推都会
-        --   **把正在走的寻路、正在演的挥砍取消掉**，人杵在原地、砍得极慢
-        --   （实测：装备好到第一次挥砍停了 ~2 秒，一棵桦栗树砍了 14 秒）。
-        --   `job_work` 的重推是在"不忙"分支里的，搬过来时漏了这个门。
-        --   为什么**只**需要 `not busy(p)` 这一道门（不需要再判距离）：
-        --   · 走路时 sg 带 `moving` 标签、`GetBufferedAction()` 也非 nil → busy = true，
-        --     所以"走路中绝不重推"已经由它保证，不会取消寻路；
-        --   · 曾经额外加过 `tiles <= 2.0` 的门，但 start 允许到 2.5 格，
-        --     2.0~2.5 格就成了**死区**：推一次之后再没人驱动（真机实测踩到）。
-        --   "按住动作键"同样只在"手空下来"之后才开，避免它和寻路抢。
-        -- ★★ 真机 bug（2026-11-17，用户："走到第一棵树前停了几秒，砍一下后会顿一下，
-        --   后边才是连砍"）：起手阶段**绝不能重推**。
-        --   从我们 `push` 到引擎真的把动作跑起来之间，`busy(p)` 仍然是 false，
-        --   于是 0.4 秒后我们就重推一次 → `loco:PushAction` 的 `self:Clear()`
-        --   把刚排上队的动作取消重排，反复几次才终于起来。这就是"起手停几秒"。
-        --   一旦引擎跑起来（busy=true）重推就只在动作间隙补位，所以之后连砍是正常的。
-        --
-        --   所以：只有**见过引擎忙**（说明动作真的跑起来过）之后才允许重推；
-        --   另留一个 2.5 秒兜底，万一第一次 push 被静默丢掉还能救一次。
+        -- 仅在“手空下来（not busy）”且“曾见过引擎忙（ever_busy）”之后才补推，
+        -- 避免起手阶段或寻路期间触发 loco:PushAction -> Clear() 取消刚排队的动作；
+        -- 若首次 push 被静默丢弃，保留 2.5 秒兜底重推。
         if busy(p) then
             j.data.ever_busy = true
             if not j.data.log_busy and j.data.t_push ~= nil then

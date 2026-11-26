@@ -18,10 +18,8 @@ Whale = {
     -- 否则排查问题时会看错版本（原来这里写死 0.1.0，modinfo 已经是 0.10.0，对不上）。
     -- 沙箱里读不到 modinfo 时退回下面的兜底值（tests/tool-parity.test.mjs 会盯住它别漂）。
     version = (type(version) == "string" and version) or "0.41.3",
-    -- ★ R8.5：源码构建标识。
-    -- 为什么需要它：只靠 modinfo 的 version 无法判断"游戏实际加载的是哪一份源码"
-    -- （日志里 0.41.2 可能是旧构建）。这个标记写进状态与 server_log，方便对账。
-    build = "0.41.3+r8.5-wendy-defense",
+    -- 源码构建标识（随状态与 server_log 输出，用于核对游戏实际加载的源码版本）。
+    build = "0.41.3",
     verbose = false,
     interval = 1,
     -- 文件桥用到的文件名。服务端和外面（DSH 插件）都认这套名字。
@@ -34,9 +32,9 @@ Whale = {
         io_result = "whale_io_result.json",    -- 模组 -> 外面：执行结果（文件通道，备用）
         settings = "whale_settings.json",      -- 外面 -> 模组：设置
         io_settings = "whale_io_settings.json",
-        lease = "whale_lease.json",            -- M2.0.2：Node -> Lua 权威租约（持久化通道名）
-        io_lease = "whale_io_lease.json",      -- M2.0.2：Node -> Lua 权威租约（io 通道名）
-        lease_ack = "whale_lease_ack.json",    -- M2.0.2：Lua -> Node 换手确认
+        lease = "whale_lease.json",            -- Node -> Lua 权威租约（持久化通道名）
+        io_lease = "whale_io_lease.json",      -- Node -> Lua 权威租约（io 通道名）
+        lease_ack = "whale_lease_ack.json",    -- Lua -> Node 换手确认
         io_lease_ack = "whale_io_lease_ack.json",
         pause = "whale_pause.json",            -- 外面 -> 客户端：要不要暂停世界
         io_pause = "whale_io_pause.json",
@@ -61,28 +59,28 @@ end
 Whale.verbose = modconfig("VERBOSE", false) and true or false
 Whale.interval = tonumber(modconfig("INTERVAL", 1)) or 1
 Whale.reflex_on = modconfig("REFLEX", true) and true or false
--- SURVIVAL-01：运行期强制关（做真实 LLM 实验用；reflex 会抢材料，见 reflex.lua 的说明）
+-- 运行期强制关开关（测试用；开启时屏蔽 reflex，见 reflex.lua）
 Whale.reflex_force_off = false
 
 modimport("scripts/whale/json.lua")
 modimport("scripts/whale/util.lua")
--- M2.2：拾取候选判定的唯一来源。必须在 nearby / guard 之前（观察侧与执行侧都引用它）。
+-- 拾取候选判定的唯一来源。必须在 nearby / guard 之前加载（观察侧与执行侧共用）。
 modimport("scripts/whale/pickuprules.lua")
--- M2.3：收获候选判定的唯一来源（同样必须在 nearby / guard 之前）
+-- 收获候选判定的唯一来源（必须在 nearby / guard 之前加载）。
 modimport("scripts/whale/harvestrules.lua")
 modimport("scripts/whale/gatherrules.lua")
 modimport("scripts/whale/eatrules.lua")
--- TARGET-REFRESH：实时目标选择的唯一真来源（固定枚举 target_kind + 最近目标 + 稳定句柄）。
--- 必须在 nearby / guard 之前：观察侧（nearby 渲染句柄）与执行侧（guard 解析目标）共用它。
+-- 实时目标选择的唯一真来源（固定枚举 target_kind + 最近目标 + 稳定句柄）。
+-- 必须在 nearby / guard 之前加载：观察侧（渲染句柄）与执行侧（解析目标）共用。
 modimport("scripts/whale/targetrules.lua")
 modimport("scripts/whale/craftrules.lua")
 modimport("scripts/whale/equiprules.lua")
--- 配置出口：把 modinfo 那几项夹到安全区间，作为唯一生效值（M1.1）
+-- 配置出口：把 modinfo 配置夹取到安全区间作为唯一生效值
 modimport("scripts/whale/config.lua")
--- 观察对象唯一入口（Actor Provider）：谁来当"我"由它回答（M1.1）
+-- 观察对象唯一入口（Actor Provider）
 modimport("scripts/whale/actor.lua")
 
--- R8.2：角色 Profile（温蒂首发）。所有角色共用 Reflex/Survival/Battle/Actions；Profile 只提供差异化规则。
+-- 角色 Profile（所有角色共用 Reflex/Survival/Battle/Actions；Profile 只提供差异化规则）。
 -- 必须在 nearby/guard/battle/reflex 之前加载（它们会读 Whale.character）。
 modimport("scripts/whale/character/base-profile.lua")
 modimport("scripts/whale/character/profiles/wendy.lua")
@@ -108,11 +106,11 @@ end
 modimport("scripts/whale/nearby.lua")
 -- 白名单规格数据（guard 的第二道闸，必须先于 guard 加载）
 modimport("scripts/whale/guard_specs.lua")
--- M2.0：动作安全底座（Lua 侧最终授权者）
+-- 动作安全底座（Lua 侧最终授权者）
 modimport("scripts/whale/guard.lua")
 modimport("scripts/whale/observe.lua")
--- NATIVE-REUSE：原版能力薄封装（真实照明 / 原版 RunAway 几何 / 玩家 ATTACK 动作）
--- 必须在 actions 与 reflex 之前：它们都靠这一层，别各自再造一遍。
+-- 原版能力薄封装（真实照明 / 原版 RunAway 几何 / 玩家 ATTACK 动作）
+-- 必须在 actions 与 reflex 之前加载：两者均直接依赖它。
 modimport("scripts/whale/native.lua")
 modimport("scripts/whale/actions.lua")
 -- 独立战斗子系统（战术风筝、打二撤一、保命协同）
@@ -124,32 +122,11 @@ modimport("scripts/whale/reflex.lua")
 modimport("scripts/whale/bridge.lua")
 modimport("scripts/whale/hud.lua")
 
--- ★ R8.5：启动时就打出源码构建标识。
--- 只改 modinfo 的 version 数字，无法判断"游戏实际加载的是哪一份源码"（重启/缓存/旧构建都可能）。
--- 这一行同时出现在 server_log 里，配合状态文件里的 build 字段可以对账。
+-- 启动时输出源码构建标识，配合状态文件里的 build 字段校验运行代码版本。
 pcall(function()
     print(string.format("[BUILD] %s version=%s build=%s",
         tostring(Whale.name or "?"), tostring(Whale.version or "?"), tostring(Whale.build or "?")))
 end)
-
--- ─────────── A 栈（Phase 1~6，已归档，M1.0）───────────
--- 这里原来还有 19 个 modimport：scripts/main/{json_encoder,player_observer,inventory_observer,
--- world_observer,entity_observer,threat_observer,state_serializer,observer_manager,config,
--- http_client,connection,heartbeat,telemetry,commands,action_executor,net,probe,task_runner,
--- combat_executor}.lua，外加生成文件 bws_config.lua。
---
--- 它们和上面的 whale 那套是**两条并行的产品线**：都有自己的观察器、自己的通信通道
--- （TheSim:QueryServer → 本地 HTTP）、自己的动作入口（BWS2.actionExecutor / combat / tasks），
--- 而且都能对同一个角色下发动作。M1.0 的收敛决定只留 B 栈，所以整条 A 栈的运行入口在这里断开。
---
--- A 栈代码已**彻底删除**（SURVIVAL-07）。要找回某一段（比如 M4 的战斗 Kiting），
--- 从 git 历史里 checkout，再单独评估、单独 modimport —— 别整条链一起起。
---
---   git log --oneline -- archive/phase-a          # 找到删除前的那次提交
---   git checkout <commit> -- archive/phase-a      # 只取回需要的部分
---
--- 恢复时注意：A 栈的观察器会自己遍历 AllPlayers、用 HTTP 18788 桥，
--- 和现在的 Actor Provider + 文件桥是两套东西，不能混着跑。
 
 -- 游戏里的小窗：挂在玩家的 HUD 上（只有客户端有）
 -- AddClassPostConstruct 的 self 是 PlayerHud 屏幕本身，owner 是玩家实体。

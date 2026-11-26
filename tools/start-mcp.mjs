@@ -43,10 +43,10 @@ const config = {
 }
 
 apply(ctx, config)
-console.log('[m2-start] apply() 已调用，等待 MCP 服务起来…')
+console.log('[mcp] apply() 已调用，等待 MCP 服务起来…')
 
 const shutdown = () => {
-  console.log('[m2-start] 收到退出信号，dispose()')
+  console.log('[mcp] 收到退出信号，dispose()')
   ctx.dispose()
   process.exit(0)
 }
@@ -56,6 +56,6 @@ process.on('SIGTERM', shutdown)
 // 每 3 秒报一次端口状态，便于外部确认
 setInterval(() => {
   fetch('http://127.0.0.1:18090/status')
-    .then((r) => console.log(`[m2-start] 18090 状态 HTTP ${r.status}`))
-    .catch((e) => console.log(`[m2-start] 18090 还没起来: ${e.message}`))
+    .then((r) => console.log(`[mcp] 18090 状态 HTTP ${r.status}`))
+    .catch((e) => console.log(`[mcp] 18090 还没起来: ${e.message}`))
 }, 3000).unref?.()

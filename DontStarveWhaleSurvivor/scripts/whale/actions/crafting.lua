@@ -33,7 +33,7 @@ local RECIPE_ALIASES = {
     treasurechest = "treasurechest",
     sciencemachine = "researchlab",
     researchlab = "researchlab",
-    -- TENT（2026-11-17）：炼金引擎 / 帐篷
+    -- 炼金引擎与帐篷
     alchemyengine = "researchlab2",
     researchlab2 = "researchlab2",
     tent = "tent",
@@ -144,7 +144,7 @@ local BUILD_ALLOWED = {
     sciencemachine = true,-- 科学机器：**log 4** + rocks 4 + goldnugget 1，TECH.NONE（原生配方名 researchlab）
                           -- 注意是原木 log，不是木板 boards（boards 要 TECH.SCIENCE_ONE，得先有机器）
     researchlab = true,
-    -- ── TENT（2026-11-17）：帐篷链 ──
+    -- ── 帐篷科技链 ──
     -- 炼金引擎（原生配方名 researchlab2）：boards 4 + cutstone 2 + transistor 2，TECH.SCIENCE_ONE
     --   boards/cutstone/transistor 都要站在科学机器旁边做（craft 白名单里有）
     alchemyengine = true,
@@ -210,10 +210,7 @@ local function build_by_ctx(j, p)
         -- ② 材料 / 科技
         local can = U.try(function() return builder:CanBuild(j.data.recipe.name) end)
         if not can then
-            -- ★ TARGET-REFRESH：缺料要说清"差什么、差几个"。
-            --   以前这里只回一句"材料不够"，模型不知道还差 goldnugget 1 还是 rocks 4，
-            --   只能反复盲试（真机 `build sciencemachine` 就是这么卡住的）。
-            --   材料数字优先读原版 AllRecipes（craftrules.MissingIngredients 内部就是这条路径）。
+            -- 缺料时明确列出缺少的材料与数量（优先读原版 AllRecipes）
             local cr = Whale ~= nil and Whale.craftrules or nil
             local detailed = nil
             if cr ~= nil and cr.MissingIngredients ~= nil then
@@ -299,11 +296,7 @@ JOBS.craft = function(j, p)
         if j.step == "start" then
             local recipe = recipe_of(name)
             if recipe == nil then return "fail", "recipe_unknown: 游戏里没有这个配方" end
-            -- ★ 真机 bug（2026-11-17）：这里原来用 `builder:KnowsRecipe(recipe)` —— 它
-            --   **不算**"站在科学机器旁边"的临时科技（`_tempbonus` 靠玩家 controller 刷新，
-            --   服务端 actor 上经常还没刷到）。真机表现：机器造好了、人站在 0.7 格内，
-            --   guard 已放行，执行层却在这里又拦一次，回执是
-            --   「recipe_locked: 还不会做 rope（需要先解锁）」。
+            -- 与 guard 统一使用 craftrules.CanCraftNow（优先 CanBuild，避免 KnowsRecipe 遗漏临时科技加成）
             --   现在科技判定**只在 craftrules.CanCraftNow 一处**，guard 与这里同源。
             local knows = rules.CanCraftNow ~= nil and rules.CanCraftNow(p, name) or nil
             if knows == false then
@@ -320,9 +313,7 @@ JOBS.craft = function(j, p)
             j.data.name = name
             j.data.label = (rules.RECIPES[name] ~= nil and rules.RECIPES[name].label) or name
             j.data.before = snapshot_counts(p)
-            -- ★ 真机 bug：空手做 torch 时，原生 DoBuild 会**直接装备**而不是放进背包。
-            --   只比较背包数量会把"做成功且已拿在手里"误判成"成品没进背包"，
-            --   模型因此以为材料被扣、成品消失，转头去做别的，天黑前没光。
+            -- 空手制作火把时原生 DoBuild 会直接装备到手部，需一并记录 hand_before 供核对。
             j.data.hand_before = hand_prefab(p)
             j.data.equipped_before = (Whale ~= nil and Whale.equiprules ~= nil and Whale.equiprules.EquippedItem ~= nil)
                 and Whale.equiprules.EquippedItem(p, j.data.name) ~= nil or false
@@ -353,8 +344,7 @@ JOBS.craft = function(j, p)
         if made > 0 or auto_equipped then
             -- 顺便报告材料消耗
             local used = {}
-            -- ★ TARGET-REFRESH：材料表优先读原版 AllRecipes（和 guard 的 MissingIngredients
-            -- 同一份来源），读不到才退回兜底表 —— 不在这里再抄一份数字。
+            -- 材料表优先读原版 AllRecipes（与 guard 的 MissingIngredients 同源），读不到才退回兜底表。
             local need = (rules.NeededIngredients ~= nil and rules.NeededIngredients(j.data.name))
                 or (rules.RECIPES[j.data.name] ~= nil and rules.RECIPES[j.data.name].ingredients) or {}
             for prefab in pairs(need) do

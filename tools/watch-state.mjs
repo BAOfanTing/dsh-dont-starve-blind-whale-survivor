@@ -1,22 +1,21 @@
-// M1.4 真机采样器（独立工具，**只读**）
+// 真机状态与附近实体只读采样器
 //
-// 目标：把「附近实体结构化观察」在真实 DST 里跑出来的样子完整记下来，供验收判断用：
+// 目标：持续记录运行期状态快照与附近分类桶轨迹，供排查与性能分析使用：
 //   · nearby 三态（ok / empty / error）
-//   · 七个分类桶各自的数量
-//   · #N 引用：唯一性、连续性、同一快照内是否稳定、新快照是否按规则重排
-//   · total_found / total_returned / truncated 是否自洽
-//   · Delta：baseline / added / removed / changed 的变化轨迹
+//   · 分类桶各自的数量
+//   · #N 引用：唯一性、连续性、同一快照内稳定性与重排
+//   · total_found / total_returned / truncated 自洽性
+//   · Delta：baseline / added / removed / changed 轨迹
 //   · scan.duration_ms、scan.reused、scan.timestamp
 //   · 状态文件的新鲜度、写入间隔、nearby JSON 体积
 //
 // 安全边界：
-//   · 只读状态文件（lib/bridge.js readState），**从不调用 bridge.call**，不给游戏发任何动作
+//   · 只读状态文件（lib/bridge.js readState），从不调用 bridge.call，不给游戏发任何动作
 //   · 不写游戏目录、不改存档、不改 mod 配置
-//   · 不改生产代码；不改 tools/m12-watch.mjs（M1.2 的验收工具保持原样）
 //
 // 用法：
-//   node tools/m14-watch.mjs --seconds 60
-//   node tools/m14-watch.mjs --seconds 60 --interval 500 --out tests/artifacts/M1_4
+//   node tools/watch-state.mjs --seconds 60
+//   node tools/watch-state.mjs --seconds 60 --interval 500 --out .runtime/watch
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -62,7 +61,7 @@ const flatRefs = (nearby) => {
   const buckets = nearby?.buckets
   if (!buckets) return out
   if (Array.isArray(buckets)) {
-    // 旧结构（M1.1）：[{kind,label,items}]，没有 ref
+    // 兼容数组结构：[{kind,label,items}]（无 ref）
     for (const group of buckets) for (const item of group.items ?? []) out.push(item)
     return out
   }
@@ -91,7 +90,7 @@ const bucketCounts = (nearby) => {
   return counts
 }
 
-console.log(`M1.4 采样：${seconds} 秒 / 每 ${intervalMs}ms → ${outDir}`)
+console.log(`真机采样：${seconds} 秒 / 每 ${intervalMs}ms → ${outDir}`)
 console.log('（只读：不发任何游戏动作，随时 Ctrl+C）\n')
 
 const startedAt = Date.now()
@@ -296,7 +295,7 @@ const jsonPath = join(outDir, `m14-runtime-${stamp}.json`)
 writeFileSync(jsonPath, JSON.stringify({ summary, frames, perSnapshot: snapshotsWithData }, null, 1), 'utf8')
 
 const lines = [
-  `# M1.4 真机采样 ${summary.startedAt}`,
+  `# 真机采样 ${summary.startedAt}`,
   '',
   `- 采样：${summary.frames} 帧 / ${seconds} 秒（每 ${intervalMs}ms）`,
   `- 状态文件：${summary.statePath ?? '**没找到**'}`,

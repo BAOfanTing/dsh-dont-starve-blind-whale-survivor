@@ -33,8 +33,7 @@ local LINE_H = 24
 -- 右上角面板：距离屏幕右/上边缘的内边距
 local MARGIN = 12
 local PANEL_MIN_H = LINE_H * 3 + 18
--- F8 切换后的一小段时间窗：以"本地刚按下的意图"为准，避免用插件旧的 HUD 文本把
--- 状态/提示语又改回去（真机 bug：按 F8 想开始，却显示"先停下"）。
+-- F8 切换后的一小段时间窗：以"本地刚按下的意图"为准，避免被旧 HUD 文本瞬间覆盖。
 local OPTIMISTIC_WINDOW = 2
 
 local root = nil
@@ -136,9 +135,7 @@ local function ensure_widget(owner)
 
         local font = GLOBAL.DEFAULTFONT
         label = root:AddChild(Text(font, FONT_SIZE))
-        -- ★ 真机 bug：Text 不设置 region size 时，SetHAlign 只按文字自身中心排版。
-        --   多行文字会从 label 中心向左右两边长，左半截被推出屏幕（截图里只剩行尾）。
-        --   先给一个明确的文字区域，再左对齐，文字才会从区域左边开始画。
+        -- Text 必须先设置 region size 再左对齐，否则 SetHAlign 仅按自身中心排版导致左半截越界。
         label:SetRegionSize(WIDTH - 28, LINE_H * 3 + 2)
         label:SetHAlign(GLOBAL.ANCHOR_LEFT)
         label:SetVAlign(GLOBAL.ANCHOR_TOP)
@@ -374,10 +371,7 @@ end
 
 --- 把 HUD 挂到 PlayerHud 屏幕上。
 ---
---- ★ 真机 bug：原来把 root 挂到 `owner`（玩家实体）上，而不是 PlayerHud 屏幕。
----   玩家实体没有 Widget 的显示树，AddChild 要么失败、要么只挂到实体身上，
----   结果就是"代码跑了，但画面上什么也看不到"。
----   AddClassPostConstruct("screens/playerhud") 的第一个参数 self 才是屏幕，
+--- AddClassPostConstruct("screens/playerhud") 的第一个参数 self 才是屏幕，HUD root 必须挂到屏幕而非 owner 上。
 ---   owner 只是屏幕持有的玩家实体。
 ---
 --- 返回值 = 是否挂上。挂不上时**不**把 failed 永久置真：

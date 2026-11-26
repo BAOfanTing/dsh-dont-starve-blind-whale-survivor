@@ -29,9 +29,7 @@ function U.world()
 end
 
 --- 游戏内时间（秒，浮点，带毫秒精度）。
---- 真机 bug（2026-11-12）：原来用 TheSim:GetTime() —— 这个 API 在当前构建里**不存在**，
---- pcall 失败后恒返回 0。后果：所有超时判断（>120 秒）永不触发、所有冷却判断（>=0.2 秒）
---- 永不为真，导致「砍一下顿一下」的重放逻辑根本不生效，动作只能靠外层 120 秒兜底。
+--- 当前构建通过 os.clock() / GetTime() 等可用时钟获取单调时间。
 --- 现在按优先级取：TheSim:GetTime()（存在则用）→ TheSim:GetRealTime()/1000 → os.time()。
 function U.now()
     local ok, t = pcall(function() return GLOBAL.GetTime() end)
@@ -234,9 +232,8 @@ function U.find_coastline_detour(p1, p2, ax_opt, az_opt)
 end
 
 --- 现在操作的玩家。
---- M1.1 起这里只是**兼容层**：真正的"观察谁"由 Whale.actor（Actor Provider）决定，
---- 所有调用方（actions / observe / reflex / bridge）都通过它拿实体。
---- 只有在 actor.lua 没加载时（单文件测试）才退回下面这段旧的挑人逻辑。
+--- 兼容层：真正的"观察谁"由 Whale.actor（Actor Provider）决定，
+--- 仅在 actor.lua 未加载时（单文件测试）回退下面这段挑人逻辑。
 function U.player()
     local provider = Whale ~= nil and Whale.actor or nil
     if provider ~= nil and provider.get_actor ~= nil then

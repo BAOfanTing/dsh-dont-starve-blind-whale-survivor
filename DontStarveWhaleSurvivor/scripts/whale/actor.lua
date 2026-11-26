@@ -2,13 +2,9 @@
 --
 -- 只回答一个问题：**现在该观察哪个实体？**
 --
--- 为什么要有这一层：以前到处直接读 `ThePlayer` / `GLOBAL.AllPlayers`（actions、observe、reflex、
--- bridge 各写一份挑人逻辑），于是「观察谁」这件事有 4 份实现、4 个口径。M1.1 起只有这里能回答，
--- 别的模块一律 `Whale.actor.get_actor()`。
---
--- 为什么现在还是"玩家角色"：M0 的结论是先用已经真机验证过的玩家角色，把闭环跑通；
--- 无主幸存者（SpawnPrefab("wilson")）要做成同一个接口的另一种实现（M2 的 spike），
--- 到时候只改这个文件里的 pick_actor()，观察器/动作/工具都不用动。
+-- 为什么要有这一层：统一由 `Whale.actor.get_actor()` 回答“观察与控制哪一个角色”，
+-- actions / observe / reflex / bridge 不再各自实现挑人逻辑。
+-- 当前绑定本地玩家实体；扩展无主幸存者时只需替换 pick_actor()。
 --
 -- 身份字段的边界（必须写清楚，不然以后一定有人拿它当主键）：
 --   · actor_id：有 userid 的玩家 → "player:<userid>"（跨会话稳定）；

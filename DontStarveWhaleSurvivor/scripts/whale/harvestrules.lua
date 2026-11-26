@@ -1,4 +1,4 @@
--- M2.3：收获候选判定的**唯一来源**（观察侧 nearby 的 harvestables 桶 与 执行侧 guard 共用）。
+-- 收获候选判定的**唯一来源**（观察侧 nearby 的 harvestables 桶与执行侧 guard 共用）。
 --
 -- 与 pickuprules 同样的理由：观察和执行各写一套规则，就会出现
 -- "Observer 说可以收获、执行器却回 prefab_not_allowed" 的不一致。

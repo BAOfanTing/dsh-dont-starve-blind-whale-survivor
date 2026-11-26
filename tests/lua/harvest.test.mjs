@@ -662,17 +662,18 @@ test('harvest-27 Harvest 与 Pickup 边界：不自动接续、不换目标、�
   assert.doesNotMatch(harvestJob, /ACTIONS\.PICKUP/, 'harvest 里不能顺手捡东西')
   assert.doesNotMatch(harvestJob, /find_all|find_by_name/, '不能按 prefab 找替代目标')
   assert.match(harvestJob, /ACTIONS\.PICK/, '底层必须是原生 PICK')
-  // pickup 也没被改动成"采完自动捡"
-  const pickupJob = acts.slice(acts.indexOf('local function pickup_by_ref'), acts.indexOf('--- M2.3'))
+  // pickup 也没被改动成"采完自动捡"（去掉注释避免匹配到后续函数的文档注释）
+  const pickupJob = acts.slice(acts.indexOf('local function pickup_by_ref'), acts.indexOf('local function harvest_by_ref')).replace(/--.*$/gm, '')
+  assert.ok(pickupJob.length > 200)
   assert.doesNotMatch(pickupJob, /ACTIONS\.PICK\b/, 'pickup 里不能顺手采')
 })
 
-test('harvest-28 回归：move_to / stop / pickup 语义未变，白名单只多了一个 harvest', async () => {
+test('harvest-28 回归：move_to / stop / pickup 语义未变，白名单包含 harvest', async () => {
   const { OPEN_ACTIONS, ACTION_SPECS, validateArgs } = await import('../../lib/dispatcher.js')
   assert.deepEqual(OPEN_ACTIONS.slice().sort(), ['attack', 'build', 'chop', 'chop_nearest', 'container_put', 'container_take', 'cook', 'craft', 'dig', 'drop', 'eat', 'equip', 'fight_spider', 'fuel', 'gather', 'gather_area', 'give', 'hammer', 'harvest', 'harvest_nearest', 'inspect', 'kill', 'lookup', 'mine', 'mine_nearest', 'move_to', 'pickup', 'pickup_food', 'pickup_nearest', 'probe', 'recipes', 'say', 'seek', 'sleep', 'stop', 'summon_companion', 'unequip', 'use', 'wait'])
   assert.equal(validateArgs(ACTION_SPECS.move_to, { x: 1, z: 2 }).ok, true)
   assert.equal(validateArgs(ACTION_SPECS.stop, {}).ok, true)
-  // OBSERVATION-02：引用 1 起
+  // 引用从 1 起
   assert.deepEqual(ACTION_SPECS.pickup.args.target_ref.pattern, '^#[1-9][0-9]{0,3}$')
   assert.equal(validateArgs(ACTION_SPECS.pickup, { target_ref: '#0', snapshot_id: 's' }).ok, false, '#0 要拒')
   assert.equal(ACTION_SPECS.harvest.requiresSnapshot, true)

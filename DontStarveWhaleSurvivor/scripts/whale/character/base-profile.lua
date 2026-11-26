@@ -1,4 +1,4 @@
--- 角色 Profile 基类（R8.2）
+-- 角色 Profile 基类
 -- 所有角色共用同一套 Reflex / Survival Brain / Battle / Actions / Dispatcher / Lease / Guard。
 -- Profile 只提供**差异化规则**，不建立第二套生存或动作系统。
 local GLOBAL = GLOBAL

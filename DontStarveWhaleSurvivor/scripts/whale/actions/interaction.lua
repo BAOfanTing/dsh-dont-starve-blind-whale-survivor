@@ -106,12 +106,7 @@ end
 A.find_lighter = find_lighter
 A.check_ignitable = check_ignitable
 
---- 点火后必须撤离的安全距离（格）。
---- ★ 真机事故（2026-11-26）：用 use action=LIGHT 点燃常青树后，角色**站在原地不动**，
----   火顺着周围的草/浆果丛连成片烧过来，温蒂从 30 血被烧到 0 —— 直接烧死变灵魂。
----   原版玩家点完火会立刻跑开，这不是"操作习惯"，是**点火这件事的必要组成部分**：
----   燃烧会向相邻可燃物传播（propagator），而角色自己也会被火烧。
----   所以撤离写在执行层里，不依赖模型每次都记得。
+--- 点火后必须撤离的安全距离（格）：防止燃烧通过 propagator 蔓延烧伤角色。
 local LIGHT_FLEE_TILES = 6
 
 --- 找一个"背对火堆、能站人"的撤离点。
@@ -244,7 +239,7 @@ JOBS.use = function(j, p)
         return "run"
     end
 
-    -- ★ 点火后的撤离阶段（真机事故 2026-11-26：点完火站在原地，被蔓延的火烧死）
+    -- 点火后的撤离阶段（防止蔓延的火焰烧伤角色）
     if j.step == "fleeing" then
         local away = (j.data.flee_tx ~= nil) and tile_away(p, j.data.flee_tx, j.data.flee_tz) or 0
         local burning = false
@@ -369,7 +364,7 @@ local function container_by_ref(j, p, box, take, item_name, count)
             local want = math.min(tonumber(count) or picked.count, picked.count)
             j.data.want = want
             local ok = pcall(function()
-                -- P1-2：按 count 拆分，别无论传几都整组拿走（wholestack=true）。
+                -- 按 count 拆分堆叠，避免整组拿走。
                 if want < picked.count and picked.item.components ~= nil and picked.item.components.stackable ~= nil then
                     local take = picked.item.components.stackable:Get(want)
                     if take ~= nil then inv:GiveItem(take, nil, p:GetPosition()) end
@@ -388,7 +383,7 @@ local function container_by_ref(j, p, box, take, item_name, count)
         if item == nil then return "fail", "not_in_inventory: 背包里没有 " .. tostring(item_name) end
         j.data.prefab = tostring(item.prefab)
         local ok = pcall(function()
-            -- P1-2：放进容器前先从玩家背包移除，避免归属异常/双持有。
+            -- 放进容器前先从玩家背包移除，避免归属异常或双持有。
             local ii = item.components ~= nil and item.components.inventoryitem or nil
             if ii ~= nil and ii.RemoveFromOwner ~= nil then ii:RemoveFromOwner() end
             container:GiveItem(item, nil, p:GetPosition())

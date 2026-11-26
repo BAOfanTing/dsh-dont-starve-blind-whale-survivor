@@ -1,11 +1,9 @@
--- 制作白名单（SURVIVAL-01 / craft）+ 配方查询（SURVIVAL-02.1）
+-- 制作白名单（craft）+ 配方查询
 --
--- 只放行 3 个有直接生存价值的基础工具。三者都是 TECH.NONE（不需要科学机器）。
--- **不放行** campfire / firepit（建筑系统，不在本阶段范围；reflex 的 make_fire 走独立旧路径）。
---
--- ★ SURVIVAL-02.1：材料需求现在**优先从游戏原生 Recipe 读取**（GLOBAL.AllRecipes）。
---   下面 RECIPES 里的数字只是"读不到原生配方时的兜底"，且只用一份（全项目唯一来源）。
---   依据（本机 scripts.zip scripts/recipes.lua 实测，构建 762172）：
+-- 基础工具（torch / axe / pickaxe）为 TECH.NONE，中间产物与高阶装备需对应科技站。
+-- 材料需求优先从游戏原生 Recipe 读取（GLOBAL.AllRecipes）；
+-- 下面 RECIPES 里的数字仅作读不到原生配方时的兜底（全项目唯一来源）。
+-- 依据（DST scripts/recipes.lua）：
 --     Recipe2("axe",     {Ingredient("twigs",1), Ingredient("flint",1)},                     TECH.NONE)
 --     Recipe2("pickaxe", {Ingredient("twigs",2), Ingredient("flint",2)},                     TECH.NONE)
 --     Recipe2("torch",   {Ingredient("cutgrass",2), Ingredient("twigs",2)},                  TECH.NONE)
@@ -21,8 +19,8 @@ local C = {}
 
 --- 白名单配方 → 兜底材料表（读不到原生配方时才用；正常路径走 C.Ingredients）
 ---
---- ★ TARGET-REFRESH：科技阶段与配方名**必须和 Node 侧 lib/actions/specs/crafting.js 完全一致**
---- （有 tests/recipe-parity.test.mjs 盯着）。数字全部核对自本机 scripts.zip 的 recipes.lua：
+--- 科技阶段与配方名必须和 Node 侧 lib/actions/specs/crafting.js 完全一致
+--- （由 tests/skills/recipe-parity.test.mjs 守护）。数据核对自 scripts/recipes.lua：
 ---   rope       cutgrass×3                                          TECH.SCIENCE_ONE
 ---   boards     log×4                                              TECH.SCIENCE_ONE
 ---   backpack   cutgrass×4 + twigs×4                                TECH.SCIENCE_ONE
@@ -37,9 +35,8 @@ local C = {}
 --- 注意：SCIENCE_ONE 那七个**不是**"不需要科技"，而是要站在科学机器旁边才能做 ——
 --- 这正是"第一阶段科技"的完整含义。科技条件由游戏自己判（builder:KnowsRecipe 会把
 --- 附近的 prototyper 折算成临时科技加成），我们**不复制一套 TECH 表**去猜，免得和游戏更新漂移。
---- ★ TENT（2026-11-17）：cutstone / transistor 是**炼金引擎**（build researchlab2）的材料，
----   炼金引擎又是**帐篷**（build tent）的前置。两个建筑本身在 BUILD_ALLOWED 里，
----   帐篷的科技是 SCIENCE_TWO（要站在炼金引擎旁边），提示语由 C.TechHint 给。
+--- cutstone / transistor 是炼金引擎（build researchlab2）的材料，
+--- 炼金引擎又是帐篷（build tent）的前置（SCIENCE_TWO，需站在炼金引擎旁）。
 C.RECIPES = {
     axe = { ingredients = { twigs = 1, flint = 1 }, label = "斧头", tech = "NONE" },
     pickaxe = { ingredients = { twigs = 2, flint = 2 }, label = "镐", tech = "NONE" },
@@ -88,16 +85,9 @@ end
 
 --- 角色现在**条件上**能不能造这个配方（科技/prototyper 层面，**不看材料**）。
 ---
---- ★ 真机 bug（2026-11-17）：这个判定原来在 guard 和 actions/crafting.lua **各写一遍**，
----   而且都用了 `builder:KnowsRecipe` —— 它**不算**"站在科学机器旁边"的临时科技
----   （`_tempbonus` 靠玩家 controller 的 UpdateTempTechBonuses 刷新，
----   服务端 actor 上经常还没刷到）。结果机器造好了、人站在 0.7 格内，
----   `craft rope` 仍报 recipe_locked；而同一个角色用 `lookup rope`
----   （走 builder:CanBuild）却显示"现在就能做" —— 自相矛盾。
----
---- 现在**只有这一处**判定，双方都调它：
+--- 唯一判定入口（guard 与 actions/crafting.lua 共用）：
 ---   ① `builder:CanBuild(name)` 是原版 UI 判"现在能不能造"的入口，
----      会算上永久解锁 + 临时科技（附近科学机器/远古站）+ 当前 prototyper。
+---      会算上永久解锁 + 临时科技（附近科学机器/远古站）+ 当前 prototyper（避免 KnowsRecipe 漏掉 _tempbonus）。
 ---   ② 它不可用时退回 `KnowsRecipe`（至少能判永久解锁）。
 --- 返回：true/false/nil（nil = 判不了，调用方**不要拦**，交给 MakeRecipe 定）， 以及原因。
 function C.CanCraftNow(actor, name)

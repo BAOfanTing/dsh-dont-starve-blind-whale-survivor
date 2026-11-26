@@ -91,7 +91,7 @@ local function pickup_by_ref(j, p, target)
     return "run"
 end
 
---- M2.3：按 #N 引用收获**已解析好的**试点对象（本阶段 = 成熟浆果丛）。
+--- 按 #N 或稳定句柄收获已解析好的对象。
 --- 原生动作是 ACTIONS.PICK（依据：scripts/actions.lua:366 + componentactions 的 pickable 处理器）。
 ---
 --- 成功判据（不只看 fn 返回值 —— 原生的 Pick 在成功时会把 canbepicked 翻成 false）：
@@ -156,8 +156,7 @@ local function harvest_by_ref(j, p, target)
 end
 
 JOBS.pickup = function(j, p)
-    -- M2.1：带 ctx.target 时走"按 #N 引用拾取"的新路径（不搜 prefab、不乱走）；
-    -- 老调用方（args.item）仍然走下面的原逻辑，语义不变。
+    -- 带 ctx.target 时走按引用/句柄拾取路径；旧调用方（args.item）保持原逻辑。
     local ctx = j.ctx or {}
     if ctx.target ~= nil then
         return pickup_by_ref(j, p, ctx.target)
@@ -465,10 +464,7 @@ JOBS.gather_area = function(j, p)
             return "run"
         end
         j.data.done[pick.ent] = true
-        -- ★ 必须是**实体**，不是候选表 pick。
-        --   真机 bug（Cluster_1）：写成 pick 之后，acting 阶段 cur:IsValid() 直接崩
-        --   （"attempt to call method 'IsValid' (a nil value)"），而且只有"目标近、
-        --   不走 walking 直接 acting"时才会踩到 —— 所以现象是"有的能采有的必崩"。
+        -- 必须赋值实体（pick.ent），不能赋候选包装表 pick。
         j.data.current = pick.ent
         j.data.phase_start = U.now()
         j.data.pushes = 1
@@ -485,9 +481,7 @@ JOBS.gather_area = function(j, p)
             return "run"
         end
         local d = U.dist(p, target) or 99999
-        -- ★ 超时判定必须放在 busy 早退**之前**。
-        --   真机 bug：busy 恒为真时，每个 tick 都在下面那句 return run 掉头，
-        --   永远走不到 12 秒超时 → 任务永不结束（真机那条 gather_area 排队 137 秒没回执）。
+        -- 超时判定必须放在 busy 早退之前，避免 busy 恒为真时永不超时。
         if U.now() - j.data.walk_start > 12 then
             stop_actions(p)
             j.data.done[target] = true
@@ -588,17 +582,11 @@ end
 
 --- 目标的 workable 是不是已经完成（挖碎/砍倒/拆掉）
 ---
---- ★ TARGET-REFRESH：这里必须**同时**看 workleft 和 workable.action。
----   真机踩到：树砍倒后 `workleft` 不一定变 0，而是**变成树桩** ——
----   `workable.action` 从 CHOP 变成 DIG。只看 workleft 会判"没砍完"，
----   于是树明明倒了、木头都掉在地上了，回执却报「推不动 常青树…」。
----   `job_work` 里一直是两个都看（见它的 done_this 判断），这里对齐。
+--- 同时检查 workleft 与 workable.action：树砍倒后可能变成树桩（workable.action 从 CHOP 转为 DIG）。
 
 --- 出锅 / 收割：锅（stewer）煮熟了要拿出来，晾肉架靠 harvestable
 JOBS.harvest = function(j, p)
-    -- M2.3：带 ctx.target 时走"按 #N 收获"的新路径（只认 guard 解析出来的真实实体，
-    -- 绝不按 prefab 搜替代目标，也不自动接续 pickup）；
-    -- 老调用方（args.target，锅/晾肉架那套）仍然走下面的原逻辑，语义不变。
+    -- 带 ctx.target 时仅使用 guard 解析出的真实实体，不按 prefab 搜索替代目标。
     local ctx = j.ctx or {}
     if ctx.target ~= nil then
         return harvest_by_ref(j, p, ctx.target)
@@ -645,11 +633,9 @@ JOBS.harvest = function(j, p)
     return "done", "收割了 " .. U.pretty(thing)
 end
 
--- ═══════════════ TARGET-REFRESH：实时目标选择（复用上面原有的实现）═══════════════
+-- ═══════════════ 实时目标选择（复用既有动作执行链）═══════════════
 --
--- 这五个动作**没有自己的执行逻辑**：目标由 guard 在授权那一刻用当前世界状态重新找到
--- （放在 ctx.target），这里只是把它交给已有的 pickup_by_ref / harvest_by_ref / work_by_ref。
--- 所以执行链、成功判据、超时、工具装备全部和 #N 那条路**一模一样**，
+-- 目标由 guard 在授权时按当前世界状态定位并写入 ctx.target，执行层直接转交 pickup_by_ref / harvest_by_ref / work_by_ref。
 -- 不存在"第二套不受安全约束的执行通道"。
 --
 -- 关键：ctx.target == nil 时一律 fail，**绝不退回按 prefab 搜目标**

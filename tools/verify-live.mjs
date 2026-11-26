@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 综合真机连通性与行为验证工具（整合原 M2.x 阶段性验证脚本）
+// 综合真机连通性与行为验证工具
 //
 // 用法：
 //   node tools/verify-live.mjs lease                 # 验证租约、换手、ACK 与权威副本
@@ -8,14 +8,12 @@
 //   node tools/verify-live.mjs pickup                # 验证 pickup 拾取白名单与背包核对
 //   node tools/verify-live.mjs nearby [--bridgeDir]  # 验证附近分类桶、上限与快照
 //   node tools/verify-live.mjs harvest [--bridgeDir] [--harvest] # 验证 harvest 采摘与不自动拾取
-//   node tools/verify-live.mjs doctor                           # ★ 真机验收前体检
-//   node tools/verify-live.mjs nearest flint [--wait 5]         # ★ 真机验收：等 5 秒后实时拾燧石
+//   node tools/verify-live.mjs doctor                           # 真机验收前体检
+//   node tools/verify-live.mjs nearest flint [--wait 5]         # 等待数秒后实时拾燧石
 //   node tools/verify-live.mjs nearest tree|ordinary_rock|gold_vein|safe_ground_food|…
 //   node tools/verify-live.mjs all                   # 依次运行所有只读检查
 //
-// 「nearest」是 TARGET-REFRESH 的**真机验收**：故意先等几秒（模型思考所需的时间量级），
-// 再下发一个**不带 #N / snapshot_id** 的实时目标选择动作。它必须成功 ——
-// 这正是修复前 23 次 stale_snapshot 里做不到的事。
+// 「nearest」用于验证不带 #N / snapshot_id 的实时目标选择动作在延迟后仍能命中并核对成功。
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -187,12 +185,10 @@ async function verifyHarvest() {
 }
 
 /**
- * ★ TARGET-REFRESH 真机验收：等待数秒后，用**不带 #N / snapshot_id** 的实时目标选择动作。
- *
- * 验收判据（对应任务书"最终验收"）：
- *   1. 动作**没有被 stale_snapshot 拒绝**（它根本不带快照引用）
- *   2. Lua 真的找到了目标（证明确实执行了，而不是回一句"没找到"糊过去）
- *   3. 结果**可核对**（status=succeeded + verified 里有真实变化）
+ * 延迟后下发不带 #N / snapshot_id 的实时目标选择动作并核对结果：
+ *   1. 不触发 stale_snapshot 拒绝
+ *   2. Lua 实际命中目标并执行
+ *   3. 结果可核对（status=succeeded 且 verified 含变化证据）
  */
 async function verifyNearest() {
   const kind = (ARGS[1] && !ARGS[1].startsWith('--')) ? ARGS[1] : 'flint'

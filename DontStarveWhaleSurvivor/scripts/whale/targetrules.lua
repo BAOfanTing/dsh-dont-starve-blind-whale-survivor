@@ -1,11 +1,7 @@
--- TARGET-REFRESH：实时目标选择的**唯一真来源**（固定枚举 + 候选判定 + 最近目标 + 稳定句柄）
+-- 实时目标选择的**唯一真来源**（固定枚举 + 候选判定 + 最近目标 + 稳定句柄）
 --
--- 为什么要有这个文件：
---   真机日志（session.txt，Mod 0.38.4）里 94 次工具调用有 23 次 pickup stale_snapshot、
---   3 次 chop、2 次 harvest。原因不是模型乱填，而是 **#N 只在当前扫描帧内有效**，
---   而模型一轮思考要 30~60 秒 —— 它拿到引用时那一帧早就换了。
---   放宽 stale_snapshot 校验会带来"操作错目标"，所以正确做法是：
---   **让模型描述"要哪一类东西"，由 Lua 在授权那一刻用当前世界状态重新找目标。**
+-- 让模型只声明"要哪一类东西"，由 Lua 在授权那一刻按当前世界状态重新找目标，
+-- 避免 #N 引用在思考期间过期。
 --
 -- 本文件只做四件事：
 --   1) T.KINDS：Node 与 Lua 共同定义的**固定枚举**（不许模型传 prefab / GUID / Lua 表达式）
@@ -54,9 +50,8 @@ T.MAX_RADIUS = 40
 T.REACH_TILES = {
     pickup = 2.5,   -- = G.PICKUP_MAX_TILES
     food = 2.5,
-    harvest = 1.0,  -- P0-6：原生臂展约 1 格（旧值 4 把 4 世界单位当 4 格）
-    -- ★ 砍树/挖矿：原生 CHOP/MINE 的 `arrivedist` 允许引擎自己走最后一小步，
-    --   所以"够得着"不等于"贴脸"。1.6 太紧：真机里玩家站在矿旁边 1.8 格就被拒，
+    harvest = 1.0,  -- 原生臂展约 1 格
+    -- 砍树/挖矿：原生 CHOP/MINE 的 arrivedist 允许引擎走最后一小步，略放宽于 1.6 格。
     --   而且角色稍微一动（被推开/自己走）就错过。2.5 格是原生动作能自己补上的范围。
     work = 2.5,
 }
@@ -74,7 +69,7 @@ T.KIND_ACTION = {
     goldnugget = "pickup",
     charcoal = "pickup",
     petals = "pickup",
-    -- ★ R8.5：掉在地上的阿比盖尔之花（青蛙命中会击落背包物品）。用既有 pickup 通道回收。
+    -- 掉在地上的阿比盖尔之花（受击掉落后由既有 pickup 通道回收）
     abigail_flower = "pickup",
     -- 地面食物（pickup_food）
     safe_ground_food = "food",
@@ -328,8 +323,7 @@ function T.FindNearest(kind, actor, radius)
                     if T.KIND_ACTION[kind] == "harvest" and hr ~= nil and hr.InNativeRange ~= nil then
                         -- pcall(hr.InNativeRange, actor, e) → true, ok, limit(世界单位), dist
                         local ok_c, r_ok, r_limit = pcall(hr.InNativeRange, actor, e)
-                        -- P0-6：只要拿到原生可及距离(r_limit，世界单位)就用它；r_ok=false 表示此刻够不着，
-                        -- 但 limit 仍是真实可达距离，下面 tiles<=limit 会正确判否。真正算不出才用兜底(已修成 1 格)。
+                        -- 拿到原生可达距离（r_limit）即优先使用，算不出才回退到默认距离。
                         if ok_c and type(r_limit) == "number" and r_limit > 0 then
                             limit = r_limit / U.TILE
                         else
@@ -387,9 +381,9 @@ function T.ExplainMiss(kind, why, detail)
     return nil
 end
 
--- ─────────────────────────── 稳定句柄（方案 B）───────────────────────────
+-- ─────────────────────────── 稳定句柄 ───────────────────────────
 --
--- 要求（任务书 §1 方案 B）：
+-- 不变量：
 --   · 目标在多次附近扫描中仍然有效时，句柄保持稳定
 --   · 目标消失 / 被采集 / 被其他玩家拾取时，句柄失效
 --   · 句柄绑定当前游戏会话和角色

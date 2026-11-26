@@ -1,4 +1,4 @@
--- 阿比盖尔伴生状态（R8.2）——统一由这里识别，reflex/battle 不得各自重复查找。
+-- 伴生状态（如阿比盖尔）——统一由这里识别，reflex/battle 不得各自重复查找。
 -- 依据：wendy 玩家 components.ghostlybond.ghost（prefab "abigail"），等级决定血量。
 local GLOBAL = GLOBAL
 local pcall = GLOBAL.pcall or pcall

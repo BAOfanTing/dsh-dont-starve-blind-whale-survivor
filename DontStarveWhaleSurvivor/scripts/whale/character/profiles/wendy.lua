@@ -1,4 +1,4 @@
--- 温蒂 Wendy Profile（R8.2 首发角色）
+-- 温蒂 Wendy Profile
 -- 真实机制依据（.runtime/dst-scripts）：
 --   prefabs/wendy.lua：MakePlayerCharacter("wendy")；WENDY_HEALTH/HUNGER/SANITY=wilson 150/150/200；
 --     sanity.night_drain_mult 与 neg_aura_mult = TUNING.WENDY_SANITY_MULT(0.75)；combat.damagemultiplier=WENDY_DAMAGE_MULT(0.75)。
